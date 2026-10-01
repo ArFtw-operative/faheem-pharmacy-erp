@@ -29,8 +29,8 @@ lists its database migrations. Upgrades keep all business history (see docs/UPGR
 - **Manual bill:** search and choose any product regardless of stock (MRP as the rate, product kept as a
   reference) or add a typed item not in inventory; quantity → Tab → discount → Tab → rate, editable in
   the cart; stored, returned and reported like any bill (item-wise sales show "· manual bill" rows);
-  never checks or changes stock. Batch and expiry can be typed per line (F5, or Tab after the rate),
-  and a saved manual bill reopens from Sales (F4) as a manual bill for editing.
+  never checks or changes stock. Every cell of a manual line (name, batch, expiry, quantity, rate,
+  discount) is edited with a click; a saved manual bill reopens from Sales (F4) as a manual bill.
 - **Settings → WhatsApp** rebuilt in the ERP's own style (sub-tab, form sections, plain buttons,
   standard grid for activity).
 - **Control Center → Maintenance → Reset test data** (`faheem-erp reset-test-data`): removes stock,

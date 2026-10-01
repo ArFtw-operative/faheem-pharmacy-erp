@@ -194,6 +194,7 @@ export function create(ctx, params, root, saved) {
   const step = (l) => (upp(l) > 1 && !l.loose ? upp(l) : 1);
   function problem(l, qty = l.qty) {
     if (l.manual) {
+      if (!String(l.name || "").trim()) return "Enter the item name";
       if (!Number.isSafeInteger(qty) || qty < 1) return "Enter a whole quantity";
       if (!(num(l.rate) > 0)) return `Enter the rate for ${l.name}`;
       return "";
@@ -229,18 +230,25 @@ export function create(ctx, params, root, saved) {
   }
 
   // ---------------------------------------------------------------- render
+  // a manual line is a row of fields: click any of them and type; Tab moves on, Enter goes back to the search
   function manualLineHtml(l, i) {
     const bad = problem(l);
-    const qtyCell = editing === i ? `<input class="qty-in num" value="${l.qty}" aria-label="Quantity">` : `<b>${l.qty}</b>`;
-    const rateCell = rateEditing === i ? `<input class="rate-in num" value="${num(l.rate) || ""}" placeholder="rate" aria-label="Rate per unit">` : num(l.rate) ? money(l.rate) : '<span class="bad">rate?</span>';
-    return `<tr data-i="${i}" class="${i === sel ? "sel" : ""}${bad ? " bad" : ""}" title="${esc(bad)}">
+    const f = (field, value, cls, extra = "") => `<input class="mi ${cls}" data-f="${field}" data-i="${i}" value="${esc(value)}" ${extra}>`;
+    return `<tr data-i="${i}" class="manual-row${i === sel ? " sel" : ""}${bad ? " bad" : ""}" title="${esc(bad)}">
       <td class="num muted">${i + 1}</td><td class="mono${l.code ? "" : " muted"}">${esc(l.code || "TYPED")}</td>
-      <td class="prod">${esc(l.name)}</td>${metaEditing === i
-        ? `<td><input class="batch-in" value="${esc(l.batch || "")}" maxlength="60" placeholder="batch" aria-label="Batch"></td><td><input class="exp-in" value="${esc(l.expiry || "")}" maxlength="10" placeholder="MM/YY" aria-label="Expiry MM/YY"></td>`
-        : `<td class="mono${l.batch ? "" : " muted"}">${esc(l.batch || "—")}</td><td class="${l.expiry ? "" : "muted"}">${esc(l.expiry || "—")}</td>`}<td class="num">1</td>
-      <td class="num qty">${qtyCell}</td><td class="num">${rateCell}</td>
-      <td class="num disc">${discEditing === i ? `<input class="disc-in num" value="${num(l.disc) || ""}" placeholder="0" aria-label="Discount percent, max ${MAXD}">` : num(l.disc) ? `${num(l.disc)}% <small>−${money(lineDisc(l))}</small>` : '<span class="muted">—</span>'}</td>
-      <td class="num strong">${money(lineNet(l))}</td></tr>`;
+      <td class="prod">${f("name", l.name, "mi-name", 'maxlength="250" aria-label="Item"')}</td>
+      <td>${f("batch", l.batch || "", "mi-batch", 'maxlength="60" placeholder="—" aria-label="Batch"')}</td>
+      <td>${f("expiry", l.expiry || "", "mi-exp", 'maxlength="10" placeholder="MM/YY" aria-label="Expiry"')}</td>
+      <td class="num">1</td>
+      <td class="num">${f("qty", l.qty || "", "num mi-qty", 'inputmode="numeric" aria-label="Quantity"')}</td>
+      <td class="num">${f("rate", num(l.rate) || "", "num mi-rate", 'inputmode="decimal" placeholder="rate" aria-label="Rate"')}</td>
+      <td class="num">${f("disc", num(l.disc) || "", "num mi-disc", `inputmode="decimal" placeholder="0" aria-label="Discount %" ${CAN["sales.discount"] ? "" : "disabled"}`)}</td>
+      <td class="num strong mi-amt">${money(lineNet(l))}</td></tr>`;
+  }
+  function focusField(i, field) {
+    let el = $(`input.mi[data-i="${i}"][data-f="${field}"]`, tbody);
+    if (!el) { render(); el = $(`input.mi[data-i="${i}"][data-f="${field}"]`, tbody); }
+    if (el) { el.focus(); el.select(); }
   }
 
   function lineHtml(l, i) {
@@ -350,11 +358,10 @@ export function create(ctx, params, root, saved) {
   function renderDetail() {
     const l = S.lines[sel];
     const d = $(".pos-detail", root);
-    if (!l) { d.innerHTML = S.manual ? '<span class="muted">Manual bill · search any item or type one not in inventory · quantity, Tab → discount, Tab → rate · the bill never changes stock</span>'
+    if (!l) { d.innerHTML = S.manual ? '<span class="muted">Manual bill · search any item or type one not in inventory · click any field of a line to change it · the bill never changes stock</span>'
       : '<span class="muted">No line selected · ↑↓ in the bill to select · see the shortcut bar for quantity, batch and remove</span>'; return; }
     if (l.manual) {
-      d.innerHTML = `<b>${esc(l.name)}</b><span>${l.item_id ? "From inventory — manual bill: stock not checked or changed" : "Typed item — not in inventory"}</span><span>Rate <b>₹${money(l.rate)}</b> <kbd>Enter</kbd> rate → quantity · Tab → discount</span>
-        <span>Batch <b>${esc(l.batch || "—")}</b> · Expiry <b>${esc(l.expiry || "—")}</b> <kbd data-shortcut="pos.batch">${esc(keys.keyFor("pos.batch"))}</kbd> edits them</span>
+      d.innerHTML = `<b>${esc(l.name)}</b><span>${l.item_id ? "From inventory — manual bill: stock not checked or changed" : "Typed item — not in inventory"}</span><span>Click any field in the line to change it · Tab next field · Enter back to the search</span>
         <span>Discount <b>${num(l.disc) ? `${num(l.disc)}% (−₹${money(lineDisc(l))})` : "none"}</b></span>`;
       return;
     }
@@ -399,6 +406,7 @@ export function create(ctx, params, root, saved) {
   }
   function editQty(i = sel, seed = null) {
     if (i < 0 || !S.lines[i]) return;
+    if (S.lines[i].manual) { sel = i; focusField(i, "qty"); return; }
     sel = i; editing = i; discEditing = null; metaEditing = null; rateEditing = null;
     render();
     const inp = $(".qty-in", tbody);
@@ -406,6 +414,7 @@ export function create(ctx, params, root, saved) {
   }
   function editRate(i = sel) {
     if (i < 0 || !S.lines[i] || !S.lines[i].manual) return;
+    sel = i; focusField(i, "rate"); return;
     sel = i; rateEditing = i; editing = null; discEditing = null; metaEditing = null;
     render();
   }
@@ -430,6 +439,7 @@ export function create(ctx, params, root, saved) {
   }
   function editMeta(i = sel) {
     if (i < 0 || !S.lines[i] || !S.lines[i].manual) return;
+    sel = i; focusField(i, "batch"); return;
     sel = i; metaEditing = i; editing = null; discEditing = null; rateEditing = null;
     render();
     ctx.status(`${S.lines[i].name}: batch, Tab → expiry (MM/YY), Enter — both optional`);
@@ -466,21 +476,19 @@ export function create(ctx, params, root, saved) {
       batch_id: null, batches: [], base_unit: "UNIT", pack_unit: "UNIT", upp: 1, pack: p.pack_raw || "" });
     q.value = ""; closeDrop();
     const i = S.lines.length - 1;
-    if (rate > 0) {
-      editQty(i);
-      ctx.status(`${p.name}: quantity, Tab → discount · rate ₹${money(rate)} (MRP) — Enter on the line changes it`);
-    } else {
-      editRate(i);
-      ctx.status(`${p.name} has no MRP on record — type the rate, Enter, then the quantity`);
-    }
+    sel = i; render();
+    focusField(i, rate > 0 ? "qty" : "rate");
+    ctx.status(rate > 0 ? `${p.name}: rate ₹${money(rate)} (MRP) — click any field to change it, Enter back to search`
+                        : `${p.name} has no MRP on record — type the rate`);
   }
   function addManual(name) {
     if (!name) return;
     S.lines.push({ manual: true, name: name.slice(0, 250), qty: 1, rate: 0, disc: 0, item_id: null, batch_id: null, batches: [], base_unit: "UNIT", pack_unit: "UNIT", upp: 1 });
     q.value = "";
     closeDrop();
-    editRate(S.lines.length - 1);
-    ctx.status(`${name}: type the rate per unit, Enter, then the quantity`);
+    sel = S.lines.length - 1; render();
+    focusField(sel, "rate");
+    ctx.status(`${name}: type the rate — click any field to change it, Enter back to search`);
   }
   // follow-up for the customer on this bill (or the bill just saved, when the studio is showing it)
   async function followUp() {
@@ -528,6 +536,7 @@ export function create(ctx, params, root, saved) {
   function editDisc(i = sel) {
     if (i < 0 || !S.lines[i]) { ctx.status("Select a bill line first (↑↓), then use Item discount", "warn"); return; }
     if (!CAN["sales.discount"]) { ctx.status("You do not have discount permission", "warn"); return; }
+    if (S.lines[i].manual) { sel = i; focusField(i, "disc"); return; }
     sel = i; editing = null; discEditing = i; metaEditing = null; rateEditing = null;
     render();
     ctx.status(`Item discount for ${S.lines[i].name}: 0–${MAXD}% · Enter saves · Esc cancels`);
@@ -1207,11 +1216,52 @@ export function create(ctx, params, root, saved) {
   }
   tbody.addEventListener("mousedown", (e) => {
     const tr = e.target.closest("tr[data-i]");
-    if (!tr || e.target.classList.contains("qty-in") || e.target.classList.contains("disc-in")) return;
+    if (!tr || e.target.classList.contains("qty-in") || e.target.classList.contains("disc-in") || e.target.classList.contains("mi")) return;
     select(Number(tr.dataset.i));
     if (e.target.closest("td.qty")) { e.preventDefault(); editQty(); }
     else if (e.target.closest("td.disc")) { e.preventDefault(); editDisc(); }
     else wrap.focus();
+  });
+  // manual-line fields: live update of the line, the totals and the payment check
+  tbody.addEventListener("input", (e) => {
+    const t = e.target.closest("input.mi");
+    if (!t) return;
+    const i = Number(t.dataset.i), l = S.lines[i];
+    if (!l) return;
+    const v = t.value, field = t.dataset.f;
+    let err = "";
+    if (field === "name") { l.name = v.slice(0, 250); if (!v.trim()) err = "Enter the item name"; }
+    else if (field === "batch") l.batch = v.trim().slice(0, 60);
+    else if (field === "expiry") { l.expiry = v.trim(); if (!expOk(l.expiry)) err = "Expiry as MM/YY, e.g. 05/28"; }
+    else if (field === "qty") { const n = Number(v.trim()); l.qty = Number.isSafeInteger(n) && n > 0 ? n : 0; if (!l.qty) err = "Enter a whole quantity"; }
+    else if (field === "rate") { const r = Number(v.replace(/,/g, "")); l.rate = r > 0 ? r2(r) : 0; if (!l.rate) err = `Enter the rate for ${l.name}`; }
+    else if (field === "disc") { const d = v.trim() === "" ? 0 : Number(v.replace("%", "")); err = discProblem(d); if (!err) l.disc = r2(d); }
+    t.classList.toggle("bad", !!err && field !== "expiry");      // a half-typed expiry is judged when the field is left
+    t.dataset.err = err;
+    const tr = t.closest("tr"), bad = problem(l);
+    $(".mi-amt", tr).textContent = money(lineNet(l));
+    tr.classList.toggle("bad", !!bad); tr.title = bad;
+    renderTotals();
+  });
+  tbody.addEventListener("change", (e) => {             // leaving a field: say what is wrong with it, if anything
+    const t = e.target.closest("input.mi");
+    if (!t) return;
+    t.classList.toggle("bad", !!t.dataset.err);
+    if (t.dataset.err) ctx.status(t.dataset.err, "error");
+  });
+  tbody.addEventListener("focusin", (e) => {
+    const t = e.target.closest("input.mi");
+    if (!t) return;
+    const i = Number(t.dataset.i);
+    if (sel !== i) { sel = i; $$("tr", tbody).forEach((tr) => tr.classList.toggle("sel", Number(tr.dataset.i) === sel)); renderDetail(); }
+    t.select();
+  });
+  tbody.addEventListener("keydown", (e) => {
+    const t = e.target.closest("input.mi");
+    if (!t) return;
+    if (/^F\d+$/.test(e.key) || e.altKey || e.ctrlKey) return;        // shortcuts (F12 complete…) still work
+    e.stopPropagation();
+    if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); render(); q.focus(); }
   });
   tbody.addEventListener("contextmenu", (e) => {
     const tr = e.target.closest("tr[data-i]");
