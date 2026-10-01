@@ -34,7 +34,7 @@ from app import audit
 from app.config import UPLOAD_DIR
 from app.models import Batch, PurchaseReturn, Item, Purchase, PurchaseItem, Supplier, SupplierProductMap, User
 from app.sequences import next_number
-from app.services import purchase_import, sheet_import, stock_ledger, units
+from app.services import purchase_import, sheet_import, stock_ledger, units, receipt_decision
 from app.utils import money, utcnow
 
 READY, CORRECTED, REVIEW, MATCH, INVALID, POSTED, CLOSED = (
@@ -80,11 +80,12 @@ def parse_date(text: Any) -> date | None:
 def _dec(text: Any) -> Decimal | None:
     if text in (None, ""):
         return None
-    cleaned = re.sub(r"[^\d.\-]", "", str(text).replace(",", ""))
-    if cleaned in ("", ".", "-"):
+    cleaned = re.sub(r"^(?:₹|Rs\.?|INR)\s*", "", str(text).strip(), flags=re.I).rstrip("% ")
+    if not re.fullmatch(r"-?(?:\d+|\d{1,3}(?:,\d{3})+|\d{1,2}(?:,\d{2})*,\d{3})(?:\.\d+)?", cleaned):
         return None
     try:
-        return Decimal(cleaned)
+        value = Decimal(cleaned.replace(",", ""))
+        return value if value.is_finite() and abs(value) < Decimal("1000000000") else None
     except InvalidOperation:
         return None
 
@@ -127,10 +128,8 @@ def _vocab(db: Session) -> dict[str, str]:
 
 def _parse(db: Session, filename: str, content: bytes, supplier: Supplier | None) -> purchase_import.RawDocument:
     try:
-        from app.services import invoice_agent
-
         return purchase_import.parse(filename, content, learned=(supplier.column_profile or {}) if supplier else None,
-                                     vocab=_vocab(db), advisor=invoice_agent.advisor(db))
+                                     vocab=_vocab(db))
     except purchase_import.ImportError_ as exc:
         raise PurchaseError(str(exc), "UNREADABLE")
 
@@ -188,8 +187,15 @@ def import_file(db: Session, filename: str, content: bytes, *, supplier_id: int 
     single = len(parts) == 1
     out = []
     for part in parts:
+        part_supplier_id = supplier_id
+        if supplier_id is None and part.supplier_name:
+            matches = list(db.scalars(select(Supplier).where(func.lower(Supplier.name) == part.supplier_name.casefold()).limit(2)))
+            if len(matches) == 1:
+                part_supplier_id = matches[0].id
+        if supplier and part.supplier_name and part.supplier_name.casefold() != supplier.name.casefold() and len({p.supplier_name for p in parts}) > 1:
+            raise PurchaseError("This file contains multiple suppliers. Import without a supplier override and verify each draft.", "MULTIPLE_SUPPLIERS")
         purchase = _new_purchase(
-            db, supplier_id=supplier_id, invoice_no=(invoice_no if single and invoice_no else part.invoice_no),
+            db, supplier_id=part_supplier_id, invoice_no=(invoice_no if single and invoice_no else part.invoice_no),
             invoice_date=(invoice_date if single and invoice_date else parse_date(part.invoice_date)),
             supplier_total=supplier_total if single and supplier_total not in (None, "") else part.declared_total,
             source_format=doc.format, user=user)
@@ -333,6 +339,8 @@ def _normalise(db: Session, purchase: Purchase, line: PurchaseItem) -> list[dict
     line.product_name = (v.get("name") or (line.item.name if line.item else "")).strip()[:250]
     line.supplier_code = (v.get("supplier_code") or "").strip()[:40]
     line.hsn_code = (v.get("hsn") or "").strip()[:20]
+    if line.hsn_code and not re.fullmatch(r"\d{4}|\d{6}|\d{8}", line.hsn_code):
+        _issue(issues, "hsn_invalid", "hsn", "review", "HSN is not a 4, 6 or 8 digit code. Verify the column mapping or clear the incorrect value; it will not be saved as product HSN.")
     line.pack_size = (v.get("pack") or "").strip()[:60]
     line.manufacturer = (v.get("manufacturer") or "").strip()[:150]
 
@@ -367,8 +375,11 @@ def _normalise(db: Session, purchase: Purchase, line: PurchaseItem) -> list[dict
     qraw = (v.get("quantity") or "").strip()
     fraw = (v.get("free") or "").strip()
     line.quantity_raw = qraw[:30]
-    paid_x, free_in_qty = sheet_import.parse_quantity_exact(qraw)
-    free_x = sheet_import.parse_quantity_exact(fraw)[0] + free_in_qty
+    try:
+        paid_x, free_x = receipt_decision.quantities(v)
+    except ValueError as exc:
+        paid_x, free_x = Decimal(0), Decimal(0)
+        _issue(issues, "quantity_invalid", "quantity", "review", str(exc))
     received = paid_x + free_x
     scheme_split = bool(paid_x % 1 or free_x % 1)     # a free-goods scheme spread over the billed quantity
     upp = (line.item.units_per_pack if line.item is not None else None) or line.units_per_pack
@@ -387,8 +398,8 @@ def _normalise(db: Session, purchase: Purchase, line: PurchaseItem) -> list[dict
                    f"“{qraw}{'+' + fraw if fraw else ''}” = {_n(received)} packs = {_n(received * upp)} units — not a whole number of units; "
                    "correct the quantity from the invoice")
     paid = paid_x
-    if paid <= 0:
-        _issue(issues, "qty_missing", "quantity", "review", "Quantity must be at least 1")
+    if received <= 0:
+        _issue(issues, "qty_missing", "quantity", "review", "Paid plus free quantity must be greater than zero")
 
     rate, mrp = _dec(v.get("rate")), _dec(v.get("mrp"))
     line.rate = money(rate) if rate is not None else Decimal("0")
@@ -421,6 +432,10 @@ def _normalise(db: Session, purchase: Purchase, line: PurchaseItem) -> list[dict
     line.discount = item_disc + scheme
     taxable = money(gross - line.discount)          # the value stock is bought at, before GST
     amount = _dec(v.get("amount"))
+    for field, parsed in (("amount", amount), ("gst", gst), ("discount", disc_pct),
+                          ("discount_amount", disc_amt), ("scheme", scheme_pct)):
+        if str(v.get(field) or "").strip() and (parsed is None or parsed < 0):
+            _issue(issues, field + "_invalid", field, "review", f"{field.replace('_', ' ').title()} must be a non-negative number")
     if (disc_pct is None and disc_amt is None and scheme_pct is None and amount is not None and rate is not None
             and paid and Decimal("0.5") * gross <= money(amount) < gross - Decimal("0.01")
             and abs(money(amount) - money(taxable * (1 + (line.gst_rate or Decimal(0)) / 100))) > Decimal("1")):
@@ -467,9 +482,15 @@ def _gst_history(db: Session, purchase: Purchase, line: PurchaseItem) -> list[di
 
 def _received_packs(line: PurchaseItem) -> Decimal:
     """Packs that arrive: paid + free, with scheme splits (2.5 + 0.5) kept exact."""
+    decision = line.receipt_decision or {}
+    if decision.get("resolved"):
+        return Decimal(decision["master_pack_equivalent"])
     v = effective(line)
-    paid, free_in = sheet_import.parse_quantity_exact((v.get("quantity") or "").strip())
-    return paid + free_in + sheet_import.parse_quantity_exact((v.get("free") or "").strip())[0]
+    try:
+        paid, free = receipt_decision.quantities(v)
+        return paid + free
+    except ValueError:
+        return Decimal(0)
 
 
 def _gst_checks(db: Session, purchase: Purchase, line: PurchaseItem, v: dict, taxable: Decimal, issues: list) -> None:
@@ -580,7 +601,7 @@ def issues_has(issues: list, code: str) -> bool:
 
 def _match(db: Session, purchase: Purchase, line: PurchaseItem) -> None:
     """Deterministic matching only. Suggestions come separately and are never applied."""
-    if line.item is not None and line.match_method in ("MANUAL", "SUPPLIER_MAP", "CODE", "EXACT_NAME"):
+    if line.item is not None and line.match_method == "MANUAL" and line.item.deleted_at is None:
         return
     if line.new_product:
         return
@@ -599,16 +620,22 @@ def _match(db: Session, purchase: Purchase, line: PurchaseItem) -> None:
             line.item, line.match_method = m.item, "SUPPLIER_MAP"
             return
     if line.supplier_code:
-        item = db.scalar(select(Item).where(Item.deleted_at.is_(None),
-                                            (Item.article_id == line.supplier_code) | (Item.barcode == line.supplier_code)))
-        if item is not None:
-            line.item, line.match_method = item, "CODE"
+        found = list(db.scalars(select(Item).where(Item.deleted_at.is_(None),
+                                            (Item.article_id == line.supplier_code) | (Item.barcode == line.supplier_code)).limit(2)))
+        if len(found) == 1:
+            line.item, line.match_method = found[0], "CODE"
             return
     if line.product_name:
-        item = db.scalar(select(Item).where(Item.deleted_at.is_(None),
-                                            func.lower(Item.name) == line.product_name.strip().lower()))
-        if item is not None:
-            line.item, line.match_method = item, "EXACT_NAME"
+        found = list(db.scalars(select(Item).where(Item.deleted_at.is_(None),
+                                            func.lower(Item.name) == line.product_name.strip().lower())))
+        if len(found) == 1:
+            line.item, line.match_method = found[0], "EXACT_NAME"
+        elif len(found) > 1:
+            # A same-name strength/pack variant is not an interchangeable medicine.
+            compatible = [i for i in found if i.pack_size.strip().casefold() == line.pack_size.strip().casefold()
+                          and line.manufacturer and i.manufacturer.casefold() == line.manufacturer.casefold()]
+            if len(compatible) == 1:
+                line.item, line.match_method = compatible[0], "EXACT_NAME"
 
 
 def _product_issues(db: Session, line: PurchaseItem) -> list[dict]:
@@ -642,6 +669,10 @@ def refresh_line(db: Session, purchase: Purchase, line: PurchaseItem) -> Purchas
     _match(db, purchase, line)
     if issues_has(issues, "qty_fraction") and line.item is not None:
         issues = _normalise(db, purchase, line)      # part packs are judged by the matched product's pack size
+    decision = receipt_decision.resolve(db, purchase, line)
+    if decision["resolved"]:
+        issues = [i for i in issues if i["code"] != "qty_fraction"]
+    issues += decision["issues"]
     if not issues_has(issues, "gst_slab"):
         issues += _gst_history(db, purchase, line)
     issues += _product_issues(db, line)
@@ -730,6 +761,9 @@ def correct(db: Session, purchase: Purchase, line: PurchaseItem, changes: dict, 
     _open(purchase)
     _open_line(line)
     corrections = dict(line.corrections or {})
+    before = {"corrections": dict(corrections), "item_id": line.item_id}
+    if any(k in EDITABLE or k in ("item_id", "new_product") for k in changes):
+        corrections.pop("_accepted", None)  # acknowledgements apply only to the values reviewed
     stamp = {"by": _actor(user), "at": utcnow().isoformat(timespec="seconds")}
     raw = line.raw or {}
     for field, value in changes.items():
@@ -763,6 +797,9 @@ def correct(db: Session, purchase: Purchase, line: PurchaseItem, changes: dict, 
     refresh_line(db, purchase, line)
     _refresh_totals(purchase)
     db.flush()
+    audit.record(db, action=audit.A_UPDATE, entity_type="purchase_line", entity_id=line.id, user=user,
+                 before=before, after={"corrections": line.corrections, "item_id": line.item_id},
+                 details="Purchase line corrected")
     return line
 
 
@@ -785,11 +822,19 @@ def _suggest_new_product_units(line: PurchaseItem) -> bool:
     its most likely value pre-filled, and True is returned so the line asks a
     person to confirm it — nothing ambiguous posts unconfirmed."""
     from app.services import packaging_service
+    from app.services.medicine_reference import unique_pack_evidence
 
-    probe = Item(name=line.product_name, pack_size=line.pack_size, dosage_form="", generic_name="",
+    reference = unique_pack_evidence(line.product_name, line.manufacturer) if not line.pack_size else None
+    probe = Item(name=line.product_name, pack_size=line.pack_size or (reference["pack"] if reference else ""), dosage_form="", generic_name="",
                  base_unit="UNIT", pack_unit="PACK", units_per_pack=1, loose_sale=False)
     uom = packaging_service.resolve(probe)
     info = units.parse_pack(line.pack_size)
+    if not line.pack_size and not reference and uom is not None and uom.base_unit in ("TABLET", "CAPSULE"):
+        # The medicine's form does not tell us how many tablets are in a strip.
+        line.base_unit = line.base_unit or uom.base_unit
+        line.pack_unit = line.pack_unit or "STRIP"
+        line.dosage_form = line.dosage_form or uom.dosage_form
+        return False
     if not line.pack_size and uom is None:
         line.units_per_pack = line.units_per_pack or 1
         line.base_unit = line.base_unit or "UNIT"
@@ -799,7 +844,7 @@ def _suggest_new_product_units(line: PurchaseItem) -> bool:
         line.base_unit = line.base_unit or uom.base_unit
         line.pack_unit = line.pack_unit or uom.pack_unit
         line.dosage_form = line.dosage_form or uom.dosage_form
-        if info.confident or info.kind == "CONTENT" or not line.pack_size or uom.units_per_pack == 1 and info.units_per_pack == 1:
+        if info.confident or (info.kind == "CONTENT" and not info.outer_count) or not line.pack_size:
             line.units_per_pack = line.units_per_pack or uom.units_per_pack
             return False
     line.category = line.category or ""
@@ -899,7 +944,7 @@ def suggestions(db: Session, line: PurchaseItem, limit: int = 6) -> list[dict]:
         have = {(float(a), b.lower()) for a, b in _STRENGTH.findall(r.name)}
         nums_want = {float(n) for w in core for n in re.findall(r"\d+(?:\.\d+)?", w)}
         nums_have = {float(n) for w in cand for n in re.findall(r"\d+(?:\.\d+)?", w)}
-        if (want and have and not (want & have)) or (nums_want and nums_have and not (nums_want & nums_have)):
+        if (want and have and want != have) or (nums_want and nums_have and nums_want != nums_have):
             score -= 40
             reasons.append("different strength")
         if line.pack_size and r.pack_size and re.sub(r"\W", "", r.pack_size.upper()) != re.sub(r"\W", "", line.pack_size.upper()):
@@ -922,7 +967,7 @@ def totals(purchase: Purchase, *, received_only: bool = False) -> dict:
     ``received_only`` leaves out lines closed as not delivered (the value actually bought)."""
     lines = [l for l in purchase.items if not (received_only and l.status == CLOSED)]
     taxable = money(sum((l.line_total or 0 for l in lines), Decimal("0")))
-    charges = {k: Decimal(str(v)) for k, v in (purchase.charges or {}).items() if _dec(v) is not None}
+    charges = {k: _dec(v) for k, v in (purchase.charges or {}).items() if not k.startswith("_") and _dec(v) is not None}
     bill_pct = charges.get("bill_discount", Decimal("0"))
     bill_disc = money(taxable * bill_pct / 100) if bill_pct else Decimal("0")
     factor = (1 - bill_pct / 100) if bill_pct else Decimal("1")
@@ -944,7 +989,7 @@ def summary(purchase: Purchase) -> dict:
     diff = money(purchase.supplier_total - calculated) if purchase.supplier_total is not None else None
     open_lines = [l for l in purchase.items if l.status not in DONE]
     blocking = sum(1 for l in open_lines if l.status not in POSTABLE)
-    header_ok = bool(purchase.supplier_id) and bool(purchase.invoice_no)
+    header_ok = bool(purchase.supplier_id) and bool(purchase.invoice_no) and not (purchase.charges or {}).get("_extraction_issues")
     return {"rows": len(purchase.items), "counts": counts, "calculated_total": str(calculated), "totals": t,
             "supplier_total": str(purchase.supplier_total) if purchase.supplier_total is not None else None,
             "difference": str(diff) if diff is not None else None, "blocking": blocking,
@@ -971,11 +1016,19 @@ def post(db: Session, purchase: Purchase, *, user: User | None = None, accept_di
     """
     from app.services import category_service, inventory_service
 
+    # Serialize receipts of the same draft and discard stale line state before rechecking.
+    db.flush()
+    db.execute(select(Purchase).where(Purchase.id == purchase.id).with_for_update()).scalar_one()
+    db.refresh(purchase)
+    for existing in purchase.items:
+        db.refresh(existing)
     _open(purchase)
     if not purchase.supplier_id:
         raise PurchaseError("Choose the supplier before posting", "NO_SUPPLIER")
     if not purchase.invoice_no:
         raise PurchaseError("Enter the supplier's invoice number before posting", "NO_INVOICE_NO")
+    if (purchase.charges or {}).get("_extraction_issues"):
+        raise PurchaseError("PDF extraction did not reconcile with its printed controls. Correct the source extraction and reimport.", "EXTRACTION_INCOMPLETE", purchase.charges["_extraction_issues"])
     open_lines = [l for l in purchase.items if l.status not in DONE]
     for line in open_lines:
         refresh_line(db, purchase, line)
@@ -1027,19 +1080,23 @@ def post(db: Session, purchase: Purchase, *, user: User | None = None, accept_di
                     line.item, line.match_method = item, "NEW_PRODUCT"
                 if item is None:
                     raise PurchaseError(f"Line {line.line_no} has no product", "LINES_NOT_READY")
-                loose = _loose_receipt_units(line, item)
+                receipt = line.receipt_decision or {}
+                if not receipt.get("resolved"):
+                    raise PurchaseError(f"Line {line.line_no}: invoice unit is unresolved", "LINES_NOT_READY")
                 batch = inventory_service.add_or_update_batch(
                     db, item, batch_no=line.batch_no, expiry_date=line.expiry_date,
-                    quantity=loose if loose is not None else line.quantity, free=0 if loose is not None else line.quantity_free,
-                    unit="BASE" if loose is not None else "PACK", movement_type="PURCHASE_RECEIPT",
+                    quantity=receipt["ledger_paid_units"], free=receipt["ledger_free_units"],
+                    unit="BASE", movement_type="PURCHASE_RECEIPT",
                     purchase_rate=_cost_per_pack(line, cost_incl),
-                    mrp=line.mrp, supplier_id=purchase.supplier_id, purchase_id=purchase.id, reference_type="PURCHASE",
+                    mrp=money(receipt_decision.mrp_per_master_pack(line)), supplier_id=purchase.supplier_id, purchase_id=purchase.id, reference_type="PURCHASE",
                     reference_id=purchase.id, reference_no=reference,
                     reason=f"Purchase {reference} · {purchase.supplier.name if purchase.supplier else ''} inv {purchase.invoice_no}",
                     user=user)
                 batch.rate_basis = "INCL_GST" if cost_incl else "EXCL_GST"
                 line.batch_id, line.status = batch.id, POSTED
                 _remember_mapping(db, purchase, line, user)
+                db.flush()
+                receipt_decision.remember(db, purchase, line)
             if differs and accept_difference:
                 purchase.difference_ack = True
             purchase.reference_no = reference
@@ -1088,7 +1145,7 @@ def close_remaining(db: Session, purchase: Purchase, *, reason: str, user: User 
 
 def _remember_mapping(db: Session, purchase: Purchase, line: PurchaseItem, user: User | None) -> None:
     """A human-confirmed line teaches the supplier mapping for next time."""
-    if not purchase.supplier_id or line.item is None or line.match_method not in ("MANUAL", "NEW_PRODUCT", "SUPPLIER_MAP"):
+    if not purchase.supplier_id or line.item is None or (line.match_method not in ("MANUAL", "NEW_PRODUCT", "SUPPLIER_MAP") and not (line.corrections or {}).get("_invoice_unit")):
         return
     code = line.supplier_code or ""
     key = "" if code else description_key(line.description_raw or line.product_name)

@@ -95,6 +95,22 @@ def parse_pack(raw: Any) -> PackInfo:
     is *not* confident.
     """
     text = str(raw or "").strip()
+    # Reference catalogues describe the retail pack in words; preserve the original.
+    nested = re.fullmatch(r"box\s+of\s+(\d+)\s+(?:strips?|blisters?)\s+of\s+(\d+)\s+(tablets?|capsules?)", text, re.I)
+    if nested and int(nested.group(1)) > 0 and int(nested.group(2)) > 0:
+        return PackInfo(raw=text, kind="NESTED", units_per_pack=int(nested.group(2)), outer_count=int(nested.group(1)),
+                        confident=False, strip=True, unit_hint="TABLET" if nested.group(3).lower().startswith("tab") else "CAPSULE")
+    label = re.fullmatch(r"(?:strip|blister|pack)\s+of\s+(\d+)\s+(tablets?|capsules?)(?:\s+[a-z ]+)?", text, re.I)
+    if label:
+        count = int(label.group(1))
+        hint = "TABLET" if label.group(2).lower().startswith("tab") else "CAPSULE"
+        return PackInfo(raw=text, kind="COUNT", units_per_pack=count if count > 0 else None,
+                        confident=count > 0, strip=True, unit_hint=hint)
+    label = re.fullmatch(r"(bottle|tube|vial|ampoule|sachet|jar|packet)\s+of\s+(\d+(?:\.\d+)?)\s*(ml|gm|g|kg|l)\b.*", text, re.I)
+    if label:
+        container = {"PACKET": "PACK"}.get(label.group(1).upper(), label.group(1).upper())
+        return PackInfo(raw=text, kind="CONTENT", units_per_pack=1, confident=True, unit_hint=container,
+                        content_qty=Decimal(label.group(2)), content_unit=_CONTENT_UNITS[label.group(3).upper()])
     key = re.sub(r"\s+", "", text.upper()).replace("'", "").replace("’", "")
     if not key:
         return PackInfo(raw=text)

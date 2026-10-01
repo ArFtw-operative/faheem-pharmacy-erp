@@ -258,6 +258,7 @@ class SupplierProductMap(Base):
     confirmed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     confirmed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     uses: Mapped[int] = mapped_column(Integer, default=0)
+    receipt_conventions: Mapped[dict | None] = mapped_column(JSON)
 
     item: Mapped["Item"] = relationship()
 
@@ -584,6 +585,7 @@ class PurchaseItem(Base):
     raw: Mapped[dict | None] = mapped_column(JSON)
     corrections: Mapped[dict | None] = mapped_column(JSON)
     issues: Mapped[list | None] = mapped_column(JSON)
+    receipt_decision: Mapped[dict | None] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(24), default="NEEDS_REVIEW", index=True)
     supplier_code: Mapped[str] = mapped_column(String(40), default="")
     expiry_raw: Mapped[str] = mapped_column(String(40), default="")

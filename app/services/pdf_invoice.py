@@ -22,8 +22,8 @@ from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 
 _GSTIN = re.compile(r"\b(\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d]Z[A-Z\d])\b")
-_INV_NO = re.compile(r"\b(?:invoice|inv|bill|estimate|challan)\b\.?\s*(?:(?:no|number)\b\.?|#)\s*[:#.\-]?\s*([A-Za-z0-9][A-Za-z0-9\-/]{1,30})"
-                     r"|\b(?:invoice|bill)\s*:\s*([A-Za-z0-9][A-Za-z0-9\-/]{1,30})", re.I)
+_INV_NO = re.compile(r"\b(?:invoice|inv|bill|estimate|challan)\b\.?\s*(?:(?:no|number)\b\.?|#)\s*[:#.\-]?\s*([A-Za-z0-9][A-Za-z0-9_\-/]{1,59})"
+                     r"|\b(?:invoice|bill)\s*:\s*([A-Za-z0-9][A-Za-z0-9_\-/]{1,59})", re.I)
 _DATE = re.compile(r"\b(?:invoice\s+|bill\s+|inv\.?\s+)?date[d]?\s*[:.\-]?\s*(\d{1,2}[/\-.][A-Za-z0-9]{1,3}[/\-.]\d{2,4})", re.I)
 _TOTAL = re.compile(r"\b(grand\s*total|net\s*(?:amount|payable|total)|total\s*amount|bill\s*amount|invoice\s*total|amount\s*payable)"
                     r"\s*(?:\(?\s*(?:rs\.?|inr|₹)\s*\)?)?\s*[:=]?\s*(?:rs\.?|₹)?\s*([\d,]+\.\d{2})", re.I)
@@ -85,7 +85,9 @@ def _biggest_text(page) -> str:
         for line in block.get("lines", []):
             text = "".join(s["text"] for s in line["spans"]).strip()
             size = max((s["size"] for s in line["spans"]), default=0)
-            if line["bbox"][1] < top and re.search(r"[A-Za-z]{3}", text) and not re.search(r"invoice|estimate|bill|gst", text, re.I):
+            if " - Extracted Bill Table" in text:
+                return text.split(" - Extracted Bill Table")[0].strip()[:120]
+            if line["bbox"][1] < top and re.search(r"[A-Za-z]{3}", text) and not _GSTIN.fullmatch(text) and not re.search(r"invoice|estimate|bill|gst", text, re.I):
                 if size > best[0] + 0.5:
                     best = (size, text)
     return best[1][:120]

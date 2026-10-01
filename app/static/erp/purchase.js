@@ -106,8 +106,8 @@ export function create(ctx, params, root) {
         : r.new_product ? `<span class="tag new">NEW</span> ${esc(r.name)}` : '<span class="bad">— F4 to match</span>' },
       { key: "batch", label: "Batch", width: 96, render: (r) => cell(r, "batch", `<span class="mono">${esc(r.batch || "—")}</span>`) },
       { key: "expiry", label: "Expiry", width: 74, render: (r) => cell(r, "expiry", r.expiry ? fmtExp(r.expiry) : `<span class="muted">${esc(r.expiry_raw || "—")}</span>`) },
-      { key: "qty", label: "Qty", width: 50, align: "num", render: (r) => cell(r, "quantity", r.qty) },
-      { key: "free", label: "Free", width: 46, align: "num", render: (r) => cell(r, "free", r.free || "") },
+      { key: "qty", label: "Billed", width: 50, align: "num", render: (r) => cell(r, "quantity", esc(r.receipt?.paid ?? r.qty)) },
+      { key: "free", label: "Free", width: 46, align: "num", render: (r) => cell(r, "free", esc(r.receipt?.free ?? r.free ?? "")) },
       { key: "rate", label: "Rate", width: 70, align: "num", render: (r) => cell(r, "rate", money(r.rate)) },
       { key: "mrp", label: "MRP", width: 70, align: "num", render: (r) => cell(r, "mrp", money(r.mrp)) },
       { key: "discount", label: "Disc", width: 62, align: "num", render: (r) => (Number(r.discount) ? money(r.discount) : "") },
@@ -300,13 +300,43 @@ export function create(ctx, params, root) {
     const prod = r.item ? `<b>${esc(r.item.name)}</b><br><span class="muted">${esc(r.item.code)} · ${esc(r.item.pack || "")} · 1 ${esc(t(r.item.pack_unit))} = ${r.item.upp} ${esc(t(r.item.base_unit))}</span>`
       : r.new_product ? `<span class="tag new">NEW PRODUCT</span> ${esc(r.name)}<br><span class="muted">${esc(r.category || "General")} · ${r.units_per_pack ? `1 ${esc(t(r.pack_unit || "PACK"))} = ${r.units_per_pack} ${esc(t(r.base_unit || "UNIT"))}` : "units not set"}</span>`
       : '<span class="bad">Not matched — F4 choose, Shift+F4 create new</span>';
-    const qtyNote = r.item && r.item.upp > 1 && r.qty ? `<p class="hint">Receives ${(r.qty + r.free) * r.item.upp} ${esc(t(r.item.base_unit))}s (${r.qty}${r.free ? "+" + r.free + " free" : ""} × ${r.item.upp})</p>` : "";
+    const receipt = r.receipt || {};
+    const qtyNote = receipt.resolved ? `<p class="hint"><b>Receives ${receipt.received_base_units} ${esc(t(receipt.base_unit))}s</b><br>${(receipt.evidence || []).map(esc).join("<br>")}</p>` : '<p class="hint">Physical quantity awaits product / invoice-unit verification.</p>';
     side.innerHTML = `
       <h3>Line ${r.line_no} <span class="ps-${STATUS[r.status][1]}">${STATUS[r.status][0]}</span></h3>
       <div class="side-prod">${prod}</div>${qtyNote}${costTable(r)}
       ${issues ? `<ul class="issues">${issues}</ul>` : '<p class="ok">No issues.</p>'}
+      ${canEdit() && !DONE.includes(r.status) ? '<button type="button" data-invoice-unit>Verify invoice unit</button><button type="button" data-reference>Medicine reference</button>' : ""}
       ${rows ? `<table class="rawtab"><thead><tr><th></th><th>Supplier</th><th>Corrected</th></tr></thead><tbody>${rows}</tbody></table>` : ""}
       ${r.status === "POSTED" && r.batch_id ? '<p class="hint">Enter opens the product\'s stock ledger.</p>' : ""}`;
+    side.querySelector("[data-invoice-unit]")?.addEventListener("click", () => verifyInvoiceUnit(r));
+    side.querySelector("[data-reference]")?.addEventListener("click", () => showReference(r));
+  }
+
+  async function verifyInvoiceUnit(r) {
+    if (!guard()) return;
+    const saved = r.corrections?._invoice_unit || {};
+    const out = await modal({ title: `Invoice unit: line ${r.line_no}`, submitLabel: "Confirm conversion",
+      body: `<p>Supplier pack: <b>${esc(r.pack || "not supplied")}</b>. One invoice Qty represents how many physical ${esc(t(r.receipt?.base_unit || "UNIT"))}s?</p>
+        <label>Base units per invoice Qty<input name="factor" type="number" min="1" max="1000000" step="1" required value="${esc(saved.units_per_invoice_unit || "")}" autofocus></label>
+        <label>The printed MRP is per<select name="basis"><option value="MASTER_PACK">Product's retail pack / strip</option><option value="INVOICE_UNIT">Invoice unit / box</option><option value="BASE">Single base unit / tablet</option></select></label>
+        <label>How was this verified?<input name="reason" required minlength="5" maxlength="500" placeholder="e.g. Supplier confirmed Qty counts strips of 10"></label>
+        <p class="hint">After posting, this convention is remembered for this supplier, product, pack and file layout. Changes require fresh verification.</p>`,
+      onOpen: form => { form.elements.basis.value = saved.mrp_basis || "MASTER_PACK"; },
+      onSubmit: form => api(`/api/erp/purchases/${id}/lines/${r.id}/invoice-unit`, {method: "PUT", body: {
+        units_per_invoice_unit: form.elements.factor.value, mrp_basis: form.elements.basis.value, reason: form.elements.reason.value}}) });
+    if (out) render(out);
+    grid.focus();
+  }
+
+  async function showReference(r) {
+    try {
+      const data = await api(`/api/erp/medicine-reference?q=${encodeURIComponent(r.name)}`);
+      await modal({title: "Medicine packaging references", submitLabel: "Close", wide: true,
+        body: `<p>Reference data supports identification. Confirm the exact brand, strength, formulation, manufacturer and current pack against the invoice.</p>${data.candidates.length ? data.candidates.map(c => `<p><b>${esc(c.name)}</b><br>${esc(c.manufacturer)} · ${esc(c.pack)}${c.discontinued ? " · marked discontinued in source" : ""}<br><small>${esc(c.source)} row ${c.source_row} · ${esc(c.match)}</small></p>`).join("") : "<p>No reference found. Load the local medicine catalogue with the supplied import command.</p>"}`,
+        onSubmit: () => true});
+    } catch (err) { ctx.status(err.message, "error"); }
+    grid.focus();
   }
 
   // what one pack cost: invoice rate → after discounts → + GST → rate incl. GST (stock is costed at this)

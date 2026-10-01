@@ -156,15 +156,16 @@ def _read_grids(grids, doc: RawDocument, *, learned=None, vocab=None, advisor=No
     doc.supplier_name = next((l.strip() for l in pre.splitlines() if re.search(r"[A-Za-z]{3}", l)
                               and not re.search(r"invoice|bill|gst|date|phone|ph\b|address|dl\s*no", l, re.I)), "")[:120]
     alt = m.document.get("_manufacturer_alt")
-    groups: dict[str, RawDocument] = {}
-    order: list[str] = []
+    groups: dict[tuple, RawDocument] = {}
+    order: list[tuple] = []
     for offset, row in enumerate(grid[m.header_row + 1:], start=m.header_row + 2):
         cell = lambda c: row[c] if c is not None and c < len(row) else None
         raw = {f: as_text(cell(c)) for f, c in m.columns.items()}
+        raw["_source_columns"] = {h: as_text(cell(c)) for c, h in enumerate(m.headers) if h}
         if alt is not None and not raw.get("manufacturer"):
             raw["manufacturer"] = as_text(cell(alt))
         name = raw.get("name", "")
-        if not any(raw.values()):
+        if not any(v for k, v in raw.items() if not k.startswith("_")):
             continue
         if not name or sheet_import._TOTALS_RE.match(name):
             # a printed totals line: remember the amount, never a product
@@ -172,12 +173,16 @@ def _read_grids(grids, doc: RawDocument, *, learned=None, vocab=None, advisor=No
             if label and raw.get("amount"):
                 doc.charges.setdefault("_printed_totals", {})[label.lower()] = raw["amount"]
             continue
-        key = as_text(cell(m.document.get("invoice_no"))) or ""
+        inv = as_text(cell(m.document.get("invoice_no"))) or ""
+        supplier_name = as_text(cell(m.document.get("supplier_name"))) or doc.supplier_name
+        supplier_gstin = as_text(cell(m.document.get("supplier_gstin"))) or doc.supplier_gstin
+        key = (supplier_gstin or supplier_name, inv)
         part = groups.get(key)
         if part is None:
             part = groups[key] = RawDocument(format=doc.format, sha256=doc.sha256)
             order.append(key)
-            part.invoice_no = key or doc.invoice_no
+            part.invoice_no = inv or doc.invoice_no
+            part.supplier_name, part.supplier_gstin = supplier_name, supplier_gstin
             part.invoice_date = as_text(cell(m.document.get("invoice_date"))) or pre_date
             total = _money(as_text(cell(m.document.get("net_total"))))
             part.declared_total = total
@@ -197,7 +202,8 @@ def _read_grids(grids, doc: RawDocument, *, learned=None, vocab=None, advisor=No
                 break
     for part in parts:
         part.column_map, part.warnings = doc.column_map, list(doc.warnings)
-        part.supplier_gstin, part.supplier_name = doc.supplier_gstin, doc.supplier_name
+        part.supplier_gstin = part.supplier_gstin or doc.supplier_gstin
+        part.supplier_name = part.supplier_name or doc.supplier_name
     if len(parts) > 1:
         doc.parts = parts
         doc.warnings.append(f"This file holds {len(parts)} invoices; each becomes its own draft.")
@@ -205,6 +211,8 @@ def _read_grids(grids, doc: RawDocument, *, learned=None, vocab=None, advisor=No
         first = parts[0]
         doc.lines, doc.invoice_no, doc.invoice_date = first.lines, first.invoice_no, first.invoice_date
         doc.declared_total, doc.charges, doc.customer_name = first.declared_total, first.charges, first.customer_name
+        if len({p.supplier_name for p in parts}) == 1:
+            doc.supplier_name, doc.supplier_gstin = first.supplier_name, first.supplier_gstin
 
 
 def _likely_header(grids, vocab):
@@ -323,6 +331,27 @@ def _parse_pdf(content: bytes, doc: RawDocument, *, learned=None, vocab=None, ad
         part.invoice_no = part.invoice_no or facts.invoice_no
         part.invoice_date = part.invoice_date or facts.invoice_date
     doc.warnings.append(f"PDF table read by {doc.method} reading")
+    # Printed controls are evidence of extraction completeness, not stock lines.
+    if m := re.search(r"(?:Printed\s+)?Total\s+Lines\s+(\d+)", text, re.I):
+        doc.charges["_expected_lines"] = m.group(1)
+        count = sum(len(p.lines) for p in (doc.parts or [doc]))
+        if count != int(m.group(1)):
+            doc.charges["_extraction_issues"] = [f"Read {count} lines but PDF declares {m.group(1)}"]
+    if m := re.search(r"(?:Printed\s+)?Total\s+Qty\s+([\d,.]+)", text, re.I):
+        doc.charges["_expected_qty"] = m.group(1).replace(",", "")
+        from app.services.receipt_decision import quantities
+        try:
+            amounts = [quantities(l.raw) for p in (doc.parts or [doc]) for l in p.lines]
+            billed = sum((q for q, f in amounts), Decimal(0))
+            received = billed + sum((f for q, f in amounts), Decimal(0))
+            declared = Decimal(doc.charges["_expected_qty"])
+            if declared not in (billed, received):
+                doc.charges.setdefault("_extraction_issues", []).append(f"Extracted Qty totals {billed} billed / {received} received; PDF declares {declared}")
+        except ValueError:
+            doc.charges.setdefault("_extraction_issues", []).append("Cannot reconcile printed Qty because a quantity is invalid")
+    if m := re.search(r"Printed\s+Total\s+Discount\s+(?:Rs\.?\s*)?([\d,.]+)", text, re.I):
+        doc.charges["_printed_discount_amount"] = m.group(1).replace(",", "")
+        doc.warnings.append("Printed discount amount retained as evidence; confirm its basis before changing invoice charges")
 
 
 def _legacy_pdf(content: bytes, doc: RawDocument) -> RawDocument | None:

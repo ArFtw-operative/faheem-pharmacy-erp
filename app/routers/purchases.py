@@ -26,6 +26,13 @@ router = APIRouter(tags=["purchases"], route_class=OffloadRoute)
 MAX_UPLOAD = 15 * 1024 * 1024
 
 
+@router.get("/api/erp/medicine-reference")
+def medicine_reference(q: str = "", limit: int = 5,
+                       user: User = Depends(require_permission("purchase.view"))):
+    from app.services.medicine_reference import candidates
+    return {"candidates": candidates(q[:250], limit), "automatic_product_match": False}
+
+
 def _run(db: Session, fn, *args, **kwargs):
     try:
         out = fn(db, *args, **kwargs)
@@ -87,6 +94,7 @@ def _line_view(l: PurchaseItem, gst_ctx: tuple | None = None) -> dict:
         "match": l.match_method, "new_product": bool(l.new_product), "category": l.category,
         "dosage_form": l.dosage_form, "base_unit": l.base_unit, "pack_unit": l.pack_unit, "units_per_pack": l.units_per_pack,
         "raw": l.raw or {}, "corrections": {k: v for k, v in (l.corrections or {}).items()},
+        "receipt": l.receipt_decision or {},
         "issues": l.issues or [], "batch_id": l.batch_id,
         # GST snapshot: taxable after bill discount, tax split, landed value and rate per pack incl. GST
         "taxable": _s(l.taxable_value), "gst_amount": _s(l.gst_amount), "cgst": _s(l.cgst_amount), "sgst": _s(l.sgst_amount),
@@ -312,6 +320,27 @@ def purchase_suggestions(purchase_id: int, line_id: int, db: Session = Depends(g
                          user: User = Depends(require_permission("purchase.view"))):
     p = _doc(db, purchase_id)
     return {"suggestions": purchasing.suggestions(db, _line(p, line_id))}
+
+
+@router.put("/api/erp/purchases/{purchase_id}/lines/{line_id}/invoice-unit")
+async def purchase_invoice_unit(purchase_id: int, line_id: int, request: Request, db: Session = Depends(get_db),
+                                user: User = Depends(require_permission("purchase.create"))):
+    from app.services import receipt_decision
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(400, "Invoice-unit verification requires a JSON object")
+    p = _doc(db, purchase_id)
+    _run(db, receipt_decision.confirm, p, _line(p, line_id), factor=data.get("units_per_invoice_unit"),
+         mrp_basis=data.get("mrp_basis"), reason=data.get("reason"), user=user)
+    return _document(_doc(db, purchase_id))
+
+
+@router.get("/api/erp/purchases/{purchase_id}/decisions")
+def purchase_decisions(purchase_id: int, db: Session = Depends(get_db),
+                       user: User = Depends(require_permission("purchase.view"))):
+    p = _doc(db, purchase_id)
+    return {"purchase_id": p.id, "lines": [{"id": l.id, "status": l.status,
+             "receipt": l.receipt_decision or {}, "issues": l.issues or []} for l in p.items]}
 
 
 @router.post("/api/erp/purchases/{purchase_id}/post")
