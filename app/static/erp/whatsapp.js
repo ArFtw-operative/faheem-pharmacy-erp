@@ -24,13 +24,27 @@ export function normalizePhone(raw) {
 }
 export const prettyPhone = (p) => (p && p.length === 12 ? `+${p.slice(0, 2)} ${p.slice(2, 7)} ${p.slice(7)}` : p || "");
 
-/** Queue the invoice and follow its delivery in the status bar (non-blocking). */
-export async function sendInvoice(ctx, sale, phone = "", { onUpdate } = {}) {
-  const d = await api(`/api/erp/sales/${sale.id}/whatsapp`, { method: "POST", body: phone ? { phone } : {} });
-  const m = d.message;
-  ctx.status(`${m.is_resend ? "Resending" : "Sending"} ${sale.invoice_no} on WhatsApp to ${m.customer_phone}…`, "info");
-  track(ctx, m, onUpdate);
-  return m;
+/** Queue the invoice and follow its delivery in the status bar (non-blocking).
+ *  Without a typed number the server picks the customer's primary mobile, else the alternate —
+ *  whichever is on WhatsApp. When none is, the number box opens with what was checked. */
+export async function sendInvoice(ctx, sale, phone = "", { onUpdate, anchor = null, hasCustomer = false } = {}) {
+  let body = phone ? { phone } : {};
+  for (;;) {
+    try {
+      const d = await api(`/api/erp/sales/${sale.id}/whatsapp`, { method: "POST", body });
+      const m = d.message;
+      ctx.status(d.note ? `WhatsApp: ${d.note}` : `${m.is_resend ? "Resending" : "Sending"} ${sale.invoice_no} on WhatsApp to ${m.customer_phone}…`,
+        d.note ? "warn" : "info");
+      track(ctx, m, onUpdate);
+      return m;
+    } catch (err) {
+      if (!(err.status === 409 && err.detail && err.detail.need_number)) throw err;
+      ctx.status(`WhatsApp: ${err.message}`, "warn");
+      const typed = await askPhone({ anchor, invoiceNo: sale.invoice_no, problem: err.detail, offerSave: hasCustomer });
+      if (!typed) { ctx.status(`WhatsApp: ${sale.invoice_no} not sent — ${err.message}`, "warn"); return null; }
+      body = { phone: typed.phone || typed, save_as_alternate: !!typed.save };
+    }
+  }
 }
 
 export function track(ctx, m, onUpdate) {
@@ -62,15 +76,20 @@ export function deliveriesHtml(list) {
     ${m.last_error && m.whatsapp_status !== "sent" ? `<tr><td colspan="4" class="warn small">${esc(m.last_error)}</td></tr>` : ""}`).join("")}</table>`;
 }
 
-/** Ask for the number the customer wants the invoice on (prefilled with the saved mobile). */
-export function askPhone({ anchor, initial = "", invoiceNo = "" }) {
+/** Ask for the number the customer wants the invoice on. With ``problem`` (from a failed check) it
+ *  lists the numbers that are not on WhatsApp and resolves {phone, save}; otherwise the phone. */
+export function askPhone({ anchor, initial = "", invoiceNo = "", problem = null, offerSave = false }) {
   return new Promise((resolve) => {
     const prev = document.activeElement;
+    const checked = (problem && problem.checked) || [];
     const el = h(`<form class="wa-ask" role="dialog" aria-label="WhatsApp number">
       <header>${WA_ICON}<b>Send ${esc(invoiceNo)} on WhatsApp</b></header>
-      <label>Customer's WhatsApp number<input name="phone" inputmode="tel" maxlength="16" value="${esc(initial)}" placeholder="98765 43210" autocomplete="off"></label>
+      ${problem ? `<div class="wa-checked"><p class="warn">${esc(problem.message)}</p>${checked.length ? `<table class="kvtab">${checked.map((c) =>
+        `<tr><td class="mono">${esc(c.number)}</td><td class="muted">${esc(c.label)}</td><td class="${c.result === "on WhatsApp" ? "ok" : "bad"}">${esc(c.result)}</td></tr>`).join("")}</table>` : ""}</div>` : ""}
+      <label>${problem ? "Number the customer uses on WhatsApp" : "Customer's WhatsApp number"}<input name="phone" inputmode="tel" maxlength="16" value="${esc(initial)}" placeholder="98765 43210" autocomplete="off"></label>
+      ${problem && offerSave ? '<label class="wa-save"><input type="checkbox" name="save" checked> Save it as the customer\'s alternate mobile</label>' : ""}
       <p class="fu-err" role="alert"></p>
-      <footer><button type="button" class="btn" data-x>Cancel <kbd>Esc</kbd></button><button class="btn primary wa-btn" type="submit">${WA_ICON} Send <kbd>Enter</kbd></button></footer></form>`);
+      <footer><button type="button" class="btn" data-x>Cancel <kbd>Esc</kbd></button><button class="btn primary wa-btn" type="submit">${WA_ICON} ${problem ? "Check and send" : "Send"} <kbd>Enter</kbd></button></footer></form>`);
     const close = (v) => { el.remove(); if (prev && prev.focus) prev.focus(); resolve(v); };
     el.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Escape") { e.preventDefault(); close(null); } });
     el.querySelector("[data-x]").onclick = () => close(null);
@@ -78,12 +97,12 @@ export function askPhone({ anchor, initial = "", invoiceNo = "" }) {
       e.preventDefault();
       const p = normalizePhone(el.phone.value);
       if (!p) { el.querySelector(".fu-err").textContent = "Enter a 10-digit Indian mobile number (starting 6–9)"; return; }
-      close(p);
+      close(problem ? { phone: p, save: !!(el.save && el.save.checked) } : p);
     });
     document.body.append(el);
     const box = anchor && anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : { left: innerWidth / 2 - 170, bottom: 160 };
-    el.style.left = Math.max(8, Math.min(box.left, innerWidth - 360)) + "px";
-    el.style.top = Math.max(8, Math.min(box.bottom + 6, innerHeight - 220)) + "px";
+    el.style.left = Math.max(8, Math.min(box.left, innerWidth - 380)) + "px";
+    el.style.top = Math.max(8, Math.min(box.bottom + 6, innerHeight - (problem ? 320 : 220))) + "px";
     el.phone.focus(); el.phone.select();
   });
 }

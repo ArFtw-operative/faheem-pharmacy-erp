@@ -1107,13 +1107,16 @@ export function create(ctx, params, root, saved) {
     const finish = (msg) => { closeOverlay(); if (msg) ctx.status(msg); q.focus(); };
     const whatsapp = async () => {
       if (!waOk) { ctx.status((await waStatus(true)).message, "warn"); return; }
-      let phone = saved;
-      if (!phone) {
+      // a customer with a mobile: the server checks primary, then alternate; walk-in: ask first
+      let phone = "";
+      if (!saved) {
         phone = await askPhone({ anchor: sheet.querySelector(".choice.wa"), initial: summary.mobile || "", invoiceNo: d.invoice_no });
         if (!phone) { sheet.focus(); return; }
       }
+      const anchor = sheet.querySelector(".choice.wa");
+      const box = anchor ? anchor.getBoundingClientRect() : null;
       closeOverlay(); q.focus();
-      try { await sendInvoice(ctx, { id: d.sale_id, invoice_no: d.invoice_no }, phone); }
+      try { await sendInvoice(ctx, { id: d.sale_id, invoice_no: d.invoice_no }, phone, { anchor: box ? { getBoundingClientRect: () => box } : null, hasCustomer: !!saved }); }
       catch (err) { ctx.status(`WhatsApp: ${err.message}`, "error"); }
     };
     const choose = (a) => (a === "print" ? (closeOverlay(), openStudio(summary)) : a === "wa" ? whatsapp()

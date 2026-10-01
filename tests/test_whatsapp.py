@@ -43,10 +43,17 @@ class FakeGateway(P.Provider):
         self.sent.append((phone, filename, data, mime, caption))
         return f"msg-{len(self.sent)}"
 
+    not_on: set = set()            # numbers (91…) that are not on WhatsApp
+    unknown: set = set()           # numbers the gateway cannot check
+
+    def check_number(self, phone):
+        return None if phone in self.unknown else phone not in self.not_on
+
 
 @pytest.fixture
 def gw():
     fake = FakeGateway()
+    fake.not_on, fake.unknown = set(), set()
     wa._provider_override = fake
     wa._cache.update(at=0.0, conn=None)
     yield fake
@@ -294,3 +301,86 @@ def test_wppconnect_auth_as_the_real_gateway_checks_it_and_shows_a_refusal():
     bad = P.WPPConnect(url="http://127.0.0.1:21465", secret="k", session="s", transport=httpx.MockTransport(refusing))
     c = bad.connection()
     assert c.state == P.ERROR and "refused" in c.detail                  # shown, not a silent "Disconnected"
+
+
+# ---------------------------------------------------------------- the number: primary, then alternate, never silent
+def _customer_sale(db, mobile="98765 43210", alternate="91234 56789"):
+    item = inv.create_item(db, name="PAN 40 TAB", pack_size="15S")
+    inv.add_or_update_batch(db, item, batch_no="P1", quantity=5, unit="PACK", movement_type="OPENING_STOCK", mrp="15")
+    cust = create_customer(db, name="Asha", mobile=mobile, alternate_mobile=alternate)
+    sale = sales_service.create_sale(db, lines=[{"item_id": item.id, "quantity": 1}], customer_id=cust.id)
+    db.commit()
+    return sale, cust
+
+
+def test_primary_mobile_is_preferred_when_on_whatsapp(db, gw):
+    sale, _ = _customer_sale(db)
+    msg = wa.send_invoice(db, sale.id)
+    assert msg.customer_phone == "919876543210" and msg.choice["label"] == "primary mobile" and msg.choice["note"] == ""
+
+
+def test_alternate_is_used_when_primary_is_not_on_whatsapp_and_it_says_so(db, gw):
+    sale, _ = _customer_sale(db)
+    gw.not_on = {"919876543210"}
+    msg = wa.send_invoice(db, sale.id)
+    assert msg.customer_phone == "919123456789" and msg.choice["label"] == "alternate mobile"
+    assert "not on WhatsApp" in msg.choice["note"] and "alternate" in msg.choice["note"]
+
+
+def test_neither_number_asks_for_one_then_a_typed_number_is_checked_and_saved(client, db, gw):
+    login(client)
+    sale, cust = _customer_sale(db, alternate="")
+    gw.not_on = {"919876543210", "917000000001"}
+    r = client.post(f"/api/erp/sales/{sale.id}/whatsapp", json={})
+    assert r.status_code == 409 and r.json()["detail"]["need_number"] is True
+    assert [c["result"] for c in r.json()["detail"]["checked"]] == ["not on WhatsApp"]
+    assert "not on WhatsApp" in r.json()["detail"]["message"]
+    bad = client.post(f"/api/erp/sales/{sale.id}/whatsapp", json={"phone": "7000000001"})
+    assert bad.status_code == 409                                                    # the typed number is checked too
+    ok = client.post(f"/api/erp/sales/{sale.id}/whatsapp", json={"phone": "8888800000", "save_as_alternate": True})
+    assert ok.status_code == 200 and ok.json()["sent_to"] == "typed number"
+    db.expire_all()
+    assert db.get(type(cust), cust.id).alternate_mobile == "8888800000"
+    assert db.query(WhatsAppMessage).count() == 1                                   # refused attempts queue nothing
+
+
+def test_disconnected_gateway_queues_with_a_clear_note(db, gw):
+    sale, _ = _customer_sale(db)
+    gw.state = P.DISCONNECTED
+    msg = wa.send_invoice(db, sale.id)
+    assert msg.customer_phone == "919876543210" and "could not be checked" in msg.choice["note"]
+
+
+def test_delivery_switches_to_the_other_number_or_fails_with_both_named(db, gw):
+    sale, _ = _customer_sale(db)
+    gw.state = P.DISCONNECTED
+    msg = wa.send_invoice(db, sale.id)                       # queued unchecked on the primary
+    db.commit()
+    gw.state, gw.not_on = P.CONNECTED, {"919876543210"}
+    wa.process_due(db)
+    db.refresh(msg)
+    assert msg.status == "SENT" and msg.customer_phone == "919123456789" and gw.sent[0][0] == "919123456789"
+    sale2, _ = _customer_sale(db, mobile="98765 11111", alternate="98765 22222")
+    gw.state = P.DISCONNECTED
+    m2 = wa.send_invoice(db, sale2.id)
+    db.commit()
+    gw.state, gw.not_on = P.CONNECTED, {"919876511111", "919876522222"}
+    wa.process_due(db)
+    db.refresh(m2)
+    assert m2.status == "FAILED" and "not on WhatsApp" in m2.last_error and "98765 22222" in m2.last_error
+
+
+def test_wppconnect_number_check_reads_the_gateway_answer():
+    def gateway(req):
+        if req.url.path.endswith("/generate-token"):
+            return httpx.Response(201, json={"token": "T"})
+        if "check-number-status/919876543210" in req.url.path:
+            return httpx.Response(200, json={"status": "success", "response": {"numberExists": True, "canReceiveMessage": True}})
+        if "check-number-status/919000000000" in req.url.path:
+            return httpx.Response(200, json={"status": "success", "response": {"numberExists": False}})
+        return httpx.Response(500, json={"status": "error"})
+
+    P.WPPConnect._tokens.clear()
+    g = P.WPPConnect(url="http://127.0.0.1:21465", secret="k", session="s", transport=httpx.MockTransport(gateway))
+    assert g.check_number("919876543210") is True and g.check_number("919000000000") is False
+    assert g.check_number("919111111111") is None                                   # cannot tell → not "no"

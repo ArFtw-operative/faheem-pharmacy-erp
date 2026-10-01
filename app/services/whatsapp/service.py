@@ -175,17 +175,82 @@ def invoice_pdf(db: Session, sale: Sale) -> Path:
 
 
 # --------------------------------------------------------------------------- queue
-def send_invoice(db: Session, sale_id: int, customer_phone: str | None = None, *, user: User | None = None) -> WhatsAppMessage:
-    """Queue the sale's invoice for WhatsApp. Returns at once; the worker delivers it."""
+class NumberNotOnWhatsApp(WhatsAppError):
+    """None of the numbers tried is on WhatsApp: the caller asks for one that is."""
+
+    def __init__(self, message: str, checked: list[dict]):
+        super().__init__(message)
+        self.checked = checked
+
+
+def _pretty(p: str) -> str:
+    return f"+{p[:2]} {p[2:7]} {p[7:]}" if len(p) == 12 else p
+
+
+def choose_number(db: Session, sale: Sale, typed: str | None = None) -> dict:
+    """The number to send the invoice to: the one typed, else the customer's primary mobile, else the
+    alternate — whichever is on WhatsApp, primary first. Returns {phone, label, checked, note}."""
+    cust = sale.customer
+    if typed:
+        candidates = [("typed number", typed)]
+    else:
+        candidates = [(label, raw) for label, raw in (("primary mobile", cust.mobile if cust else ""),
+                                                      ("alternate mobile", cust.alternate_mobile if cust else "")) if raw]
+    if not candidates:
+        raise NumberNotOnWhatsApp("This bill has no customer mobile — type the number the customer uses on WhatsApp", [])
+    checked, valid, seen = [], [], set()
+    for label, raw in candidates:
+        try:
+            phone = normalize_phone(raw)
+        except WhatsAppError:
+            checked.append({"label": label, "number": raw, "result": "not a valid mobile number"})
+            continue
+        if phone not in seen:
+            seen.add(phone); valid.append((label, phone))
+    if not valid:
+        raise NumberNotOnWhatsApp("No valid mobile number on this bill — type the number the customer uses on WhatsApp", checked)
+    gw = provider()
+    if gw.connection().state != P.CONNECTED:            # cannot check now: queue on the first number, and say so
+        label, phone = valid[0]
+        return {"phone": phone, "label": label, "checked": checked,
+                "note": f"WhatsApp is not connected, so {_pretty(phone)} could not be checked — it is sent when WhatsApp reconnects"}
+    unknown = None
+    for label, phone in valid:
+        found = gw.check_number(phone)
+        if found:
+            note = ""
+            missed = [c for c in checked if c["result"] == "not on WhatsApp"]
+            if missed:
+                note = f"{missed[0]['label'].capitalize()} {missed[0]['number']} is not on WhatsApp — sent to the {label} {_pretty(phone)}"
+            checked.append({"label": label, "number": _pretty(phone), "result": "on WhatsApp"})
+            return {"phone": phone, "label": label, "checked": checked, "note": note}
+        checked.append({"label": label, "number": _pretty(phone), "result": "not on WhatsApp" if found is False else "could not be checked"})
+        if found is None and unknown is None:
+            unknown = (label, phone)
+    if unknown:                                          # the check itself failed: try it rather than refuse
+        label, phone = unknown
+        return {"phone": phone, "label": label, "checked": checked,
+                "note": f"WhatsApp could not confirm {_pretty(phone)} — trying it; watch the delivery status"}
+    names = " and ".join(f"{c['number']} ({c['label']})" for c in checked if c["result"] == "not on WhatsApp")
+    raise NumberNotOnWhatsApp(f"{names} {'is' if names.count('(') == 1 else 'are'} not on WhatsApp — type the number the customer uses on WhatsApp", checked)
+
+
+def send_invoice(db: Session, sale_id: int, customer_phone: str | None = None, *, user: User | None = None,
+                 save_as_alternate: bool = False) -> WhatsAppMessage:
+    """Queue the sale's invoice for WhatsApp. Returns at once; the worker delivers it. The number is
+    checked first (primary mobile, then alternate); ``msg.choice`` tells the caller what happened."""
     sale = db.get(Sale, sale_id)
     if sale is None:
         raise WhatsAppError("Sale not found")
     if sale.payment_status == "CANCELLED":
         raise WhatsAppError(f"{sale.invoice_no} was voided — its invoice cannot be sent")
-    raw = customer_phone or (sale.customer.mobile if sale.customer else "")
-    if not raw:
-        raise WhatsAppError("This bill has no customer mobile — type the number the customer wants it on")
-    phone = normalize_phone(raw)
+    choice = choose_number(db, sale, customer_phone)
+    phone = choice["phone"]
+    if save_as_alternate and customer_phone and sale.customer and phone[2:] not in (sale.customer.mobile, sale.customer.alternate_mobile):
+        before = sale.customer.alternate_mobile
+        sale.customer.alternate_mobile = phone[2:]
+        audit.record(db, action=audit.A_UPDATE, entity_type="customer", entity_id=sale.customer.customer_id, user=user,
+                     details=f"WhatsApp number saved as alternate mobile (was {before or 'empty'})")
     earlier = db.scalar(select(WhatsAppMessage.id).where(WhatsAppMessage.sale_id == sale.id).limit(1))
     msg = WhatsAppMessage(sale_id=sale.id, invoice_no=sale.invoice_no, customer_phone=phone, status="QUEUED",
                           is_resend=earlier is not None, message_text=render_message(db, sale),
@@ -193,8 +258,9 @@ def send_invoice(db: Session, sale_id: int, customer_phone: str | None = None, *
                           queued_at=utcnow(), next_attempt_at=utcnow(), created_by=user.id if user else None)
     db.add(msg)
     db.flush()
+    msg.choice = choice                                   # not stored: what the number check found
     audit.record(db, action=audit.A_CREATE, entity_type="sale", entity_id=sale.invoice_no, user=user,
-                 details=f"Invoice {'re' if msg.is_resend else ''}sent to WhatsApp queue for {phone[:4]}…{phone[-3:]}")
+                 details=f"Invoice {'re' if msg.is_resend else ''}sent to WhatsApp queue for {phone[:4]}…{phone[-3:]} ({choice['label']})")
     _wake.set()
     return msg
 
@@ -231,6 +297,24 @@ def _deliver(db: Session, msg: WhatsAppMessage, gw: P.Provider) -> None:
     path = (UPLOAD_DIR / msg.pdf_path).resolve()
     if UPLOAD_DIR.resolve() not in path.parents or not path.is_file():
         raise P.PermanentError("The stored invoice PDF is missing")
+    if gw.check_number(msg.customer_phone) is False:       # queued unchecked, or the number left WhatsApp
+        sale = db.get(Sale, msg.sale_id)
+        cust = sale.customer if sale else None
+        others = []
+        for raw in ((cust.mobile, cust.alternate_mobile) if cust else ()):
+            try:
+                p = normalize_phone(raw)
+            except WhatsAppError:
+                continue
+            if p != msg.customer_phone and p not in others:
+                others.append(p)
+        switch = next((p for p in others if gw.check_number(p)), None)
+        if not switch:
+            raise P.PermanentError(f"{_pretty(msg.customer_phone)} is not on WhatsApp"
+                                   + (f" (nor {', '.join(_pretty(p) for p in others)})" if others else "")
+                                   + " — send again with the number the customer uses on WhatsApp")
+        log.info("Invoice %s: %s not on WhatsApp, sending to the customer's other number", msg.invoice_no, msg.customer_phone[:4])
+        msg.customer_phone = switch
     msg.provider_message_id = gw.send_file(msg.customer_phone, f"Invoice-{msg.invoice_no}.pdf", path.read_bytes(),
                                            "application/pdf", msg.message_text)[:120]
     s = settings(db)

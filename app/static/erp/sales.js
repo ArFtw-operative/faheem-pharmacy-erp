@@ -195,10 +195,14 @@ export function create(ctx, params, root) {
     if (d.status === "CANCELLED") { ctx.status("A voided bill's invoice cannot be sent", "warn"); return; }
     const st = await waStatus(true);
     if (!st.connected) { ctx.status(st.message, "warn"); return; }
-    const last = waList[0];
-    const phone = await askPhone({ anchor: $(".wa-send", side), initial: (last && last.customer_phone) || d.mobile || "", invoiceNo: d.invoice_no });
-    if (!phone) return;
-    try { await sendInvoice(ctx, d, phone, { onUpdate: () => loadWhatsApp(d) }); loadWhatsApp(d); }
+    // the bill's customer: the server checks primary, then alternate mobile; no customer number: ask
+    let phone = "";
+    if (!d.mobile && !d.customer_id) {
+      const last = waList[0];
+      phone = await askPhone({ anchor: $(".wa-send", side), initial: (last && last.customer_phone) || "", invoiceNo: d.invoice_no });
+      if (!phone) return;
+    }
+    try { await sendInvoice(ctx, d, phone, { onUpdate: () => loadWhatsApp(d), anchor: $(".wa-send", side), hasCustomer: !!d.customer_id }); loadWhatsApp(d); }
     catch (err) { ctx.status(`WhatsApp: ${err.message}`, "error"); }
   }
   side.addEventListener("click", async (e) => {

@@ -21,6 +21,9 @@ def _run(db: Session, fn, *a, **kw):
         out = fn(db, *a, **kw)
         db.commit()
         return out
+    except wa.NumberNotOnWhatsApp:
+        db.rollback()
+        raise
     except wa.WhatsAppError as exc:
         db.rollback()
         raise HTTPException(400, str(exc))
@@ -39,8 +42,15 @@ async def whatsapp_send(sale_id: int, request: Request, db: Session = Depends(ge
 
     _visible_sale(db, sale_id, user)                   # own-sales scope applies here too
     data = await request.json() if request.headers.get("content-length") not in (None, "0") else {}
-    msg = _run(db, wa.send_invoice, sale_id, (data or {}).get("phone") or None, user=user)
-    return {"message": wa.payload(msg), "status": wa.public_status()}
+    data = data or {}
+    try:
+        msg = _run(db, wa.send_invoice, sale_id, data.get("phone") or None, user=user,
+                   save_as_alternate=bool(data.get("save_as_alternate")))
+    except wa.NumberNotOnWhatsApp as exc:                # ask for a number that is on WhatsApp — never fail silently
+        db.rollback()
+        raise HTTPException(409, {"message": str(exc), "checked": exc.checked, "need_number": True})
+    return {"message": wa.payload(msg), "status": wa.public_status(),
+            "note": msg.choice["note"], "checked": msg.choice["checked"], "sent_to": msg.choice["label"]}
 
 
 @router.get("/api/erp/sales/{sale_id}/whatsapp")

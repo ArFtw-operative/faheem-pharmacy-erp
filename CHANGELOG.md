@@ -3,6 +3,16 @@
 Release notes for Faheem Pharmacy. Versions follow semantic versioning; every release
 lists its database migrations. Upgrades keep all business history (see docs/UPGRADES.md).
 
+## 1.5.2 — 2026-10-01
+
+- **WhatsApp number check:** before an invoice is queued the customer's primary mobile is checked with
+  WhatsApp, then the alternate; the status bar says which was used. When neither is on WhatsApp the
+  number box opens listing what was checked; a typed number is checked too and can be saved as the
+  alternate mobile. At delivery the number is checked again and the other number used if needed;
+  failures name the numbers — nothing fails silently.
+
+**Migrations:** none. **Fixtures:** `tests/fixtures/releases/1.5.2.db`.
+
 ## 1.5.1 — 2026-10-01
 
 - **Manual bill:** every column of a line is a field — code, item, batch, expiry, pack, quantity, rate,

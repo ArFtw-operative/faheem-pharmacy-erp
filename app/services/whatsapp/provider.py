@@ -54,6 +54,10 @@ class Provider:
     def send_file(self, phone: str, filename: str, data: bytes, mime: str, caption: str = "") -> str:  # pragma: no cover
         raise NotImplementedError
 
+    def check_number(self, phone: str) -> bool | None:
+        """Is this number on WhatsApp? True / False, or None when it cannot be told right now."""
+        return None
+
 
 # --------------------------------------------------------------------------- WPPConnect
 def _private_host(host: str) -> bool:
@@ -189,6 +193,24 @@ class WPPConnect(Provider):
         if data.get("qrcode"):
             return Connection(QR_REQUIRED, "Scan the QR code with WhatsApp → Linked devices", data["qrcode"])
         return self.connection()
+
+    def check_number(self, phone: str) -> bool | None:
+        try:
+            r = self._call("GET", f"check-number-status/{phone}", timeout=20.0)
+        except (TemporaryError, GatewayBusy):
+            return None
+        if r.status_code != 200:
+            return None
+        try:
+            data = r.json().get("response") or {}
+        except ValueError:
+            return None
+        if not isinstance(data, dict):
+            return None
+        for key in ("numberExists", "canReceiveMessage"):
+            if isinstance(data.get(key), bool):
+                return data[key]
+        return None
 
     def logout(self) -> None:
         r = self._call("POST", "logout-session")
