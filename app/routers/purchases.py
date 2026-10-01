@@ -220,6 +220,13 @@ def purchase_source(purchase_id: int, db: Session = Depends(get_db),
     return FileResponse(path, filename=f"{p.reference_no or 'draft-' + str(p.id)}{path.suffix}")
 
 
+@router.delete("/api/erp/purchases/{purchase_id}")
+def purchase_delete(purchase_id: int, db: Session = Depends(get_db),
+                    user: User = Depends(require_permission("purchase.create"))):
+    _run(db, purchasing.delete_draft, _doc(db, purchase_id), user=user)
+    return {"deleted": purchase_id}
+
+
 @router.put("/api/erp/purchases/{purchase_id}")
 async def purchase_update(purchase_id: int, request: Request, db: Session = Depends(get_db),
                           user: User = Depends(require_permission("purchase.create"))):

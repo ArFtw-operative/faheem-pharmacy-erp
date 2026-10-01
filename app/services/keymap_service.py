@@ -121,6 +121,8 @@ ACTIONS: list[dict] = [
     {"id": "purchases.panel", "scope": "purchases", "group": "Purchases", "label": "Switch list (Register / Suppliers / Returns)", "key": "F6", "bar": 5},
     {"id": "purchases.supplier", "scope": "purchases", "group": "Purchases", "label": "New supplier", "key": "F7", "bar": 6},
     {"id": "purchases.return", "scope": "purchases", "group": "Purchases", "label": "Purchase return to supplier", "key": "F8", "bar": 7},
+    {"id": "purchases.delete", "scope": "purchases", "group": "Purchases", "label": "Delete unreceived draft", "key": "Alt+Delete", "bar": 8},
+    {"id": "purchases.cancel", "scope": "purchases", "group": "Purchases", "label": "Cancel draft", "key": "Alt+X"},
     # ---- Purchase document (import review)
     {"id": "purchase.header", "scope": "purchase", "group": "Purchase document", "label": "Invoice header (supplier, number, date, total)", "key": "F2", "bar": 1},
     {"id": "purchase.add", "scope": "purchase", "group": "Purchase document", "label": "Add line", "key": "F3", "bar": 2},
@@ -134,6 +136,8 @@ ACTIONS: list[dict] = [
     {"id": "purchase.gst", "scope": "purchase", "group": "Purchase document", "label": "GST: per-slab table, CGST/SGST or IGST, what to fix", "key": "F10", "bar": 9},
     {"id": "purchase.source", "scope": "purchase", "group": "Purchase document", "label": "Open the supplier's file", "key": "Alt+O"},
     {"id": "purchase.cancel", "scope": "purchase", "group": "Purchase document", "label": "Cancel draft", "key": "Alt+X"},
+    {"id": "purchase.delete", "scope": "purchase", "group": "Purchase document", "label": "Delete unreceived draft", "key": "Alt+Delete"},
+    {"id": "purchase.removeLine", "scope": "purchase", "group": "Purchase document", "label": "Remove unreceived line", "key": "Alt+D"},
     # ---- Ledger
     {"id": "ledger.refresh", "scope": "ledger", "group": "Stock ledger", "label": "Refresh", "key": "F5", "bar": 1},
 ]

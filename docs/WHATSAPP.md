@@ -122,3 +122,10 @@ A background worker delivers the queue. The queue lives in the database, so it s
 > WPPConnect drives WhatsApp Web; it is not an official WhatsApp product. Keep sending to
 > customer-requested invoices. The provider sits behind `app/services/whatsapp/provider.py`, so
 > the official WhatsApp Business (Cloud) API can replace it without changes to POS or Sales.
+
+## Number entry
+
+The number dialog defaults to India: enter a regular 10-digit mobile, without +91. Choose another
+country to enter its national number, or enter a complete +country-code number. Validation uses
+country numbering metadata, including trunk prefixes. International alternate numbers are saved
+with +country code so future sends and retries retain the same destination.

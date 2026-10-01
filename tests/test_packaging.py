@@ -47,8 +47,8 @@ def uom(name, pack, generic=""):
     ("PREGNANCY KIT", "KIT", ("KIT", "KIT", 1, False)),
     ("ENJOY CONDOMS", "1X3", ("PACK", "PACK", 1, False)),             # a count alone is not loose
     ("KS 3'S DOT", "1X3", ("PACK", "PACK", 1, False)),
-    ("C-PILL 72 TAB", "1", ("TABLET", "STRIP", 1, False)),
-    ("AF 400MG TAB", "1 S", ("TABLET", "STRIP", 1, False)),
+    ("C-PILL 72 TAB", "1", ("TABLET", "STRIP", 1, True)),
+    ("AF 400MG TAB", "1 S", ("TABLET", "STRIP", 1, True)),
     ("MOXIKIND-CV 625MG TAB", "lOS", ("TABLET", "STRIP", 10, True)),  # look-alike letters in a strip count
     ("FORACORT-200 INH", "120MD", ("PIECE", "PIECE", 1, False)),
     ("DEKSEL NANO SYP", "5X5ML", ("BOTTLE", "BOX", 5, True)),         # box of 5 × 5 mL shots
@@ -76,11 +76,11 @@ def test_new_products_are_configured_automatically(db):
     assert (corrected.units_per_pack, corrected.packaging_source) == (10, "MANUAL")
 
 
-def test_loose_sale_is_derived_never_chosen(db):
+def test_explicit_loose_sale_choice_is_respected(db):
     item = inv.create_item(db, name="Test", units_per_pack=1, loose_sale=True)
-    assert item.loose_sale is False
-    item = inv.create_item(db, name="Test 2", units_per_pack=10, loose_sale=False)
     assert item.loose_sale is True
+    item = inv.create_item(db, name="Test 2", units_per_pack=10, loose_sale=False)
+    assert item.loose_sale is False
 
 
 def test_startup_configures_legacy_products_and_repacks_their_stock(db):
@@ -174,3 +174,29 @@ def test_uom_register_api(client, db):
     sale = client.post("/api/sales", json={"lines": [{"item_id": hit["id"], "quantity": 3}], "payment_mode": "CASH",
                                            "cash_received": 100})
     assert sale.status_code == 200 and sale.json()["total"] == "60.00"
+
+
+def test_loose_toggle_with_existing_stock_preserves_ledger_and_prices(db):
+    item = inv.create_item(db, name="New generic tablet", dosage_form="TABLET", pack_size="10S", loose_sale=False)
+    batch = inv.add_or_update_batch(db, item, quantity=3, unit="PACK", movement_type="OPENING_STOCK", mrp="100", purchase_rate="50")
+    db.commit()
+    before = (batch.quantity, batch.unit_mrp, batch.unit_cost, db.query(InventoryMovement).count())
+    inv.update_item(db, item, loose_sale="true")
+    db.commit()
+    assert item.loose_sale is True
+    assert (batch.quantity, batch.unit_mrp, batch.unit_cost, db.query(InventoryMovement).count()) == before
+    sale = sales_service.create_sale(db, lines=[{"item_id": item.id, "quantity": 3}], payment_mode="UPI")
+    db.commit()
+    assert sale.total == Decimal("30")
+    inv.update_item(db, item, loose_sale="false")
+    db.commit()
+    with pytest.raises(sales_service.SaleError):
+        sales_service.create_sale(db, lines=[{"item_id": item.id, "quantity": 1}], payment_mode="UPI")
+    assert stock_ledger.reconcile(db) == []
+
+
+def test_single_tablet_defaults_to_loose_using_form_metadata(db):
+    item = inv.create_item(db, name="Unfamiliar brand", dosage_form="TABLET")
+    assert item.units_per_pack == 1 and item.loose_sale is True
+    syrup = inv.create_item(db, name="Unfamiliar liquid", dosage_form="SYRUP", pack_size="100ML")
+    assert syrup.loose_sale is False

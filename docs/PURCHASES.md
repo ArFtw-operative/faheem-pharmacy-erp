@@ -58,3 +58,15 @@ all is taken as 0% with a note on each line.
 
 **Report:** Reports → Purchase Reports → **Purchase GST** — by invoice line, invoice, product, GST
 rate, HSN, supplier or month; returns to suppliers reverse their GST.
+
+## Draft actions and optional metadata
+
+Right-click a register row to open, delete, cancel or refresh. Alt+Delete deletes an unreceived
+Draft (or Cancelled draft) after confirmation; the same action is available in the purchase tab.
+Posted and partly received purchases cannot be deleted. All actions are listed in Keyboard shortcuts
+and can be reassigned. Alt+D removes an unreceived line; Delete also works in the line grid.
+
+Batch, expiry, purchase rate, MRP and category may be blank, including for general goods. Unknown
+cost stays unresolved. Unclassified new goods default to General; an absent pack means one stock
+unit per purchase unit. Enter known values when available; malformed dates, damaged batch numbers,
+invalid quantities and ambiguous pack conversions still need correction or confirmation.

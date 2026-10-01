@@ -40,7 +40,7 @@ def ensure_category(db: Session, code: str | None) -> str:
 
     return category_service.ensure(db, code)
 
-# unit-of-measure fields; ``loose_sale`` is never set directly — it follows units_per_pack
+# Unit conversion and the separately editable loose-sale permission.
 PACKAGING_FIELDS = ("base_unit", "pack_unit", "units_per_pack", "loose_sale")
 UOM_TRIGGERS = ("name", "pack_size", "generic_name", "dosage_form")  # re-detect when these change
 
@@ -48,8 +48,7 @@ UOM_TRIGGERS = ("name", "pack_size", "generic_name", "dosage_form")  # re-detect
 def clean_packaging(fields: dict[str, Any], current: Item | None = None) -> dict[str, Any]:
     """Validate/normalise unit-of-measure fields present in ``fields``.
 
-    Loose sale is derived, not chosen: a product sells loose exactly when one
-    purchase unit holds more than one sale unit (strip of 10 → loose tablets).
+    Explicit loose-sale choices override the automatic pack and form default.
     """
     out: dict[str, Any] = {}
     if "units_per_pack" in fields and fields["units_per_pack"] not in (None, ""):
@@ -60,7 +59,6 @@ def clean_packaging(fields: dict[str, Any], current: Item | None = None) -> dict
         if upp < 1 or upp > 10000:
             raise InventoryError("Units per pack must be between 1 and 10000")
         out["units_per_pack"] = upp
-        out["loose_sale"] = upp > 1
     if fields.get("base_unit"):
         out["base_unit"] = units.normalize_unit(fields["base_unit"], units.BASE_UNITS, "UNIT")
     if fields.get("pack_unit"):
@@ -68,6 +66,11 @@ def clean_packaging(fields: dict[str, Any], current: Item | None = None) -> dict
     if "dosage_form" in fields and fields["dosage_form"] is not None:
         form = units.normalize_unit(fields["dosage_form"], units.DOSAGE_FORMS, "")
         out["dosage_form"] = form
+    if fields.get("loose_sale") not in (None, "", "auto"):
+        value = fields["loose_sale"]
+        if str(value).lower() not in ("true", "false", "yes", "no", "1", "0"):
+            raise InventoryError("Loose sale must be Auto, Yes or No")
+        out["loose_sale"] = str(value).lower() in ("true", "yes", "1")
     return out
 
 
@@ -112,7 +115,9 @@ def create_item(
     inferred = packaging_service.defaults_for_new(name, fields.get("pack_size") or "", fields)
     for key, value in clean_packaging({**inferred, **fields}).items():
         setattr(item, key, value)
-    item.packaging_source = inferred.get("packaging_source", "AUTO")
+    explicit_packaging = clean_packaging(fields)
+    item.loose_sale = explicit_packaging.get("loose_sale", packaging_service.default_loose(item))
+    item.packaging_source = "MANUAL" if "loose_sale" in explicit_packaging else inferred.get("packaging_source", "AUTO")
     for key in ("content_qty", "content_unit"):
         if key in inferred and fields.get(key) in (None, ""):
             setattr(item, key, inferred[key])
@@ -140,6 +145,7 @@ def update_item(
     **fields: Any,
 ) -> Item:
     before = audit.snapshot(item)
+    automatic_loose = fields.get("loose_sale") == "auto"
     packaging = clean_packaging(fields, item)
     triggers = {k: getattr(item, k) for k in UOM_TRIGGERS}
     fields = {k: v for k, v in fields.items() if k not in PACKAGING_FIELDS and k != "dosage_form"}
@@ -153,13 +159,20 @@ def update_item(
         setattr(item, key, value)
     if "dosage_form" in packaging:
         item.dosage_form = packaging.pop("dosage_form")
-    packaging.pop("loose_sale", None)
+    loose = packaging.pop("loose_sale", None)
     if packaging and any(getattr(item, k) != v for k, v in packaging.items()):
         _apply_packaging(db, item, packaging)   # a person corrected the unit of measure
     elif any(getattr(item, k) != v for k, v in triggers.items()) and item.packaging_source != "MANUAL":
         from app.services import packaging_service
 
         packaging_service.auto_configure(db, item, user=user)  # pack text / form changed: re-detect
+    if automatic_loose:
+        from app.services import packaging_service
+
+        item.loose_sale = packaging_service.default_loose(item)
+    if loose is not None:
+        item.loose_sale = loose
+        item.packaging_source = "MANUAL"
     item.updated_at = utcnow()
     db.flush()
     audit.record(

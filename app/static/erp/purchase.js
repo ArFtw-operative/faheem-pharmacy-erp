@@ -92,7 +92,7 @@ export function create(ctx, params, root) {
   const corr = (r, f) => r.corrections && r.corrections[f];
   const cell = (r, f, text) => {
     const c = corr(r, f);
-    const bad = (r.issues || []).some((i) => i.field === f && !i.accepted);
+    const bad = (r.issues || []).some((i) => i.field === f && !i.accepted && i.level !== "info");
     return `<span class="${c ? "corr" : ""}${bad ? " flag" : ""}" ${c ? `title="Supplier wrote: ${esc(c.raw || "(blank)")}"` : ""}>${text}</span>`;
   };
 
@@ -135,8 +135,10 @@ export function create(ctx, params, root) {
       { label: "Match product", key: keys.keyFor("purchase.product"), action: () => matchProduct(grid.selected) },
       { label: "Create as new product", key: keys.keyFor("purchase.newProduct"), action: () => newProduct(grid.selected) },
       { label: "Accept warnings", key: keys.keyFor("purchase.accept"), action: () => accept(grid.selected) },
-      { label: "Remove line", key: "Delete", action: () => removeLine(grid.selected) },
+      { label: "Remove line", key: keys.keyFor("purchase.removeLine"), action: () => removeLine(grid.selected) },
       { label: "Mark / unmark for posting", key: "Space", action: () => grid.toggleMark() },
+      ...(draft() ? [{ label: "Delete purchase draft", key: keys.keyFor("purchase.delete"), action: deleteDoc },
+        { label: "Cancel purchase draft", key: keys.keyFor("purchase.cancel"), action: cancelDoc }] : []),
     ] : [{ label: "Stock ledger of the product", key: "Enter", action: () => openLedger(grid.selected) }],
   });
   $(".pdoc-lines", root).append(grid.el);
@@ -296,7 +298,7 @@ export function create(ctx, params, root) {
     }).join("");
     const issues = (r.issues || []).map((i) => `<li class="${i.accepted ? "muted" : i.level === "warn" ? "warn" : i.level === "info" ? "muted" : "bad"}">${esc(i.message)}${i.accepted ? " (accepted)" : ""}</li>`).join("");
     const prod = r.item ? `<b>${esc(r.item.name)}</b><br><span class="muted">${esc(r.item.code)} · ${esc(r.item.pack || "")} · 1 ${esc(t(r.item.pack_unit))} = ${r.item.upp} ${esc(t(r.item.base_unit))}</span>`
-      : r.new_product ? `<span class="tag new">NEW PRODUCT</span> ${esc(r.name)}<br><span class="muted">${esc(r.category || "no category")} · ${r.units_per_pack ? `1 ${esc(t(r.pack_unit || "PACK"))} = ${r.units_per_pack} ${esc(t(r.base_unit || "UNIT"))}` : "units not set"}</span>`
+      : r.new_product ? `<span class="tag new">NEW PRODUCT</span> ${esc(r.name)}<br><span class="muted">${esc(r.category || "General")} · ${r.units_per_pack ? `1 ${esc(t(r.pack_unit || "PACK"))} = ${r.units_per_pack} ${esc(t(r.base_unit || "UNIT"))}` : "units not set"}</span>`
       : '<span class="bad">Not matched — F4 choose, Shift+F4 create new</span>';
     const qtyNote = r.item && r.item.upp > 1 && r.qty ? `<p class="hint">Receives ${(r.qty + r.free) * r.item.upp} ${esc(t(r.item.base_unit))}s (${r.qty}${r.free ? "+" + r.free + " free" : ""} × ${r.item.upp})</p>` : "";
     side.innerHTML = `
@@ -385,7 +387,7 @@ export function create(ctx, params, root) {
     const cats = BOOT.category_options || [];
     const opt = (list, v) => list.map((x) => `<option value="${esc(x)}" ${x === v ? "selected" : ""}>${esc(t(x) || "—")}</option>`).join("");
     return `<fieldset class="form-grid three np"><legend>New product</legend>
-      <label>Category<select name="np_category"><option value="">Choose…</option>${cats.map((c) => `<option value="${esc(c.code)}" ${c.code === r.category ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
+      <label>Category<select name="np_category"><option value="">General (default)</option>${cats.map((c) => `<option value="${esc(c.code)}" ${c.code === r.category ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
       <label>Form<select name="np_dosage_form">${opt(["", ...(BOOT.units.forms || []).filter(Boolean)], r.dosage_form)}</select></label>
       <label>Units per pack<input name="np_units_per_pack" inputmode="numeric" value="${esc(r.units_per_pack ?? "")}"></label>
       <label>Sale unit (base)<select name="np_base_unit">${opt(BOOT.units.base || [], r.base_unit || "UNIT")}</select></label>
@@ -428,14 +430,13 @@ export function create(ctx, params, root) {
     const cats = BOOT.category_options || [];
     const out = await modal({
       title: `Create ${marked.length} selected line(s) as new products`, wide: true, submitLabel: "Mark as new products",
-      body: `<div class="form-grid"><label class="full">Category for all of them<select name="category" autofocus><option value="">Choose…</option>
+      body: `<div class="form-grid"><label class="full">Category for all of them<select name="category" autofocus><option value="">General (default)</option>
         ${cats.map((c) => `<option value="${esc(c.code)}">${esc(c.name)}</option>`).join("")}</select></label>
         <p class="full hint">Units are detected from each line's pack (15S → strip of 15 tablets, 200ML → bottle). A line whose pack cannot be
         read with certainty stays in review for you to confirm. Products are created only when the purchase is posted.</p></div>
         <table class="rawtab"><thead><tr><th>#</th><th>Description</th><th>Pack</th></tr></thead><tbody>
         ${marked.slice(0, 200).map((m) => `<tr><td>${m.line_no}</td><td>${esc(m.name)}</td><td class="mono">${esc(m.pack || "—")}</td></tr>`).join("")}</tbody></table>`,
       onSubmit: (form) => {
-        if (!form.category.value) throw new Error("Choose a category");
         return api(`/api/erp/purchases/${id}/lines/bulk`, { method: "POST", body: { line_ids: marked.map((m) => m.id), changes: { new_product: true, category: form.category.value } } });
       },
     });
@@ -604,6 +605,13 @@ export function create(ctx, params, root) {
     grid.focus();
   }
 
+  async function deleteDoc() {
+    if (!guard(true)) return;
+    if (!(await window.erpConfirm("Delete this purchase draft and all its unreceived lines?"))) return;
+    try { await api(`/api/erp/purchases/${id}`, { method: "DELETE" }); ctx.status("Purchase draft deleted", "ok"); ctx.close(); }
+    catch (err) { ctx.status(err.message, "error"); }
+  }
+
   async function cancelDoc() {
     if (doc && doc.purchase.status === "PARTIAL") return closeRemaining();
     if (!guard(true)) return;
@@ -652,6 +660,7 @@ export function create(ctx, params, root) {
         "purchase.header": editHeader, "purchase.add": addLine, "purchase.product": () => matchProduct(grid.selected),
         "purchase.newProduct": () => newProduct(grid.selected), "purchase.accept": () => accept(grid.selected),
         "purchase.next": nextIssue, "purchase.post": () => postDoc(), "purchase.refresh": load, "purchase.cancel": cancelDoc,
+        "purchase.delete": deleteDoc, "purchase.removeLine": () => removeLine(grid.selected),
         "purchase.columns": columns, "purchase.gst": gstPanel,
         "purchase.source": () => doc && doc.purchase.has_source ? window.open(`/api/erp/purchases/${id}/source`, "_blank") : ctx.status("No supplier file (manual entry)", "warn"),
       };

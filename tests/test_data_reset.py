@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date
 
 from app.models import Customer, Item, StockAdjustment, WorkspaceSnapshot
-from app.services import adjustment_service, customer_service, data_reset, followup_service
+from app.services import business_time, adjustment_service, customer_service, data_reset, followup_service
 from app.services import inventory_service as inv
 from app.services import parking_service, refund_service, sales_service
 
@@ -20,7 +20,7 @@ def _everything(db):
     adjustment_service.reverse(db, adj, reason="mistake")
     sales_service.create_sale(db, invoice_type="MANUAL", lines=[{"item_id": item.id, "name": "DOLO", "quantity": 1, "rate": "30"}])
     parking_service.park_sale(db, payload={"cart": [{"item_id": item.id, "quantity": 1}]}, customer_id=cust.id)
-    followup_service.create(db, customer_id=cust.id, due_date=date.today().isoformat(), source_sale_id=sale.id)
+    followup_service.create(db, customer_id=cust.id, due_date=business_time.current_business_date(db).isoformat(), source_sale_id=sale.id)
     from app.models import User
     db.add(WorkspaceSnapshot(user_id=db.query(User).first().id, terminal="c1", data="{}"))
     db.commit()

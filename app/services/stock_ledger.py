@@ -213,7 +213,9 @@ def resolve_batch(
     """
     batch_no = str(batch_no or "").strip()[:60]
     mrp_d = to_decimal(mrp)
-    batch = find_batch(db, item, batch_no, expiry_date)
+    # Unlabelled, undated goods have no manufactured-lot identity. Keep each
+    # purchase's price/provenance separate instead of merging unrelated receipts.
+    batch = None if not batch_no and expiry_date is None and purchase_id else find_batch(db, item, batch_no, expiry_date)
     upp = max(int(item.units_per_pack or 1), 1)
     if batch is None:
         batch = Batch(

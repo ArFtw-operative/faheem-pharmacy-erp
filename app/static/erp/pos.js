@@ -1089,6 +1089,31 @@ export function create(ctx, params, root, saved) {
   }
   // after the sale: Print invoice or WhatsApp invoice (or neither). WhatsApp is queued and
   // delivered in the background — the next bill starts at once, the sale never waits for it.
+  function askFollowUp(d, summary, wasEdit) {
+    if (!CAN["followups.manage"] || !summary.customer_id) { askInvoice(d, summary, wasEdit); return; }
+    const sheet = showOverlay(`<header class="pos-sheet-h"><b>✓ ${esc(d.invoice_no)} completed</b><span class="muted">${esc(summary.customer)}</span></header>
+      <p class="pos-ask">Set up a follow-up?</p><footer>
+      <button type="button" class="btn primary" data-a="yes">Yes <kbd>Y</kbd></button>
+      <button type="button" class="btn" data-a="no">No <kbd>N</kbd></button></footer>`);
+    let choosing = false;
+    const choose = async (yes) => {
+      if (choosing) return;
+      choosing = true;
+      const anchor = sheet;
+      if (yes) {
+        await followUpPopover({ anchor, customer: { id: summary.customer_id, name: summary.customer, mobile: summary.mobile },
+          sale: { id: d.sale_id, invoice_no: d.invoice_no }, ctx });
+      }
+      askInvoice(d, summary, wasEdit);
+    };
+    sheet.onclick = (e) => { const b = e.target.closest("[data-a]"); if (b) choose(b.dataset.a === "yes"); };
+    overlay.keyFn = (name) => {
+      if (name === "Y" || name === "Enter") { choose(true); return true; }
+      if (name === "N" || name === "Escape") { choose(false); return true; }
+      return false;
+    };
+  }
+
   function askInvoice(d, summary, wasEdit) {
     const change = num(d.change);
     const canWa = !!CAN["whatsapp.send"];
@@ -1193,7 +1218,7 @@ export function create(ctx, params, root, saved) {
       const wasManual = S.manual && !wasEdit;
       S = blank(); S.manual = wasManual; sel = -1; editing = null; discEditing = null; rateEditing = null; metaEditing = null;
       render();
-      askInvoice(d, summary, wasEdit);
+      askFollowUp(d, summary, wasEdit);
     } catch (ex) {
       ctx.status(ex instanceof ApiError ? ex.message : "Could not save the bill: " + ex.message, "error");
     } finally { busy = false; renderTotals(); renderSaleType(); }
@@ -1352,6 +1377,7 @@ export function create(ctx, params, root, saved) {
     },
     manual: () => { if (!S.manual) toggleManual(); },
     get keys() {
+      if (overlay && overlay.querySelector("[data-a=yes]")) return [["Y", "Set up follow-up"], ["N", "Continue to invoice"]];
       if (overlay) return overlay.querySelector("[data-a=print]") ? [["P", "Print invoice"], ...(CAN["whatsapp.send"] ? [["W", "WhatsApp invoice"]] : []), ["N", "No invoice"]] : [["Enter", "Complete sale"], ["Esc", "Back to adjust sale"]];
       return studioOpen ? [["1–6", "Format"], ["E", "Expiry"], ["B", "B&W"], ["Ctrl+P", "Print"], ["Esc", "New bill"]] : keys.bar("pos");
     },

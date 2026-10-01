@@ -115,3 +115,10 @@ A completed invoice can be refunded with per-line quantity, a reason and a dispo
 - Split payments are shown as planned and are not implemented.
 - Receipt printing uses the local OS printer backend; it is unavailable in the static
   browser demo.
+
+## After completing a sale
+
+F12 shows the sale summary; Enter completes it. For a selected customer, **Set up a follow-up? Y/N**
+then offers the existing follow-up popover (7/15/30 days or custom). Save or close it to continue to
+Print invoice / WhatsApp / No invoice. Walk-in sales and users without follow-up rights proceed to
+invoice choices directly.

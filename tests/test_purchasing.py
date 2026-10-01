@@ -124,7 +124,7 @@ def test_new_product_created_only_on_post_with_confirmed_units(db):
     line = p.items[0]
     purchasing.correct(db, p, line, {"new_product": True})
     assert line.units_per_pack == 3 and line.base_unit == "TABLET"
-    assert line.status == "NEEDS_REVIEW"                 # category still missing
+    assert line.status == "READY"                        # category is optional
     purchasing.correct(db, p, line, {"category": "PHARMA"})
     assert line.status == "CORRECTED"
     assert db.query(Item).filter(Item.name == "AZEE 500 TAB").count() == 0
@@ -537,3 +537,91 @@ def test_real_batch_with_an_E_is_not_mistaken_for_spreadsheet_damage(db):
     real, damaged = sorted(p.items, key=lambda x: x.line_no)
     assert not any(i["code"] == "batch_corrupt" for i in real.issues)
     assert any(i["code"] == "batch_corrupt" for i in damaged.issues)
+
+
+def test_delete_draft_is_audited_and_allows_reimport(db):
+    from app.models import Purchase, PurchaseItem
+    dolo(db)
+    row = "D650,DOLO 650MG TAB,15S,DB1,May-2028,10,,24,33.6,240"
+    sup = supplier(db)
+    p = draft(db, row, sup=sup)
+    pid = p.id
+    purchasing.delete_draft(db, p)
+    db.commit()
+    assert db.get(Purchase, pid) is None
+    assert db.query(PurchaseItem).count() == 0
+    assert db.query(InventoryMovement).count() == 0
+    assert db.query(AuditLog).filter(AuditLog.details == "Unreceived purchase draft deleted").count() == 1
+    assert draft(db, row, sup=sup).status == "DRAFT"
+
+
+def test_received_purchase_cannot_be_deleted(db):
+    item = dolo(db)
+    p = draft(db, "D650,DOLO 650MG TAB,15S,DB1,May-2028,10,,24,33.6,240")
+    purchasing.post(db, p)
+    db.commit()
+    with pytest.raises(PurchaseError, match="cannot be deleted"):
+        purchasing.delete_draft(db, p)
+    assert stock(db, item) == 150
+
+
+def test_general_goods_can_be_posted_without_optional_metadata(db):
+    item = inv.create_item(db, name="General goods", article_id="GEN1", pack_size="1PCS")
+    p = draft(db, "GEN1,General goods,,,,3,,,,")
+    line = p.items[0]
+    assert line.status == "READY", line.issues
+    purchasing.post(db, p)
+    db.commit()
+    assert stock(db, item) == 3
+    assert line.batch.batch_no == "" and line.batch.expiry_date is None
+    assert line.batch.cost_status == "COST_MISSING"
+    assert __import__('app.services.stock_ledger', fromlist=['reconcile']).reconcile(db) == []
+
+
+def test_unlabelled_receipts_keep_their_purchase_cost_and_price(db):
+    item = inv.create_item(db, name="General goods", article_id="GEN1", pack_size="1PCS")
+    p = draft(db, "GEN1,General goods,,,,3,,10,20,30")
+    purchasing.post(db, p)
+    db.commit()
+    p2 = purchasing.create_from_file(db, "second.csv", csv_bytes("GEN1,General goods,,,,2,,15,25,30"),
+                                     supplier_id=p.supplier_id, invoice_no="GEN-2")
+    purchasing.post(db, p2)
+    db.commit()
+    assert p.items[0].batch_id != p2.items[0].batch_id
+    assert p.items[0].batch.mrp == Decimal("20")
+    assert p2.items[0].batch.mrp == Decimal("25")
+    assert stock(db, item) == 5
+
+
+def test_delete_draft_api(client, db):
+    from app.models import Purchase
+    login(client)
+    p = purchasing.create_manual(db, supplier_id=supplier(db).id, invoice_no="DELETE-1")
+    db.commit()
+    pid = p.id
+    r = client.delete(f"/api/erp/purchases/{pid}")
+    assert r.status_code == 200, r.text
+    db.expire_all()
+    assert db.get(Purchase, pid) is None
+    assert client.delete(f"/api/erp/purchases/{pid}").status_code == 404
+
+
+
+def test_new_general_goods_with_no_metadata_can_be_received(db):
+    p = draft(db, ",Unlabelled general product,,,,2,,,,")
+    purchasing.correct(db, p, p.items[0], {"new_product": True})
+    assert p.items[0].status == "READY", p.items[0].issues
+    purchasing.post(db, p)
+    db.commit()
+    line = p.items[0]
+    assert line.item.category == "GENERAL" and line.item.units_per_pack == 1
+    assert line.batch.batch_no == "" and line.batch.expiry_date is None and line.batch.quantity == 2
+
+
+
+def test_optional_prices_reject_supplied_invalid_values(db):
+    dolo(db)
+    p = draft(db, "D650,DOLO 650MG TAB,15S,,,2,,-3,bad,")
+    codes = {i["code"] for i in p.items[0].issues}
+    assert {"rate_invalid", "mrp_invalid"} <= codes
+    assert p.items[0].status == "NEEDS_REVIEW"

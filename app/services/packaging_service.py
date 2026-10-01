@@ -8,7 +8,7 @@ and :mod:`app.services.units`:
     purchase unit      the unit suppliers invoice (STRIP, BOTTLE, BOX …)
     units_per_pack     base units in one purchase unit (conversion)
     content            what one unit contains (200 mL, 30 g) — metadata, never stock
-    loose_sale         derived: True exactly when a purchase unit holds more than one sale unit
+    loose_sale         defaults from sale unit / form / pack; users can override it
 
 Detection (:func:`resolve`) reads the printed pack together with the product's
 dosage form (from the master, the generic name or the product name) and is
@@ -80,6 +80,11 @@ def detect_form(item: Item) -> str:
     return ""
 
 
+def default_loose(item: Item) -> bool:
+    """Use the sale unit, pack conversion and detected dosage form; never product names."""
+    return (item.units_per_pack or 1) > 1 or item.base_unit in _SOLID_DOSE.values() or detect_form(item) in _SOLID_DOSE
+
+
 @dataclass
 class UOM:
     base_unit: str
@@ -92,7 +97,7 @@ class UOM:
 
     @property
     def loose_sale(self) -> bool:
-        return self.units_per_pack > 1
+        return self.units_per_pack > 1 or self.base_unit in _SOLID_DOSE.values()
 
     def as_dict(self) -> dict:
         d = asdict(self)
@@ -205,7 +210,7 @@ def convert(
             b.units_per_pack = upp
             stock_ledger.sync_unit_prices(b)
     item.units_per_pack, item.base_unit, item.pack_unit = upp, base_unit, pack_unit
-    item.loose_sale = upp > 1
+    item.loose_sale = default_loose(item)
     if content_qty is not None:
         item.content_qty = content_qty
     if content_unit is not None:
@@ -216,7 +221,7 @@ def convert(
         item.dosage_form = detect_form(item) if detect_form(item) in units.DOSAGE_FORMS else ""
     item.packaging_source = source
     db.flush()
-    after = {"base_unit": base_unit, "pack_unit": pack_unit, "units_per_pack": upp, "loose_sale": upp > 1,
+    after = {"base_unit": base_unit, "pack_unit": pack_unit, "units_per_pack": upp, "loose_sale": bool(item.loose_sale),
              "stock": sum(b.quantity for b in batches)}
     if before != after:
         audit.record(db, action=audit.A_UPDATE, entity_type="item_packaging", entity_id=item.article_id, user=user,

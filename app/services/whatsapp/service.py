@@ -15,6 +15,7 @@ asked for, never sent on its own.
 """
 from __future__ import annotations
 
+import phonenumbers
 import hashlib
 import logging
 import re
@@ -57,18 +58,39 @@ def provider() -> P.Provider:
 
 
 # --------------------------------------------------------------------------- phone
-def normalize_phone(raw: str | None) -> str:
-    """Indian mobile → 91XXXXXXXXXX. Accepts 98765 43210, +91-98765-43210, 098765 43210, 919876543210."""
-    digits = re.sub(r"\D", "", raw or "")
-    if len(digits) == 12 and digits.startswith("91"):
-        digits = digits[2:]
-    elif len(digits) == 11 and digits.startswith("0"):
-        digits = digits[1:]
-    elif len(digits) == 13 and digits.startswith("091"):
-        digits = digits[3:]
-    if len(digits) != 10 or digits[0] not in "6789":
-        raise WhatsAppError(f"“{raw or ''}” is not an Indian mobile number (10 digits starting 6–9)")
-    return "91" + digits
+def normalize_phone(raw: str | None, country_code: str | None = None) -> str:
+    """Indian local numbers by default; explicit country codes use numbering metadata."""
+    text = str(raw or "").strip()
+    if not text or re.search(r"[^\d\s()+.\-]", text):
+        raise WhatsAppError("Enter a valid WhatsApp number")
+    digits = re.sub(r"\D", "", text)
+    explicit = text.startswith("+") or text.startswith("00")
+    if text.startswith("00"):
+        text = "+" + digits[2:]
+    elif country_code:
+        code = str(country_code).strip().lstrip("+")
+        if not code.isdigit() or int(code) not in phonenumbers.COUNTRY_CODE_TO_REGION_CODE:
+            raise WhatsAppError("Choose a valid country calling code")
+        if not explicit:
+            region = phonenumbers.region_code_for_country_code(int(code))
+            # National trunk prefixes are interpreted by the country's metadata.
+            try:
+                parsed = phonenumbers.parse(text, region)
+                text = phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
+            except phonenumbers.NumberParseException:
+                raise WhatsAppError("Enter a valid number for the selected country")
+    elif not explicit and len(digits) > 10 and not digits.startswith("0"):
+        text = "+" + digits
+    elif not explicit and len(digits) == 13 and digits.startswith("091"):
+        text = "+" + digits[1:]
+    try:
+        parsed = phonenumbers.parse(text, "IN")
+    except phonenumbers.NumberParseException:
+        raise WhatsAppError("Enter a valid WhatsApp number")
+    if (not phonenumbers.is_valid_number(parsed) or parsed.extension
+            or parsed.country_code == 91 and str(parsed.national_number)[0] not in "6789"):
+        raise WhatsAppError("Enter a valid number for the selected country (India: 10-digit mobile)")
+    return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164).lstrip("+")
 
 
 # --------------------------------------------------------------------------- settings
@@ -184,7 +206,7 @@ class NumberNotOnWhatsApp(WhatsAppError):
 
 
 def _pretty(p: str) -> str:
-    return f"+{p[:2]} {p[2:7]} {p[7:]}" if len(p) == 12 else p
+    return f"+91 {p[2:7]} {p[7:]}" if len(p) == 12 and p.startswith("91") else "+" + p
 
 
 def choose_number(db: Session, sale: Sale, typed: str | None = None) -> dict:
@@ -246,9 +268,10 @@ def send_invoice(db: Session, sale_id: int, customer_phone: str | None = None, *
         raise WhatsAppError(f"{sale.invoice_no} was voided — its invoice cannot be sent")
     choice = choose_number(db, sale, customer_phone)
     phone = choice["phone"]
-    if save_as_alternate and customer_phone and sale.customer and phone[2:] not in (sale.customer.mobile, sale.customer.alternate_mobile):
+    saved_phone = phone[2:] if len(phone) == 12 and phone.startswith("91") else "+" + phone
+    if save_as_alternate and customer_phone and sale.customer and saved_phone not in (sale.customer.mobile, sale.customer.alternate_mobile):
         before = sale.customer.alternate_mobile
-        sale.customer.alternate_mobile = phone[2:]
+        sale.customer.alternate_mobile = saved_phone
         audit.record(db, action=audit.A_UPDATE, entity_type="customer", entity_id=sale.customer.customer_id, user=user,
                      details=f"WhatsApp number saved as alternate mobile (was {before or 'empty'})")
     earlier = db.scalar(select(WhatsAppMessage.id).where(WhatsAppMessage.sale_id == sale.id).limit(1))
@@ -284,7 +307,7 @@ def history(db: Session, sale_id: int) -> list[dict]:
 
 def payload(m: WhatsAppMessage) -> dict:
     return {"id": m.id, "invoice_id": m.sale_id, "invoice_no": m.invoice_no,
-            "customer_phone": f"+{m.customer_phone[:2]} {m.customer_phone[2:7]} {m.customer_phone[7:]}",
+            "customer_phone": _pretty(m.customer_phone),
             "whatsapp_status": m.status.lower(), "attempt_count": m.attempt_count, "last_error": m.last_error,
             "is_resend": m.is_resend, "queued_at": m.queued_at.isoformat() + "Z" if m.queued_at else None,
             "sent_at": m.sent_at.isoformat() + "Z" if m.sent_at else None}

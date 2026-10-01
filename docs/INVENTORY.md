@@ -40,3 +40,10 @@ adjustments.
 - Search uses a SQLite FTS5 virtual table kept in sync by triggers.
 - All quantity changes pass through one service module so every movement is audited.
 - Valuation and counts exclude soft-deleted items.
+
+## Loose sales
+
+Edit product → Packaging → Loose sale offers Automatic, Yes and No even with stock present.
+Automatic uses the pack conversion, stock/sale unit and dosage form; tablets and capsules default
+to Yes, including single-unit packs. Whole bottles default to No. A Yes/No override is preserved.
+Changing this permission leaves stock quantities, prices and historical sale snapshots intact.

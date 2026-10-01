@@ -3,6 +3,25 @@
 Release notes for Faheem Pharmacy. Versions follow semantic versioning; every release
 lists its database migrations. Upgrades keep all business history (see docs/UPGRADES.md).
 
+## 1.7.0 — 2026-10-01
+
+- **Purchases:** delete unreceived drafts from the register or document (Alt+Delete, reassignable),
+  with confirmation and an audit record; right-click also opens, cancels and refreshes. Received
+  purchases remain protected. Removing a line is mapped to Alt+D (Delete also works in the grid).
+- **General items:** batch, expiry, purchase rate, MRP and category are optional. Missing values
+  remain missing; unknown cost is never counted as free stock. New unclassified goods default to
+  General / one unit per pack. Malformed supplied values and ambiguous conversions still need review.
+  Unlabelled, undated receipts retain their own purchase cost and price.
+- **Inventory:** Loose sale is editable with stock present. Automatic defaults use pack conversion,
+  sale unit and dosage form (including single tablets); explicit Yes/No choices are respected.
+- **POS:** after completing a customer's sale, Y/N offers the existing follow-up screen before
+  invoice / WhatsApp choices. Saving or closing the follow-up continues to the invoice options.
+- **WhatsApp:** Indian numbers need no country prefix; select a country for international numbers,
+  or enter +country code. Country metadata validates national prefixes and number lengths; saved
+  international alternate numbers retain their country code.
+
+**Migrations:** none. **Fixtures:** `tests/fixtures/releases/1.7.0.db`.
+
 ## 1.6.1 — 2026-10-01
 
 - **Fix:** the business-data reset failed on PostgreSQL once stock adjustments existed (deleted in the

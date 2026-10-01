@@ -337,7 +337,7 @@ export function create(ctx, params, root) {
         <label>Stock / sale unit${sel("base_unit", BOOT.units.base, p.base_unit)}</label>
         <label>Purchase unit${sel("pack_unit", BOOT.units.pack, p.pack_unit)}</label>
         <label>Units per purchase unit<input name="units_per_pack" type="number" min="1" max="10000" value="${p.units_per_pack}" placeholder="auto" ${locked ? "disabled" : ""}></label>
-        <label>Loose sale<input value="${!d ? "Automatic" : p.units_per_pack > 1 ? "Yes — automatic (1 " + esc(title(p.pack_unit).toLowerCase()) + " = " + p.units_per_pack + ")" : "No — sold whole"}" disabled></label>
+        <label>Loose sale<select name="loose_sale"><option value="auto">Automatic (from pack / form)</option><option value="true" ${d && p.loose_sale ? "selected" : ""}>Yes</option><option value="false" ${d && !p.loose_sale ? "selected" : ""}>No</option></select></label>
         ${p.content ? `<label>Content<input value="${esc(p.content)}" disabled></label>` : ""}
         <p class="full hint pack-hint">Detected automatically from the pack and form (${esc(p.source === "MANUAL" ? "corrected by a user" : "automatic")}). Change these only to correct an exception: Dolo 650 15'S → Tablet, Strip, 15. Syrup 200 ml → Bottle, Bottle, 1.</p>
       </div>

@@ -384,3 +384,46 @@ def test_wppconnect_number_check_reads_the_gateway_answer():
     g = P.WPPConnect(url="http://127.0.0.1:21465", secret="k", session="s", transport=httpx.MockTransport(gateway))
     assert g.check_number("919876543210") is True and g.check_number("919000000000") is False
     assert g.check_number("919111111111") is None                                   # cannot tell → not "no"
+
+
+def test_international_numbers_use_country_metadata():
+    assert wa.normalize_phone("07400 123456", "44") == "447400123456"
+    assert wa.normalize_phone("202-555-0123", "1") == "12025550123"
+    assert wa.normalize_phone("02 36618 300", "39") == "390236618300"
+    assert wa.normalize_phone("+1 202-555-0123") == "12025550123"
+    assert wa.normalize_phone("0012025550123") == "12025550123"
+    assert wa.normalize_phone("98765 43210", "91") == "919876543210"
+    for raw, code in (("1234", "44"), ("2025550123", "999"), ("bad2025550123", "1")):
+        with pytest.raises(wa.WhatsAppError):
+            wa.normalize_phone(raw, code)
+
+
+def test_phone_country_api(client):
+    login(client)
+    countries = client.get("/api/erp/whatsapp/countries")
+    assert countries.status_code == 200
+    assert {"region": "IN", "code": "91"} in countries.json()["countries"]
+    r = client.post("/api/erp/whatsapp/normalize-phone", json={"phone": "2025550123", "country_code": "1"})
+    assert r.json() == {"phone": "12025550123"}
+    assert client.post("/api/erp/whatsapp/normalize-phone", json={"phone": "1234", "country_code": "44"}).status_code == 400
+
+
+def test_international_alternate_is_preserved_for_future_sends(client, db, gw):
+    login(client)
+    sale, cust = _customer_sale(db, alternate="")
+    r = client.post(f"/api/erp/sales/{sale.id}/whatsapp", json={"phone": "20 12 34 56", "country_code": "45", "save_as_alternate": True})
+    assert r.status_code == 200, r.text
+    assert r.json()["message"]["customer_phone"] == "+4520123456"
+    db.refresh(cust)
+    assert cust.alternate_mobile == "+4520123456"
+    gw.not_on = {wa.normalize_phone(cust.mobile)}
+    assert wa.send_invoice(db, sale.id).customer_phone == "4520123456"
+
+
+
+def test_send_rejects_invalid_international_input_without_queueing(client, db, gw):
+    login(client)
+    sale, _ = _customer_sale(db)
+    r = client.post(f"/api/erp/sales/{sale.id}/whatsapp", json={"phone": "1234", "country_code": "44"})
+    assert r.status_code == 400
+    assert db.query(WhatsAppMessage).count() == 0

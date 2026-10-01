@@ -164,6 +164,14 @@ function registerPanel(ctx, el, CAN, getSuppliers) {
     ],
     rowClass: (r) => (r.status === "CANCELLED" ? "dim" : ""),
     onActivate: (r) => ctx.open("purchase", { id: r.id }),
+    contextMenu: (r) => [
+      { label: "Open purchase", key: "Enter", action: () => ctx.open("purchase", { id: r.id }) },
+      ...(CAN["purchase.create"] && ["DRAFT", "CANCELLED"].includes(r.status) ? [
+        { label: "Delete draft", key: keys.keyFor("purchases.delete"), action: () => deleteDraft(r) },
+        ...(r.status === "DRAFT" ? [{ label: "Cancel draft", key: keys.keyFor("purchases.cancel"), action: () => cancelDraft(r) }] : []),
+      ] : []),
+      { label: "Refresh register", key: keys.keyFor("purchases.refresh"), action: reload },
+    ],
   });
   el.append(grid.el);
   let ctrl = null;
@@ -177,6 +185,20 @@ function registerPanel(ctx, el, CAN, getSuppliers) {
       const c = d.counts || {};
       $(".r-count", el).textContent = `${d.total} shown · ${c.DRAFT || 0} draft · ${c.PARTIAL || 0} partly posted · ${c.POSTED || 0} posted`;
     } catch (err) { if (err.name !== "AbortError") ctx.status(err.message, "error"); }
+  }
+  async function deleteDraft(r = grid.selected) {
+    if (!r || !CAN["purchase.create"]) return;
+    if (!["DRAFT", "CANCELLED"].includes(r.status)) { ctx.status("Received purchases cannot be deleted; use a purchase return", "warn"); return; }
+    if (!(await window.erpConfirm(`Delete draft ${r.invoice_no || "#" + r.id} and its unreceived lines?`))) return;
+    try { await api(`/api/erp/purchases/${r.id}`, { method: "DELETE" }); await reload(); ctx.status("Purchase draft deleted", "ok"); }
+    catch (err) { ctx.status(err.message, "error"); }
+  }
+  async function cancelDraft(r = grid.selected) {
+    if (!r || r.status !== "DRAFT" || !CAN["purchase.create"]) return;
+    const out = await modal({ title: "Cancel purchase draft", submitLabel: "Cancel draft",
+      body: '<label>Reason<input name="reason" required autofocus maxlength="300"></label>',
+      onSubmit: (form) => api(`/api/erp/purchases/${r.id}/cancel`, { method: "POST", body: { reason: form.reason.value } }) });
+    if (out) { await reload(); ctx.status("Purchase draft cancelled", "ok"); }
   }
   const q = $(".f-q", el);
   const later = debounce(() => { F.q = q.value.trim(); reload(); }, 180);
@@ -197,6 +219,8 @@ function registerPanel(ctx, el, CAN, getSuppliers) {
     },
     shown(focus) { if (focus) grid.focus(); },
     onKey(e, name) {
+      if (keys.matches("purchases.delete", name)) { deleteDraft(); return true; }
+      if (keys.matches("purchases.cancel", name)) { cancelDraft(); return true; }
       if (keys.matches("purchases.search", name)) { q.focus(); q.select(); return true; }
       if (keys.matches("purchases.refresh", name)) { reload(); return true; }
       return false;

@@ -16,13 +16,23 @@ export async function waStatus(fresh = false) {
   return cached;
 }
 
-export function normalizePhone(raw) {
-  let d = String(raw || "").replace(/\D/g, "");
+export function normalizePhone(raw, countryCode = "") {
+  const text = String(raw || "").trim();
+  if (/[^\d\s()+.\-]/.test(text)) return "";
+  let d = text.replace(/\D/g, "");
+  if (text.startsWith("00")) d = d.slice(2);
+  if (text.startsWith("+") || text.startsWith("00")) return /^[1-9]\d{6,14}$/.test(d) ? d : "";
+  if (countryCode && countryCode !== "91") {
+    const national = d.replace(/^0+/, "");
+    return /^[1-9]\d{6,14}$/.test(countryCode + national) ? countryCode + national : "";
+  }
   if (d.length === 12 && d.startsWith("91")) d = d.slice(2);
+  else if (d.length === 13 && d.startsWith("091")) d = d.slice(3);
   else if (d.length === 11 && d.startsWith("0")) d = d.slice(1);
-  return d.length === 10 && /[6-9]/.test(d[0]) ? "91" + d : "";
+  if (d.length === 10) return /^[6-9]/.test(d) ? "91" + d : "";
+  return !countryCode && /^[1-9]\d{10,14}$/.test(d) ? d : "";
 }
-export const prettyPhone = (p) => (p && p.length === 12 ? `+${p.slice(0, 2)} ${p.slice(2, 7)} ${p.slice(7)}` : p || "");
+export const prettyPhone = (p) => p ? "+" + p : "";
 
 /** Queue the invoice and follow its delivery in the status bar (non-blocking).
  *  Without a typed number the server picks the customer's primary mobile, else the alternate —
@@ -86,19 +96,32 @@ export function askPhone({ anchor, initial = "", invoiceNo = "", problem = null,
       <header>${WA_ICON}<b>Send ${esc(invoiceNo)} on WhatsApp</b></header>
       ${problem ? `<div class="wa-checked"><p class="warn">${esc(problem.message)}</p>${checked.length ? `<table class="kvtab">${checked.map((c) =>
         `<tr><td class="mono">${esc(c.number)}</td><td class="muted">${esc(c.label)}</td><td class="${c.result === "on WhatsApp" ? "ok" : "bad"}">${esc(c.result)}</td></tr>`).join("")}</table>` : ""}</div>` : ""}
-      <label>${problem ? "Number the customer uses on WhatsApp" : "Customer's WhatsApp number"}<input name="phone" inputmode="tel" maxlength="16" value="${esc(initial)}" placeholder="98765 43210" autocomplete="off"></label>
+      <label>Country<select name="country_code"><option value="91">India (+91)</option></select></label>
+      <label>${problem ? "Number the customer uses on WhatsApp" : "Customer's WhatsApp number"}<input name="phone" inputmode="tel" maxlength="30" value="${esc(initial)}" placeholder="98765 43210" autocomplete="off"></label>
       ${problem && offerSave ? '<label class="wa-save"><input type="checkbox" name="save" checked> Save it as the customer\'s alternate mobile</label>' : ""}
       <p class="fu-err" role="alert"></p>
       <footer><button type="button" class="btn" data-x>Cancel <kbd>Esc</kbd></button><button class="btn primary wa-btn" type="submit">${WA_ICON} ${problem ? "Check and send" : "Send"} <kbd>Enter</kbd></button></footer></form>`);
     const close = (v) => { el.remove(); if (prev && prev.focus) prev.focus(); resolve(v); };
     el.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Escape") { e.preventDefault(); close(null); } });
     el.querySelector("[data-x]").onclick = () => close(null);
-    el.addEventListener("submit", (e) => {
+    let submitting = false;
+    el.addEventListener("submit", async (e) => {
       e.preventDefault();
-      const p = normalizePhone(el.phone.value);
-      if (!p) { el.querySelector(".fu-err").textContent = "Enter a 10-digit Indian mobile number (starting 6–9)"; return; }
-      close(problem ? { phone: p, save: !!(el.save && el.save.checked) } : p);
+      if (submitting) return;
+      submitting = true;
+      try {
+        const { phone } = await api("/api/erp/whatsapp/normalize-phone", { method: "POST",
+          body: { phone: el.phone.value, country_code: el.country_code.value } });
+        close(problem ? { phone: "+" + phone, save: !!(el.save && el.save.checked) } : "+" + phone);
+      } catch (err) { el.querySelector(".fu-err").textContent = err.message; }
+      finally { submitting = false; }
     });
+    api("/api/erp/whatsapp/countries").then(({ countries }) => {
+      const regionNames = new Intl.DisplayNames(["en"], { type: "region" });
+      const rows = countries.map((c) => ({ ...c, name: regionNames.of(c.region) || c.region })).sort((a, b) => a.name.localeCompare(b.name));
+      if (!el.isConnected) return;
+      el.country_code.innerHTML = rows.map((c) => `<option value="${esc(c.code)}" ${c.region === "IN" ? "selected" : ""}>${esc(c.name)} (+${esc(c.code)})</option>`).join("");
+    }).catch(() => { el.querySelector(".fu-err").textContent = "Country list unavailable; use a number with +country code"; });
     document.body.append(el);
     const box = anchor && anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : { left: innerWidth / 2 - 170, bottom: 160 };
     el.style.left = Math.max(8, Math.min(box.left, innerWidth - 380)) + "px";

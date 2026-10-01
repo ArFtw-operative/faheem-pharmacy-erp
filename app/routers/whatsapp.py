@@ -35,6 +35,22 @@ def whatsapp_status(fresh: int = 0, user: User = Depends(require_permission("wha
     return wa.public_status(fresh=bool(fresh))
 
 
+@router.post("/api/erp/whatsapp/normalize-phone")
+async def whatsapp_normalize_phone(request: Request, user: User = Depends(require_permission("whatsapp.send"))):
+    data = await request.json()
+    try:
+        return {"phone": wa.normalize_phone(data.get("phone"), data.get("country_code"))}
+    except wa.WhatsAppError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@router.get("/api/erp/whatsapp/countries")
+def whatsapp_countries(user: User = Depends(require_permission("whatsapp.send"))):
+    import phonenumbers
+    return {"countries": [{"region": r, "code": str(phonenumbers.country_code_for_region(r))}
+                          for r in sorted(phonenumbers.SUPPORTED_REGIONS)]}
+
+
 @router.post("/api/erp/sales/{sale_id}/whatsapp")
 async def whatsapp_send(sale_id: int, request: Request, db: Session = Depends(get_db),
                         user: User = Depends(require_permission("whatsapp.send"))):
@@ -44,11 +60,14 @@ async def whatsapp_send(sale_id: int, request: Request, db: Session = Depends(ge
     data = await request.json() if request.headers.get("content-length") not in (None, "0") else {}
     data = data or {}
     try:
-        msg = _run(db, wa.send_invoice, sale_id, data.get("phone") or None, user=user,
+        phone = "+" + wa.normalize_phone(data["phone"], data.get("country_code")) if data.get("phone") else None
+        msg = _run(db, wa.send_invoice, sale_id, phone, user=user,
                    save_as_alternate=bool(data.get("save_as_alternate")))
     except wa.NumberNotOnWhatsApp as exc:                # ask for a number that is on WhatsApp — never fail silently
         db.rollback()
         raise HTTPException(409, {"message": str(exc), "checked": exc.checked, "need_number": True})
+    except wa.WhatsAppError as exc:
+        raise HTTPException(400, str(exc))
     return {"message": wa.payload(msg), "status": wa.public_status(),
             "note": msg.choice["note"], "checked": msg.choice["checked"], "sent_to": msg.choice["label"]}
 

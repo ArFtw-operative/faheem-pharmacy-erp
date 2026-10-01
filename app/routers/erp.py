@@ -435,7 +435,7 @@ async def erp_adjust(item_id: int, request: Request, db: Session = Depends(get_d
 # --------------------------------------------------------------------------- product master
 TEXT_FIELDS = {"name": 250, "generic_name": 250, "manufacturer": 150, "strength": 60, "pack_size": 60,
                "hsn_code": 20, "barcode": 60, "rack": 20, "content_unit": 10}
-PACK_FIELDS = ("base_unit", "pack_unit", "units_per_pack", "dosage_form")  # loose sale is derived
+PACK_FIELDS = ("base_unit", "pack_unit", "units_per_pack", "dosage_form", "loose_sale")
 
 
 def _fields(data: dict) -> dict:

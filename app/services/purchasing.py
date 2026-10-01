@@ -12,8 +12,8 @@ INVALID · POSTED. Only an invoice whose lines are all READY/CORRECTED posts.
 Rules that never bend:
 * raw supplier values are kept; every correction records the old value, the
   new value, who and when;
-* nothing is guessed — expiry, batch, product, pack conversion and cost are
-  either proven or sent to review (fuzzy matching only *suggests* products);
+* missing metadata remains missing; product identity and pack conversion are
+  confirmed (fuzzy matching only *suggests* products);
 * identifiers stay text; a batch in scientific notation is flagged;
 * the same supplier invoice posts once (also enforced by a unique index);
 * a total that does not reconcile is shown, and posting it needs an explicit
@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app import audit
 from app.config import UPLOAD_DIR
-from app.models import Item, Purchase, PurchaseItem, Supplier, SupplierProductMap, User
+from app.models import Batch, PurchaseReturn, Item, Purchase, PurchaseItem, Supplier, SupplierProductMap, User
 from app.sequences import next_number
 from app.services import purchase_import, sheet_import, stock_ledger, units
 from app.utils import money, utcnow
@@ -307,6 +307,21 @@ def delete_line(db: Session, purchase: Purchase, line: PurchaseItem, *, user: Us
     _refresh_totals(purchase)
 
 
+def delete_draft(db: Session, purchase: Purchase, *, user: User | None = None) -> None:
+    """Delete only unreceived drafts; retain their evidence in the audit log."""
+    if (purchase.status not in ("DRAFT", "CANCELLED") or purchase.posted_at or purchase.reference_no
+            or any(l.status == POSTED or l.batch_id for l in purchase.items)
+            or db.scalar(select(Batch.id).where(Batch.purchase_id == purchase.id).limit(1))
+            or db.scalar(select(PurchaseReturn.id).where(PurchaseReturn.purchase_id == purchase.id).limit(1))):
+        raise PurchaseError("Received purchases cannot be deleted; use a purchase return", "NOT_DRAFT")
+    audit.record(db, action=audit.A_DELETE, entity_type="purchase", entity_id=purchase.id, user=user,
+                 before={"invoice_no": purchase.invoice_no, "supplier_id": purchase.supplier_id,
+                         "source_file": purchase.source_file, "lines": [l.raw for l in purchase.items]},
+                 details="Unreceived purchase draft deleted")
+    db.delete(purchase)
+    db.flush()
+
+
 # --------------------------------------------------------------------------- normalise, match, validate
 def _issue(issues: list, code: str, field: str, level: str, message: str) -> None:
     issues.append({"code": code, "field": field, "level": level, "message": message})
@@ -324,7 +339,7 @@ def _normalise(db: Session, purchase: Purchase, line: PurchaseItem) -> list[dict
     batch = (v.get("batch") or "").strip()
     line.batch_no = batch[:60]
     if not batch:
-        _issue(issues, "batch_missing", "batch", "review", "Batch number is missing")
+        _issue(issues, "batch_missing", "batch", "info", "Batch number is missing")
     elif _SCI.match(batch) or "#" in batch:
         _issue(issues, "batch_corrupt", "batch", "review", f"Batch “{batch}” looks damaged by a spreadsheet (e.g. 2.61E+09) — enter it from the invoice")
 
@@ -336,7 +351,7 @@ def _normalise(db: Session, purchase: Purchase, line: PurchaseItem) -> list[dict
     line.expiry_date = exp
     today = date.today()
     if not raw_exp:
-        _issue(issues, "expiry_missing", "expiry", "review", "Expiry is missing")
+        _issue(issues, "expiry_missing", "expiry", "info", "Expiry is missing")
     elif exp is None:
         _issue(issues, "expiry_invalid", "expiry", "review", f"Expiry “{raw_exp}” is not a month/year (e.g. May-2028)")
     else:
@@ -379,11 +394,15 @@ def _normalise(db: Session, purchase: Purchase, line: PurchaseItem) -> list[dict
     line.rate = money(rate) if rate is not None else Decimal("0")
     line.mrp = money(mrp) if mrp is not None else Decimal("0")
     if rate is None:
-        _issue(issues, "rate_missing", "rate", "review", "Purchase rate is missing")
+        _issue(issues, "rate_missing", "rate", "info", "Purchase rate is missing")
     if mrp is None or mrp <= 0:
-        _issue(issues, "mrp_missing", "mrp", "review", "MRP is missing")
+        _issue(issues, "mrp_missing", "mrp", "info", "MRP is missing")
     elif rate is not None and mrp < rate:
         _issue(issues, "mrp_below_rate", "mrp", "warn", f"MRP ₹{money(mrp)} is below the rate ₹{money(rate)}")
+    if v.get("rate", "").strip() and (rate is None or rate < 0):
+        _issue(issues, "rate_invalid", "rate", "review", "Purchase rate must be a non-negative number")
+    if v.get("mrp", "").strip() and (mrp is None or mrp < 0):
+        _issue(issues, "mrp_invalid", "mrp", "review", "MRP must be a non-negative number")
     gst = _dec(v.get("gst"))
     line.gst_rate = gst if gst is not None and 0 <= gst <= 40 else None
     if gst is not None and not (0 <= gst <= 40):
@@ -603,7 +622,7 @@ def _product_issues(db: Session, line: PurchaseItem) -> list[dict]:
 
     if not line.product_name:
         _issue(issues, "new_name", "name", "review", "Enter the new product's name")
-    if not line.category or line.category not in category_service.names(db):
+    if line.category and line.category not in category_service.names(db):
         _issue(issues, "new_category", "category", "review", "Choose a category for the new product")
     if not line.units_per_pack:
         _issue(issues, "new_uom", "units_per_pack", "review", "Confirm how many sale units one pack holds")
@@ -771,6 +790,11 @@ def _suggest_new_product_units(line: PurchaseItem) -> bool:
                  base_unit="UNIT", pack_unit="PACK", units_per_pack=1, loose_sale=False)
     uom = packaging_service.resolve(probe)
     info = units.parse_pack(line.pack_size)
+    if not line.pack_size and uom is None:
+        line.units_per_pack = line.units_per_pack or 1
+        line.base_unit = line.base_unit or "UNIT"
+        line.pack_unit = line.pack_unit or "PACK"
+        return False
     if uom is not None:
         line.base_unit = line.base_unit or uom.base_unit
         line.pack_unit = line.pack_unit or uom.pack_unit
@@ -995,7 +1019,7 @@ def post(db: Session, purchase: Purchase, *, user: User | None = None, accept_di
                 item = line.item
                 if item is None and line.new_product:
                     item = inventory_service.create_item(
-                        db, name=line.product_name, category=category_service.ensure(db, line.category, user=user),
+                        db, name=line.product_name, category=category_service.ensure(db, line.category or "GENERAL", user=user),
                         pack_size=line.pack_size, manufacturer=line.manufacturer, hsn_code=line.hsn_code, mrp=line.mrp,
                         base_unit=line.base_unit or "UNIT", pack_unit=line.pack_unit or "PACK",
                         units_per_pack=line.units_per_pack or 1, dosage_form=line.dosage_form or None, user=user)
