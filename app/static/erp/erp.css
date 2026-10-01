@@ -586,6 +586,7 @@ button.chip.clear-sel { color: var(--muted); }
 .es-row > label { padding-top: 6px; font-size: 11.5px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
 .es-row > div { min-height: 30px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .es > footer { display: flex; gap: 6px; padding: 6px 10px; border-top: 1px solid var(--line); background: var(--head); }
+.es textarea { font: inherit; padding: 5px 7px; border: 1px solid #b9c3c7; border-radius: var(--r); resize: vertical; }
 .es .wa-template { width: 100%; font: inherit; padding: 5px 7px; border: 1px solid #b9c3c7; border-radius: var(--r); resize: vertical; }
 .es .ad-caption { width: 420px; max-width: 100%; }
 .es-field { height: 24px; padding: 0 7px; border: 1px solid #c3cbcf; border-radius: var(--r); background: #f7f9f9; font: 12px var(--mono); cursor: pointer; }
@@ -610,3 +611,14 @@ button.chip.clear-sel { color: var(--muted); }
 .bill input.mi.num { text-align: right; font-variant-numeric: tabular-nums; }
 .bill input.mi.bad { border-color: var(--bad); background: var(--bad-bg); }
 .bill input.mi::placeholder { color: #a3aeb3; }
+
+/* Settings → Invoice Store */
+.is-grid { display: grid; grid-template-columns: 1fr 320px; gap: 12px; padding: 6px 10px; align-items: start; }
+.is-grid .es-grid tr { cursor: pointer; }
+.is-grid .es-grid td input { height: auto; }
+.is-prev { display: flex; flex-direction: column; gap: 6px; }
+.is-prev-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; }
+.is-prev-bar .btn { height: 26px; padding: 0 8px; }
+.is-prev-bar select { height: 26px; }
+.is-prev img { width: 300px; border: 1px solid var(--line); background: #fff; }
+.is-stamp { width: 130px; height: 130px; background: #fff; }

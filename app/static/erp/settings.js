@@ -15,10 +15,22 @@ export function create(ctx, params, root) {
   let data = null, poll = null, previewTimer = null, connectUntil = 0;
   ctx.setTitle("Settings");
   root.innerHTML = `<div class="masters erpset">
-    <div class="mtabs" role="tablist"><button type="button" class="on" role="tab">WhatsApp invoicing</button>
-      <span class="hint">Administrator only · invoices only, never bulk or promotional messages</span></div>
-    <section class="set-scroll"><p class="muted es-pad">Loading…</p></section></div>`;
-  const body = $(".set-scroll", root);
+    <div class="mtabs" role="tablist"><button type="button" class="on" role="tab" data-tab="wa">WhatsApp invoicing</button>
+      <button type="button" role="tab" data-tab="store">Invoice Store</button>
+      <span class="hint">Administrator only</span></div>
+    <section class="set-scroll" data-panel="wa"><p class="muted es-pad">Loading…</p></section>
+    <section class="set-scroll" data-panel="store" hidden><p class="muted es-pad">Loading…</p></section></div>`;
+  const body = $('.set-scroll[data-panel="wa"]', root);
+  const store = invoiceStore(ctx, $('.set-scroll[data-panel="store"]', root));
+  let tab = "wa";
+  const showTab = (t) => {
+    tab = t;
+    root.querySelectorAll(".mtabs [data-tab]").forEach((b) => b.classList.toggle("on", b.dataset.tab === t));
+    root.querySelectorAll(".set-scroll[data-panel]").forEach((p) => { p.hidden = p.dataset.panel !== t; });
+    if (t === "store") store.load();
+  };
+  root.querySelector(".mtabs").addEventListener("click", (e) => { const b = e.target.closest("[data-tab]"); if (b) showTab(b.dataset.tab); });
+  if (params && params.tab === "store") setTimeout(() => showTab("store"), 0);
 
   async function load() {
     try { data = await api("/api/erp/settings/whatsapp"); render(); }
@@ -142,7 +154,7 @@ export function create(ctx, params, root) {
     } catch (err) { ctx.status(err.message, "error"); }
   }
 
-  root.addEventListener("click", (e) => {
+  body.addEventListener("click", (e) => {
     const b = e.target.closest("[data-act]");
     if (b && !b.disabled) { act(b.dataset.act); return; }
     const ph = e.target.closest("[data-ph]");
@@ -153,8 +165,8 @@ export function create(ctx, params, root) {
       t.focus(); preview();
     }
   });
-  root.addEventListener("input", (e) => { if (e.target.classList.contains("wa-template")) preview(); });
-  root.addEventListener("change", async (e) => {
+  body.addEventListener("input", (e) => { if (e.target.classList.contains("wa-template")) preview(); });
+  body.addEventListener("change", async (e) => {
     if (!e.target.classList.contains("ad-file") || !e.target.files.length) return;
     const fd = new FormData();
     fd.append("file", e.target.files[0]);
@@ -169,9 +181,121 @@ export function create(ctx, params, root) {
   load();
   return {
     get keys() { return keys.bar("settings"); },
-    onKey(e, name) { if (keys.matches("settings.refresh", name)) { load(); return true; } return false; },
-    onShow() { if (data) load(); },
+    onKey(e, name) { if (keys.matches("settings.refresh", name)) { if (tab === "store") store.load(); else load(); return true; } return false; },
+    onShow() { if (tab === "store") store.load(); else if (data) load(); },
     onHide: stopPoll,
     destroy: stopPoll,
   };
+}
+
+
+// ---------------------------------------------------------------- Invoice Store (premium WhatsApp invoices)
+function invoiceStore(ctx, el) {
+  let v = null, page = 1, pages = 1, items = 5, previewFor = null;
+  const sec = (title, right, inner, foot = "") => `<section class="es"><header><b>${title}</b>${right ? `<span>${right}</span>` : ""}</header>
+    <div class="es-body">${inner}</div>${foot ? `<footer>${foot}</footer>` : ""}</section>`;
+  const row = (label, value) => `<div class="es-row"><label>${label}</label><div>${value}</div></div>`;
+  const field = (k, ph = "", w = 420) => `<input class="sf" data-k="${k}" value="${esc(v.fields[k] || (v.defaults[k] || ""))}" placeholder="${esc(ph)}" style="width:${w}px;max-width:100%">`;
+
+  async function load() {
+    try { v = await api("/api/erp/settings/invoice-store"); render(); }
+    catch (err) { el.innerHTML = `<p class="bad es-pad">${esc(err.message)}</p>`; }
+  }
+  const premium = () => v.templates.some((t) => t.id === v.template && t.id !== "classic");
+  function previewSrc() {
+    const t = premium() ? v.template : "a4-compact-stamp";
+    return `/api/erp/settings/invoice-store/preview.png?template=${t}&items=${items}&page=${page}&dpi=110&t=${Date.now()}`;
+  }
+  async function refreshPreview() {
+    const img = el.querySelector(".is-prev img");
+    if (!img) return;
+    const src = previewSrc();
+    previewFor = src;
+    try {
+      const r = await fetch(src, { credentials: "same-origin" });
+      if (!r.ok) throw new Error("Preview failed");
+      pages = Number(r.headers.get("X-Pages") || 1);
+      if (previewFor !== src) return;
+      img.src = URL.createObjectURL(await r.blob());
+      el.querySelector(".is-page").textContent = `Page ${page} of ${pages}`;
+    } catch (err) { ctx.status(err.message, "error"); }
+  }
+
+  function render() {
+    const sw = v.switches;
+    el.innerHTML = `
+      ${sec("Template for WhatsApp invoices", "printing keeps the classic invoice",
+        `<div class="is-grid"><div class="grid es-grid"><table><colgroup><col style="width:34px"><col style="width:250px"><col></colgroup>
+          <thead><tr><th></th><th>Template</th><th>Layout</th></tr></thead><tbody>
+          ${v.templates.map((t) => `<tr class="${t.id === v.template ? "sel" : ""}" data-t="${t.id}"><td><input type="radio" name="is-t" value="${t.id}" ${t.id === v.template ? "checked" : ""}></td>
+            <td><b>${esc(t.name)}</b></td><td class="muted">${esc(t.description)}</td></tr>`).join("")}
+          </tbody></table></div>
+          <div class="is-prev"><div class="is-prev-bar"><label>Items in preview <select class="is-items">${[1, 5, 7, 12].map((n) => `<option ${n === items ? "selected" : ""}>${n}</option>`).join("")}</select></label>
+            <button type="button" class="btn" data-a="prev">◀</button><span class="is-page">Page 1 of 1</span><button type="button" class="btn" data-a="next">▶</button>
+            <button type="button" class="btn" data-a="pdf">Open PDF</button></div>
+            <img alt="Invoice preview" width="300">${premium() ? "" : '<p class="muted small">Classic is selected — the preview shows the premium layout.</p>'}</div></div>`)}
+
+      ${sec("Shop details", "printed on every template",
+        row("Pharmacy name", field("pharmacy_name", "Faheem Pharmacy"))
+        + row("Address", `<textarea class="sf" data-k="address" rows="2" maxlength="300" style="width:420px;max-width:100%">${esc(v.fields.address || "")}</textarea>`)
+        + row("Contact numbers", field("contact_numbers", "98xxxxxxxx / 98xxxxxxxx"))
+        + row("Email", field("pharmacy_email", "name@example.com")))}
+
+      ${sec("Optional fields", "shown only when switched on",
+        row("GSTIN", `<label class="es-chk"><input type="checkbox" class="ss" data-k="show_gst" ${sw.show_gst ? "checked" : ""}> Show</label>${field("gst_number", "15-character GSTIN", 220)}`)
+        + row("Drug licence", `<label class="es-chk"><input type="checkbox" class="ss" data-k="show_drug_license" ${sw.show_drug_license ? "checked" : ""}> Show</label>${field("drug_license_number", "e.g. 20B/21B numbers", 300)}`))}
+
+      ${sec("Invoice text", "",
+        row("Thank-you line", field("invoice_store_thanks", v.defaults.invoice_store_thanks))
+        + row("Note", field("invoice_store_note", v.defaults.invoice_store_note))
+        + row("Closing line", field("invoice_store_closing", v.defaults.invoice_store_closing))
+        + row("Items per page", `<select class="is-per">${[3, 4, 5, 6, 7, 8].map((n) => `<option ${n === v.items_per_page ? "selected" : ""}>${n}</option>`).join("")}</select>
+            <span class="muted small">a line is never split across pages; the summary and stamp come on the last page</span>`),
+        `<button type="button" class="btn primary" data-a="save">Save details</button>`)}
+
+      ${sec("Stamp", v.custom_stamp ? "your uploaded stamp" : "bundled stamp",
+        row("Stamp", `<div class="es-img is-stamp"><img src="/api/erp/settings/invoice-store/stamp.png?t=${Date.now()}" alt="Stamp"></div>
+            <span class="muted small">SVG or PNG with a transparent background, up to 2 MB. Used by “A4 Compact — with stamp”.</span>`),
+        `<label class="btn">Upload stamp<input type="file" class="is-file" accept=".svg,image/svg+xml,image/png" hidden></label>
+         ${v.custom_stamp ? '<button type="button" class="btn" data-a="reset-stamp">Use the bundled stamp</button>' : ""}`)}`;
+    page = Math.min(page, pages);
+    refreshPreview();
+  }
+
+  async function save(body, msg) {
+    try { v = await api("/api/erp/settings/invoice-store", { method: "PUT", body }); render(); ctx.status(msg, "ok"); }
+    catch (err) { ctx.status(err.message, "error"); }
+  }
+  el.addEventListener("change", async (e) => {
+    const t = e.target;
+    if (t.name === "is-t") { save({ template: t.value }, `WhatsApp invoices now use “${v.templates.find((x) => x.id === t.value).name}”`); return; }
+    if (t.classList.contains("is-items")) { items = Number(t.value); page = 1; refreshPreview(); return; }
+    if (t.classList.contains("is-file") && t.files.length) {
+      const fd = new FormData(); fd.append("file", t.files[0]);
+      try {
+        const r = await fetch("/api/erp/settings/invoice-store/stamp", { method: "POST", body: fd, credentials: "same-origin" });
+        const d = await r.json(); if (!r.ok) throw new Error(d.detail || "Upload failed");
+        v = d; render(); ctx.status("Stamp replaced", "ok");
+      } catch (err) { ctx.status(err.message, "error"); }
+    }
+  });
+  el.addEventListener("click", async (e) => {
+    const tr = e.target.closest("tr[data-t]");
+    if (tr && !e.target.matches("input")) { const r = tr.querySelector("input"); if (!r.checked) { r.checked = true; r.dispatchEvent(new Event("change", { bubbles: true })); } return; }
+    const b = e.target.closest("[data-a]");
+    if (!b) return;
+    if (b.dataset.a === "prev") { if (page > 1) { page--; refreshPreview(); } }
+    else if (b.dataset.a === "next") { if (page < pages) { page++; refreshPreview(); } }
+    else if (b.dataset.a === "pdf") window.open(`/api/erp/settings/invoice-store/preview.pdf?template=${premium() ? v.template : "a4-compact-stamp"}&items=${items}`, "_blank");
+    else if (b.dataset.a === "save") {
+      const fields = {}, switches = {};
+      el.querySelectorAll(".sf").forEach((i) => { fields[i.dataset.k] = i.value; });
+      el.querySelectorAll(".ss").forEach((i) => { switches[i.dataset.k] = i.checked; });
+      save({ fields, switches, items_per_page: Number(el.querySelector(".is-per").value) }, "Invoice details saved");
+    } else if (b.dataset.a === "reset-stamp") {
+      try { v = await api("/api/erp/settings/invoice-store/stamp", { method: "DELETE" }); render(); ctx.status("Using the bundled stamp", "ok"); }
+      catch (err) { ctx.status(err.message, "error"); }
+    }
+  });
+  return { load };
 }

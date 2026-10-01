@@ -155,12 +155,19 @@ def invoice_pdf(db: Session, sale: Sale) -> Path:
     (same number, different lines) gets its own file; a resend reuses the stored one."""
     from app.services import invoice_render
 
-    version = hashlib.sha256(f"{sale.id}|{sale.total}|{sorted((i.id, i.quantity, str(i.line_total)) for i in sale.items)}".encode()).hexdigest()[:12]
+    from app.services import invoice_premium
+
+    template = settings_service.get_setting(db, "invoice_store_template", invoice_premium.DEFAULT_TEMPLATE)
+    look = sorted(invoice_premium.store_options(db).items()) if template in invoice_premium.TEMPLATES else ""
+    version = hashlib.sha256(f"{sale.id}|{sale.total}|{sorted((i.id, i.quantity, str(i.line_total)) for i in sale.items)}|{template}|{look}".encode()).hexdigest()[:12]
     safe = re.sub(r"[^A-Za-z0-9_-]+", "-", sale.invoice_no)
     path = UPLOAD_DIR / "invoices" / f"{safe}-{version}.pdf"
     if not path.is_file():
         path.parent.mkdir(parents=True, exist_ok=True)
-        pdf = invoice_render.build_invoice_pdf(sale, settings_service.get_profile(db), settings_service.qr_png_bytes(db))
+        if template in invoice_premium.TEMPLATES:                # Settings → Invoice Store (WhatsApp only)
+            pdf = invoice_premium.render_sale(db, sale, template)
+        else:
+            pdf = invoice_render.build_invoice_pdf(sale, settings_service.get_profile(db), settings_service.qr_png_bytes(db))
         tmp = path.with_suffix(".part")
         tmp.write_bytes(pdf)
         tmp.replace(path)

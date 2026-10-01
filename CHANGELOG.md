@@ -3,6 +3,16 @@
 Release notes for Faheem Pharmacy. Versions follow semantic versioning; every release
 lists its database migrations. Upgrades keep all business history (see docs/UPGRADES.md).
 
+## 1.5.0 — 2026-10-01
+
+- **Settings → Invoice Store:** premium A4 invoice templates for WhatsApp (with / without stamp; printing
+  keeps the classic invoice). 5 lines per page (configurable), no line split across pages, summary and
+  stamp on the last page; shop details, optional GSTIN and drug licence (printed only when on), invoice
+  texts and stamp upload; live preview. Inter font (OFL) bundled for the PDF.
+- WhatsApp invoice files are regenerated when the template or shop details change.
+
+**Migrations:** none (schema `f6b8d0e2a4c7`). **Fixtures:** `tests/fixtures/releases/1.5.0.db`.
+
 ## 1.4.1 — 2026-10-01
 
 - **Desktop app:** "Faheem Pharmacy ERP" opens full screen like dedicated software (kiosk: no address

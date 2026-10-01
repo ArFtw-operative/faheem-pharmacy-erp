@@ -207,6 +207,7 @@ def create_app() -> FastAPI:
         sales_history,
         stock_history,
         whatsapp,
+        invoice_store,
     )
 
     for router in (
@@ -223,6 +224,7 @@ def create_app() -> FastAPI:
         financials.router,
         adjustments.router,
         whatsapp.router,
+        invoice_store.router,
     ):
         app.include_router(router)
 
