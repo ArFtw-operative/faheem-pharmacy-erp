@@ -29,10 +29,10 @@ Faheem Pharmacy ERP — appliance control
   faheem-erp whatsapp enable|disable
   faheem-erp lan status|enable|disable|ca   use the ERP from other PCs / phones (shop network, store VPN)
   faheem-erp network static [auto|IP/PREFIX] | dhcp   fix this PC's address (or reserve it on the router)
-  faheem-erp reset-test-data        remove test stock, products, purchases, sales (keeps customers, users, WhatsApp)
+  faheem-erp reset-test-data        reset business data: stock, products, purchases, sales (keeps customers, users, WhatsApp)
   faheem-erp force-update           install the newest fixes from prod right now (backup first)
   faheem-erp import-sqlite FILE     move an existing pharmacy.db into this (empty) installation
-  faheem-erp user …                 accounts: list, add, passwd, disable, enable, reset-2fa, unlock
+  faheem-erp user …                 accounts: list, add, passwd, rename --name, disable, enable, reset-2fa, unlock
   faheem-erp manage …               any scripts/manage.py command (settings, roles, version, deployments)
   faheem-erp maintenance            run the 05:00 maintenance now (may reboot when DAILY_HOST_REBOOT=true)
   faheem-erp uninstall              remove the appliance (keeps data and backups unless --purge)
@@ -131,6 +131,13 @@ db.execute('DROP SCHEMA public CASCADE'); db.execute('CREATE SCHEMA public')" >/
     ;;
   user)
     require_root
+    if [ "${1:-}" = passwd ] && [ -n "${2:-}" ] && [ -r /dev/tty ]; then        # typed hidden, passed by environment
+      printf 'New password for %s (8+ characters, letters and numbers): ' "$2" > /dev/tty; IFS= read -rs p1 < /dev/tty; echo > /dev/tty
+      printf 'Type it again: ' > /dev/tty; IFS= read -rs p2 < /dev/tty; echo > /dev/tty
+      [ "$p1" = "$p2" ] || die "the two passwords differ — nothing changed"
+      FAHEEM_NEW_PASSWORD="$p1" dc run --rm --no-TTY -e FAHEEM_NEW_PASSWORD tools python scripts/manage.py user passwd "$2"
+      exit $?
+    fi
     dc run --rm --no-TTY tools python scripts/manage.py user "$@"
     ;;
   reset-test-data)

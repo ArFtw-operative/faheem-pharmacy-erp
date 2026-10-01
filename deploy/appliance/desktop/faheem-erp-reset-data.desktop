@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Reset ERP Business Data
+Comment=Remove inventory, sales, purchases and the rest (customers, users and settings kept; backup first; asks to type RESET)
+Exec=/opt/faheem-erp/current/bin/faheem-admin reset-test-data
+Icon=/opt/faheem-erp/current/kiosk/icon.png
+Terminal=false
+Categories=Office;Finance;

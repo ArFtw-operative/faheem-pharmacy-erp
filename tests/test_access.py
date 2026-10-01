@@ -44,3 +44,32 @@ def test_legacy_permissions_are_removed_and_customer_create_kept(db):
     assert not {c for c in codes if c.split(".")[0] in ("crm", "dashboard", "settings", "users")} - {"settings.manage"}
     staff = db.scalar(select(Role).where(Role.name == "Sales Staff"))
     assert "customers.create" in staff.permission_codes()
+
+
+def test_cli_user_control_password_name_and_two_step(db):
+    """Control Center → User control runs these: the password comes by environment, never echoed."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    from app.models import User
+    from app.security import verify_password
+    from app.services import mfa
+
+    root = Path(__file__).resolve().parents[1]
+    u = db.query(User).first()
+    u.mfa_enabled, u.mfa_secret, u.failed_logins = True, mfa.seal(mfa.new_secret()), 4
+    db.commit()
+    run = lambda *a, **env: subprocess.run([sys.executable, "scripts/manage.py", "user", *a], cwd=root, capture_output=True,
+                                           text=True, env={**os.environ, **env}, stdin=subprocess.DEVNULL)
+    weak = run("passwd", u.username, FAHEEM_NEW_PASSWORD="short")
+    assert weak.returncode != 0 and "not accepted" in (weak.stdout + weak.stderr)
+    ok = run("passwd", u.username, FAHEEM_NEW_PASSWORD="Counter2026x")
+    assert ok.returncode == 0 and "Counter2026x" not in ok.stdout                       # a typed password is never echoed
+    assert run("rename", u.username, "--name", "Syed  Faheem ").returncode == 0
+    assert run("reset-2fa", u.username).returncode == 0
+    db.expire_all()
+    u = db.get(User, u.id)
+    assert verify_password("Counter2026x", u.password_hash) and u.full_name == "Syed Faheem"
+    assert u.mfa_enabled is False and u.failed_logins == 0 and not u.must_change_password

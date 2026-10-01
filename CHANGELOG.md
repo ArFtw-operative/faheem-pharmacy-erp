@@ -3,6 +3,19 @@
 Release notes for Faheem Pharmacy. Versions follow semantic versioning; every release
 lists its database migrations. Upgrades keep all business history (see docs/UPGRADES.md).
 
+## 1.6.1 — 2026-10-01
+
+- **Fix:** the business-data reset failed on PostgreSQL once stock adjustments existed (deleted in the
+  wrong order). It now deletes in the order the schema's own foreign keys require; tested on both
+  databases with every kind of record.
+- **Control Center → Reset business data** (main menu, and the desktop entry "Reset ERP Business Data"):
+  inventory, sales, purchases, returns, held bills, adjustments and the WhatsApp log in one step;
+  customers, users, settings, WhatsApp setup and invoice designs kept; typed RESET, backup first.
+- **Control Center → User control:** reset a user's password (typed twice, hidden, never echoed),
+  change their name, reset two-step sign-in, unlock. CLI: `faheem-erp user passwd|rename|reset-2fa|unlock`.
+
+**Migrations:** none. **Fixtures:** `tests/fixtures/releases/1.6.1.db`.
+
 ## 1.6.0 — 2026-10-01
 
 - **Crash recovery ("graceful snaps"):** open tabs and every unfinished POS bill (lines, customer,

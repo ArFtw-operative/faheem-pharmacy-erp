@@ -16,6 +16,7 @@ has no administrator rights, so the owner or support types theirs (polkit).
 | Restart ERP / Shut down ERP / Start ERP | the ERP only; the PC stays on. Start / Restart open the app afterwards |
 | ERP Maintenance | optimise the database, free disk space, clear caches |
 | Force Update ERP | installs the newest fixes right away: a newer release if there is one, otherwise a rebuild of the newest `prod` commit — backup first, data and settings kept |
+| Reset ERP Business Data | the consolidated reset below (password, typed RESET, backup first) |
 | Switch to administrator | back to the login screen to sign in with your own account (the counter session keeps running) |
 
 ## Control Center — `sudo faheem-erp menu`
@@ -35,9 +36,6 @@ has no administrator rights, so the owner or support types theirs (polkit).
   - clear the ERP's memory caches (restarts it; nobody is signed out)
   - clear the counter browser's cache — or cache **and cookies** (the counter signs in again)
   - disk usage
-  - **reset test data** — removes all products, batches, stock, suppliers, purchases, sales, returns and
-    adjustments; keeps customers, users, settings and the WhatsApp setup. Typed `RESET`, backup first
-    (undo it from Backups → Restore)
 - **Settings** — select one to change it:
 
   | Setting | Meaning | Default |
@@ -54,6 +52,11 @@ has no administrator rights, so the owner or support types theirs (polkit).
   | WhatsApp invoices | the gateway on/off | off |
 
 - **Network access** — addresses, on/off, fixed or automatic address.
+- **User control** — choose an ERP user: reset password (typed twice, hidden), change name, reset
+  two-step sign-in (new QR at the next login), unlock after 5 wrong passwords.
+- **Reset business data** — inventory, products, suppliers, purchases, sales, returns, held bills,
+  adjustments and the WhatsApp log in one step; customers, users, settings, the WhatsApp setup and the
+  invoice designs are kept. Typed `RESET`, backup first (undo it from Backups → Restore).
 - **Logs** — ERP, WhatsApp queue, migration job, database, proxy, updates/backups/maintenance.
 - **Power** — restart or turn off the PC (the ERP is stopped cleanly first).
 - **Support report** — a file in `/var/log/faheem-erp/` with the diagnosis, configuration names

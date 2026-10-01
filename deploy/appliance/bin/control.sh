@@ -85,13 +85,10 @@ maintenance_menu() {
       browser-cache "Clear the counter browser's cache" \
       browser-cookies "Clear the counter browser's cache AND cookies (sign in again)" \
       all "All of the above except cookies" \
-      usage "Disk usage" \
-      reset "Reset test data (stock, products, purchases, sales — customers kept)")" || return
+      usage "Disk usage")" || return
   case "$c" in
     full) run "Maintenance" env FAHEEM_NO_REBOOT=1 "$here/maintenance.sh" ;;
     browser-cookies) confirm "Clear cookies? The counter must sign in again." && run "Browser cache and cookies" "$here/optimize.sh" browser-cookies ;;
-    reset) typed RESET "Remove ALL inventory, products, batches, suppliers, purchases, sales, returns and adjustments?\n\nKept: customers, users, settings and the WhatsApp setup. A backup is taken first (restore it from Backups)." \
-             && run "Reset test data" "$here/faheem-erp" reset-test-data --yes ;;
     *) run "Optimise: $c" "$here/optimize.sh" "$c" ;;
   esac
 }
@@ -130,6 +127,36 @@ network_menu() {
   esac
 }
 
+users_menu() {
+  local list users=() u
+  list="$(dc run --rm --no-TTY tools python scripts/manage.py user list 2>/dev/null)" || { W --msgbox "Could not read the users (is the ERP running?)" 8 60; return; }
+  while read -r emp name rest; do
+    [ -n "$name" ] && users+=("$name" "$(echo "$rest" | sed 's/  */ /g' | cut -c1-48)")
+  done <<<"$list"
+  [ ${#users[@]} -gt 0 ] || { W --msgbox "No users found." 8 40; return; }
+  u="$(W --menu "ERP users — choose one:" 20 76 10 "${users[@]}")" || return
+  case "$(W --menu "User $u" 15 64 5 password "Reset password" name "Change name" twostep "Reset two-step sign-in (new QR at next login)" unlock "Unlock (after 5 wrong passwords)")" in
+    password)
+      local p1 p2
+      p1="$(W --passwordbox "New password for $u (8+ characters, letters and numbers):" 10 64)" || return
+      p2="$(W --passwordbox "Type it again:" 9 64)" || return
+      [ "$p1" = "$p2" ] || { W --msgbox "The two passwords differ — nothing changed." 8 50; return; }
+      FAHEEM_NEW_PASSWORD="$p1" run "Reset password of $u" dc run --rm --no-TTY -e FAHEEM_NEW_PASSWORD tools python scripts/manage.py user passwd "$u"
+      unset p1 p2 ;;
+    name)
+      local n; n="$(W --inputbox "New full name for $u:" 9 64)" || return
+      [ -n "$n" ] && run "Change name of $u" dc run --rm --no-TTY tools python scripts/manage.py user rename "$u" --name "$n" ;;
+    twostep) confirm "Reset two-step sign-in for $u?\n\nUse this when the phone or authenticator app is lost. At the next login $u scans a new QR code." \
+               && run "Reset two-step sign-in of $u" dc run --rm --no-TTY tools python scripts/manage.py user reset-2fa "$u" ;;
+    unlock) run "Unlock $u" dc run --rm --no-TTY tools python scripts/manage.py user unlock "$u" ;;
+  esac
+}
+
+reset_data() {
+  typed RESET "Reset business data?\n\nRemoves ALL products, batches and stock, suppliers, purchases and purchase returns, sales, returns, held bills, adjustments and the WhatsApp message log.\n\nKept: customers, users and passwords, settings, the WhatsApp setup and the invoice designs.\nA backup is taken first — undo it from Backups → Restore." \
+    && run "Reset business data" "$here/faheem-erp" reset-test-data --yes
+}
+
 logs_menu() {
   local s; s="$(W --menu "Show the log of:" 15 60 6 web "the ERP" worker "WhatsApp queue" migrate "migration job" postgres "database" proxy "network proxy" deploy "updates / backups / maintenance")" || return
   clear
@@ -146,7 +173,7 @@ power_menu() {
 }
 
 while :; do
-  choice="$(W --menu "Choose with ↑ ↓ and Enter (Esc to leave):" 22 74 13 \
+  choice="$(W --menu "Choose with ↑ ↓ and Enter (Esc to leave):" 24 74 15 \
       status "Status" \
       restart "Restart ERP" \
       stop "Shut down ERP" \
@@ -160,6 +187,8 @@ while :; do
       network "Network access…" \
       logs "Logs…" \
       power "Power (restart / turn off the PC)…" \
+      users "User control (password, name, two-step sign-in)…" \
+      reset "Reset business data (inventory, sales, purchases…)" \
       support "Write a support report")" || { clear; exit 0; }
   case "$choice" in
     status) run "Status" "$here/faheem-erp" status ;;
@@ -175,6 +204,8 @@ while :; do
     network) network_menu ;;
     logs) logs_menu ;;
     power) power_menu ;;
+    users) users_menu ;;
+    reset) reset_data ;;
     support) run "Support report" "$here/doctor.sh" --report ;;
   esac
 done

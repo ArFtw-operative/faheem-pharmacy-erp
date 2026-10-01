@@ -28,6 +28,16 @@ WIPE_TABLES = (
 KEEP_SEQUENCES = ("employee_id",)
 
 
+def delete_order() -> list[str]:
+    """Children before parents, from the schema's own foreign keys — PostgreSQL checks every
+    reference immediately, so a hand-kept order breaks as soon as a new reference appears."""
+    import app.models  # noqa: F401
+    from app.database import Base
+
+    ordered = [t.name for t in reversed(Base.metadata.sorted_tables) if t.name in WIPE_TABLES]
+    return ordered + [t for t in WIPE_TABLES if t not in ordered]
+
+
 def counts(db: Session) -> dict[str, int]:
     return {t: db.execute(text(f'SELECT COUNT(*) FROM "{t}"')).scalar() or 0 for t in WIPE_TABLES}
 
@@ -41,7 +51,7 @@ def wipe(db: Session, *, user: User | None = None, keep_customers: bool = False)
     before = counts(db)
     if keep_customers:
         db.execute(text("UPDATE customer_followups SET source_sale_id = NULL"))
-    for table in WIPE_TABLES:
+    for table in delete_order():
         if keep_customers and table in CUSTOMER_TABLES:
             continue
         db.execute(text(f'DELETE FROM "{table}"'))

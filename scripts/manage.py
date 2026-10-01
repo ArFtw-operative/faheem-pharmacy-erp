@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import os
 import sys
 from pathlib import Path
 
@@ -49,7 +50,12 @@ def _user(db, username: str) -> User:
 
 
 def _password(given: str | None) -> str | None:
+    given = given or os.environ.get("FAHEEM_NEW_PASSWORD") or None       # the Control Center passes it here, never on a command line
     if given:
+        from app.routers.auth import password_problem
+        problem = password_problem(given, given)
+        if problem:
+            raise SystemExit(f"Password not accepted: {problem}")
         return given
     if sys.stdin.isatty():
         first = getpass.getpass("New password (blank = generate): ")
@@ -78,9 +84,23 @@ def cmd_user(args) -> None:
             shown = "(as given)" if given else password      # a password the owner typed is never echoed
             print(f"Created {user.username} ({user.employee_id}) · password: {shown} · two-step sign-in is set up at first login")
         elif args.action == "passwd":
-            password = user_service.reset_password(db, _user(db, args.username), new_password=_password(args.password))
+            given = _password(args.password)
+            u = _user(db, args.username)
+            password = user_service.reset_password(db, u, new_password=given, force_change=False)
+            u.failed_logins, u.locked_until = 0, None
             db.commit()
-            print(f"Password reset for {args.username}: {password} · must change at next login")
+            print(f"Password reset for {args.username}" + (" (as typed)" if given else f": {password}")
+                  + " · they can change it any time with “Forgot password?” and their authenticator")
+        elif args.action == "rename":
+            u = _user(db, args.username)
+            name = " ".join((args.name or "").split())[:120]
+            if not name:
+                raise SystemExit("Give the new name: --name \"Full Name\"")
+            before, u.full_name = u.full_name, name
+            from app import audit
+            audit.record(db, action=audit.A_UPDATE, entity_type="user", entity_id=u.id, details=f"Name changed from {before!r} to {name!r} (Control Center)")
+            db.commit()
+            print(f"{u.username}: name is now {name}")
         elif args.action == "reset-2fa":            # lost phone and recovery codes: enrol again at next login
             u = _user(db, args.username)
             u.mfa_enabled, u.mfa_secret, u.mfa_recovery, u.mfa_last_step = False, "", None, None
@@ -214,7 +234,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
     u = sub.add_parser("user")
-    u.add_argument("action", choices=["list", "add", "passwd", "disable", "enable", "reset-2fa", "unlock"])
+    u.add_argument("action", choices=["list", "add", "passwd", "rename", "disable", "enable", "reset-2fa", "unlock"])
     u.add_argument("username", nargs="?")
     u.add_argument("--name", default="")
     u.add_argument("--role", default="Administrator")
