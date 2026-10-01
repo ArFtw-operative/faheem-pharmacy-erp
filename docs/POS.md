@@ -36,6 +36,19 @@ opens automatically (pre-filled from the search text) so the customer can be cre
 without leaving the POS. Entering a mobile that already exists selects the existing
 customer instead of duplicating it.
 
+## Manual bill (Alt+L)
+
+For anything the stock bill cannot take: an item that is out of stock, not received yet, or not in
+inventory at all. A manual bill never checks or changes stock and has its own number series (`MB-…`).
+
+- Search works as usual and **any** product can be chosen, whatever its stock; its MRP becomes the rate.
+  When nothing matches, the last row (or Enter) adds the typed name as an item not in inventory.
+- After adding: quantity → **Tab** → discount % → **Tab** → rate; Enter returns to the item search.
+  In the cart, Enter on a line edits rate → quantity, F7 the discount.
+- Complete the sale as usual (payment, invoice, WhatsApp). The bill is stored like any other: Sales
+  history, bill register, item-wise sales (as a separate "· manual bill" row, since its quantity is per
+  typed unit), returns. Cost is unknown, so it adds to revenue but not to profit.
+
 ## Park and resume
 
 A cart can be **parked** and picked up later. Resuming is claim-once; the sale can be

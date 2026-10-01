@@ -37,8 +37,32 @@ def test_manual_bill_rules(db):
     with pytest.raises(sales_service.SaleError, match="rate"):
         sales_service.create_sale(db, lines=[{"name": "X", "quantity": 1, "rate": "0"}], invoice_type="MANUAL")
     item = inv.create_item(db, name="PAN 40", pack_size="15S")
-    with pytest.raises(sales_service.SaleError, match="cannot take stock items"):
-        sales_service.create_sale(db, lines=[{"item_id": item.id, "name": "PAN 40", "quantity": 1, "rate": "5"}], invoice_type="MANUAL")
+    with pytest.raises(sales_service.SaleError, match="batch"):
+        sales_service.create_sale(db, lines=[{"item_id": item.id, "batch_id": 1, "name": "PAN 40", "quantity": 1, "rate": "5"}], invoice_type="MANUAL")
+
+
+def test_manual_bill_takes_any_inventory_item_without_stock_and_typed_items(db):
+    from app.services import report_generator as reports
+
+    out_of_stock = inv.create_item(db, name="AZEE 500 TAB", pack_size="3S")              # no batch at all
+    dolo = inv.create_item(db, name="DOLO 650 TAB", pack_size="15S", base_unit="TABLET", pack_unit="STRIP", units_per_pack=15)
+    inv.add_or_update_batch(db, dolo, batch_no="D1", quantity=1, unit="PACK", movement_type="OPENING_STOCK", mrp="30")
+    db.commit()
+    moves = db.query(InventoryMovement).count()
+    sale = sales_service.create_sale(db, invoice_type="MANUAL", round_off_mode="NONE", lines=[
+        {"item_id": out_of_stock.id, "name": "AZEE 500 TAB", "quantity": 2, "rate": "98.50", "discount_pct": 5},
+        {"item_id": dolo.id, "name": "DOLO 650 TAB", "quantity": 4, "rate": "30"},          # more than the 1 strip in stock
+        {"name": "Crepe bandage 10cm", "quantity": 1, "rate": "85"}])
+    db.commit()
+    assert db.query(InventoryMovement).count() == moves                                  # stock neither checked nor changed
+    assert [l.item_id for l in sale.items] == [out_of_stock.id, dolo.id, None]
+    assert sale.items[0].pack_size == "3S" and sale.items[0].discount == Decimal("9.85")
+    assert sale.total == Decimal("187.15") + Decimal("120") + Decimal("85")
+    rep = reports.generate(db, "item-wise-sales", {"period": "this_month"}, ["item", "sold", "value"], user=None)
+    by = {r["item"]: r for r in rep["rows"]}
+    assert by["DOLO 650 TAB · manual bill"]["sold"] == 4 and by["Crepe bandage 10cm · manual bill"]["sold"] == 1
+    bills = reports.generate(db, "bill-register", {"period": "this_month"}, user=None)
+    assert any(sale.invoice_no in str(r.values()) for r in bills["rows"])                 # in the bill register too
 
 
 def test_manual_bill_cost_is_unknown_not_zero(db):

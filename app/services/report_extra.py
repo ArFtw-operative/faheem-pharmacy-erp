@@ -252,12 +252,15 @@ def item_wise_sales(db, p, start, end, tz, names):
             return None
         if supplier_items is not None and line.item_id not in supplier_items:
             return None
-        key = (line.item_id or line.product_name, line.batch_id if by_batch else None, bucket(when, split, tz) if split else '')
+        # manual-bill lines are counted per typed unit, stock lines in the product's base unit: never one row
+        manual = line.financial_cost_source == 'MANUAL_BILL'
+        key = (('MB', line.item_id or line.product_name) if manual else (line.item_id or line.product_name),
+               line.batch_id if by_batch else None, bucket(when, split, tz) if split else '')
         r = rows.get(key)
         if r is None:
             it = line.item
             r = rows[key] = dict(period=key[2], item_id=line.item_id, batch_id=line.batch_id if by_batch else None,
-                                 code=it.article_id if it else '', item=line.product_name,
+                                 code=it.article_id if it else '', item=line.product_name + (' · manual bill' if manual else ''),
                                  pack=(it.pack_size if it else '') or line.pack_size or '',
                                  category=names.get(it.category, it.category) if it else '', category_code=it.category if it else '',
                                  manufacturer=(it.manufacturer if it else '') or '', batch=line.batch_no if by_batch else '',

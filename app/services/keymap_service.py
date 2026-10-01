@@ -54,7 +54,7 @@ ACTIONS: list[dict] = [
     {"id": "pos.resume", "scope": "pos", "group": "POS", "label": "Resume held bill", "key": "Ctrl+R", "bar": 13},
     {"id": "pos.customer", "scope": "pos", "group": "POS", "label": "Customer search (#)", "key": "Alt+C", "bar": 14},
     {"id": "pos.walkin", "scope": "pos", "group": "POS", "label": "Back to walk-in customer", "key": "Alt+Backspace"},
-    {"id": "pos.manual", "scope": "pos", "group": "POS", "label": "Manual bill on/off (items not kept in stock)", "key": "Alt+L", "bar": 16},
+    {"id": "pos.manual", "scope": "pos", "group": "POS", "label": "Manual bill on/off (any item, stock not checked or changed)", "key": "Alt+L", "bar": 16},
     {"id": "pos.followup", "scope": "pos", "group": "POS", "label": "Follow up with this customer", "key": "Alt+O", "bar": 17},
     {"id": "pos.saleType", "scope": "pos", "group": "POS", "label": "Switch sale type (Walk-in / Home delivery)", "key": "Alt+Y", "bar": 15},
     # ---- Inventory

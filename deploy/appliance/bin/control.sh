@@ -85,10 +85,13 @@ maintenance_menu() {
       browser-cache "Clear the counter browser's cache" \
       browser-cookies "Clear the counter browser's cache AND cookies (sign in again)" \
       all "All of the above except cookies" \
-      usage "Disk usage")" || return
+      usage "Disk usage" \
+      reset "Reset test data (stock, products, purchases, sales — customers kept)")" || return
   case "$c" in
     full) run "Maintenance" env FAHEEM_NO_REBOOT=1 "$here/maintenance.sh" ;;
     browser-cookies) confirm "Clear cookies? The counter must sign in again." && run "Browser cache and cookies" "$here/optimize.sh" browser-cookies ;;
+    reset) typed RESET "Remove ALL inventory, products, batches, suppliers, purchases, sales, returns and adjustments?\n\nKept: customers, users, settings and the WhatsApp setup. A backup is taken first (restore it from Backups)." \
+             && run "Reset test data" "$here/faheem-erp" reset-test-data --yes ;;
     *) run "Optimise: $c" "$here/optimize.sh" "$c" ;;
   esac
 }
@@ -149,6 +152,7 @@ while :; do
       stop "Shut down ERP" \
       start "Start ERP" \
       update "Updates…" \
+      force "Force update — install the newest fixes from prod now" \
       backup "Backups…" \
       doctor "Doctor — find and fix problems" \
       maintenance "Maintenance and performance…" \
@@ -163,6 +167,7 @@ while :; do
     stop) confirm "Shut down the ERP? Billing stops until it is started again." && run "Shut down ERP" "$here/faheem-erp" stop ;;
     start) run "Start ERP" "$here/faheem-erp" start ;;
     update) update_menu ;;
+    force) confirm "Install the newest fixes from prod now?\n\nA backup is taken first. The ERP is unavailable for a few minutes while it rebuilds." && run "Force update" "$here/force-update.sh" ;;
     backup) backup_menu ;;
     doctor) doctor_menu ;;
     maintenance) maintenance_menu ;;

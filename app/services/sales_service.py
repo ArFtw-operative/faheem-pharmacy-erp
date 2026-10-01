@@ -105,14 +105,22 @@ def _split(amount: Decimal, weights: list[Decimal]) -> list[Decimal]:
 
 
 def _add_manual_lines(db: Session, sale: Sale, lines: list[dict[str, Any]]) -> tuple[Decimal, Decimal]:
-    """Typed lines for a manual bill: name, whole quantity, unit rate, optional discount %."""
+    """Lines of a manual bill: any item — chosen from inventory (kept as a reference) or typed —
+    with a whole quantity, a unit rate and an optional discount %. A manual bill never checks or
+    changes stock: no batch, no stock movement, cost unknown."""
+    from app.models import Item
 
     cap = max_discount_pct(db)
     subtotal = gross_total = Decimal("0")
     for line_no, line in enumerate(lines, start=1):
-        if line.get("item_id") or line.get("batch_id"):
-            raise SaleError("A manual bill cannot take stock items — bill them from inventory")
-        name = " ".join(str(line.get("name") or "").split())[:250]
+        if line.get("batch_id"):
+            raise SaleError("A manual bill does not take a batch — it never changes stock")
+        item = None
+        if line.get("item_id"):
+            item = db.get(Item, int(line["item_id"]))
+            if item is None:
+                raise SaleError(f"Line {line_no}: that product no longer exists")
+        name = " ".join(str(line.get("name") or (item.name if item else "")).split())[:250]
         if not name:
             raise SaleError(f"Line {line_no}: enter the item name")
         try:
@@ -128,9 +136,9 @@ def _add_manual_lines(db: Session, sale: Sale, lines: list[dict[str, Any]]) -> t
         disc = _line_discount(line, gross, name, cap)
         gross_total += gross
         sale_item = SaleItem(
-            sale_id=sale.id, item_id=None, batch_id=None, product_name=name,
+            sale_id=sale.id, item_id=item.id if item else None, batch_id=None, product_name=name,
             batch_no=str(line.get("batch") or "")[:60], quantity=qty, mrp=money(rate), rate=money(rate),
-            pack_mrp=money(rate), units_per_pack=1, pack_size=str(line.get("pack") or "")[:60], base_unit="UNIT",
+            pack_mrp=money(rate), units_per_pack=1, pack_size=str(line.get("pack") or (item.pack_size if item else "") or "")[:60], base_unit="UNIT",
             cost_rate=Decimal("0"), discount=disc, line_total=money(gross - disc), line_no=line_no,
             financial_status=financials.MISSING, financial_cost_source="MANUAL_BILL",
             sale_uom="UNIT", sale_uom_factor=1, sale_quantity=Decimal(qty),

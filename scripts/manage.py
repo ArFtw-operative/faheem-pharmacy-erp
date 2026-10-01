@@ -194,6 +194,22 @@ def cmd_deployments(args) -> None:
         print("No deployments recorded yet.")
 
 
+def cmd_reset_test_data(args) -> None:
+    """Remove test stock, products, purchases and sales; keep customers, users, settings (WhatsApp)."""
+    from app.database import SessionLocal
+    from app.services import data_reset
+
+    with SessionLocal() as db:
+        rows = {k: v for k, v in data_reset.counts(db).items() if v and k not in data_reset.CUSTOMER_TABLES}
+        print("Will remove:", ", ".join(f"{k} {v}" for k, v in rows.items()) or "nothing (already empty)")
+        if not args.yes:
+            print("Preview only — add --yes to remove (customers, users and settings are kept).")
+            return
+        data_reset.wipe(db, keep_customers=True)
+        db.commit()
+        print("Test data removed. Kept: customers and follow-ups, users, roles, settings (WhatsApp included).")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -214,6 +230,7 @@ def main() -> None:
     sub.add_parser("upgrade").add_argument("--check", action="store_true", help="rehearse on a copy; change nothing")
     sub.add_parser("deployments")
     sub.add_parser("purchases").add_argument("action", choices=["revalidate"])
+    sub.add_parser("reset-test-data").add_argument("--yes", action="store_true", help="actually remove (otherwise preview)")
     args = parser.parse_args()
     if args.cmd == "user" and args.action != "list" and not args.username:
         parser.error("username required")
@@ -222,7 +239,8 @@ def main() -> None:
             {"version": cmd_version, "upgrade": cmd_upgrade, "deployments": cmd_deployments}[args.cmd](args)
             return
         init_db()
-        {"user": cmd_user, "role": cmd_role, "setting": cmd_setting, "logo": cmd_logo, "purchases": cmd_purchases}[args.cmd](args)
+        {"user": cmd_user, "role": cmd_role, "setting": cmd_setting, "logo": cmd_logo, "purchases": cmd_purchases,
+         "reset-test-data": cmd_reset_test_data}[args.cmd](args)
     except upgrade_service.UpgradeError as exc:
         raise SystemExit(f"ERROR: {exc}")
 

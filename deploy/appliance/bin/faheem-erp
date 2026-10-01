@@ -29,6 +29,8 @@ Faheem Pharmacy ERP — appliance control
   faheem-erp whatsapp enable|disable
   faheem-erp lan status|enable|disable|ca   use the ERP from other PCs / phones (shop network, store VPN)
   faheem-erp network static [auto|IP/PREFIX] | dhcp   fix this PC's address (or reserve it on the router)
+  faheem-erp reset-test-data        remove test stock, products, purchases, sales (keeps customers, users, WhatsApp)
+  faheem-erp force-update           install the newest fixes from prod right now (backup first)
   faheem-erp import-sqlite FILE     move an existing pharmacy.db into this (empty) installation
   faheem-erp user …                 accounts: list, add, passwd, disable, enable, reset-2fa, unlock
   faheem-erp manage …               any scripts/manage.py command (settings, roles, version, deployments)
@@ -131,6 +133,21 @@ db.execute('DROP SCHEMA public CASCADE'); db.execute('CREATE SCHEMA public')" >/
     require_root
     dc run --rm --no-TTY tools python scripts/manage.py user "$@"
     ;;
+  reset-test-data)
+    require_root
+    dc run --rm --no-TTY tools python scripts/manage.py reset-test-data || die "could not read the data"
+    if [ "${1:-}" != --yes ]; then
+      [ -r /dev/tty ] || die "add --yes"
+      printf 'Type RESET to remove this test data (a backup is taken first): ' > /dev/tty; read -r a < /dev/tty
+      [ "$a" = RESET ] || die "cancelled"
+    fi
+    take_lock reset
+    "$here/backup.sh" --reason pre-restore --note "before test-data reset" --no-prune --locked >/dev/null || die "backup failed — nothing was removed"
+    dc stop web worker >/dev/null 2>&1 || true
+    dc run --rm --no-TTY tools python scripts/manage.py reset-test-data --yes || { dc up -d $(services_up) >/dev/null 2>&1; die "reset failed"; }
+    start
+    ;;
+  force-update) exec "$here/force-update.sh" "$@" ;;
   manage)
     require_root
     dc run --rm --no-TTY tools python scripts/manage.py "$@"

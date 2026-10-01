@@ -32,18 +32,27 @@ def counts(db: Session) -> dict[str, int]:
     return {t: db.execute(text(f'SELECT COUNT(*) FROM "{t}"')).scalar() or 0 for t in WIPE_TABLES}
 
 
-def wipe(db: Session, *, user: User | None = None) -> dict[str, int]:
+CUSTOMER_TABLES = ("customers", "customer_followups")
+
+
+def wipe(db: Session, *, user: User | None = None, keep_customers: bool = False) -> dict[str, int]:
+    """Remove the business data. ``keep_customers`` (testing reset): customers and their follow-ups stay
+    (a follow-up's link to a removed bill is cleared); WhatsApp settings are settings and always stay."""
     before = counts(db)
+    if keep_customers:
+        db.execute(text("UPDATE customer_followups SET source_sale_id = NULL"))
     for table in WIPE_TABLES:
+        if keep_customers and table in CUSTOMER_TABLES:
+            continue
         db.execute(text(f'DELETE FROM "{table}"'))
-    keep = ", ".join(f"'{k}'" for k in KEEP_SEQUENCES)
+    keep = ", ".join(f"'{k}'" for k in KEEP_SEQUENCES + (("customer_id",) if keep_customers else ()))
     db.execute(text(f"DELETE FROM number_sequences WHERE key NOT IN ({keep})"))
     if db.get_bind().dialect.name == "sqlite":   # PostgreSQL enforces every reference as it deletes
         db.execute(text("INSERT INTO items_fts(items_fts) VALUES('rebuild')"))
         dangling = db.execute(text("PRAGMA foreign_key_check")).fetchall()
         if dangling:
             raise RuntimeError(f"Reset would leave broken references: {dangling[:5]}")
-    audit.record(db, action=audit.A_DELETE, entity_type="system", entity_id="data-reset", user=user,
-                 before=before, details="Business data reset: all test stock, products, customers and sales removed")
+    audit.record(db, action=audit.A_DELETE, entity_type="system", entity_id="data-reset", user=user, before=before,
+                 details="Test data reset: stock, products, purchases and sales removed" + ("; customers kept" if keep_customers else "; customers removed"))
     db.flush()
     return before

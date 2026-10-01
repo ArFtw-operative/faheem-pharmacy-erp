@@ -26,6 +26,18 @@ lists its database migrations. Upgrades keep all business history (see docs/UPGR
   re-run until then); normal system account for `faheem-erp`; image downloads shown before the first
   start; clear message instead of a token prompt when nothing is published.
 
+- **Manual bill:** search and choose any product regardless of stock (MRP as the rate, product kept as a
+  reference) or add a typed item not in inventory; quantity → Tab → discount → Tab → rate, editable in
+  the cart; stored, returned and reported like any bill (item-wise sales show "· manual bill" rows);
+  never checks or changes stock.
+- **Settings → WhatsApp** rebuilt in the ERP's own style (sub-tab, form sections, plain buttons,
+  standard grid for activity).
+- **Control Center → Maintenance → Reset test data** (`faheem-erp reset-test-data`): removes stock,
+  products, suppliers, purchases and sales; keeps customers, users, settings and WhatsApp; backup first.
+- **Force Update ERP** desktop shortcut (`faheem-erp force-update`): newest release, or a rebuild of the
+  newest prod commit, with a backup first — no commands to copy. Installer re-runs keep the choices
+  made at install (network access, WhatsApp, automatic login, account).
+
 **Migrations:** none (schema `f6b8d0e2a4c7`). **Fixtures:** `tests/fixtures/releases/1.4.1.db`.
 
 ## 1.4.0 — 2026-10-01

@@ -15,6 +15,7 @@ has no administrator rights, so the owner or support types theirs (polkit).
 | Back up ERP | verified backup now |
 | Restart ERP / Shut down ERP / Start ERP | the ERP only; the PC stays on. Start / Restart open the app afterwards |
 | ERP Maintenance | optimise the database, free disk space, clear caches |
+| Force Update ERP | installs the newest fixes right away: a newer release if there is one, otherwise a rebuild of the newest `prod` commit — backup first, data and settings kept |
 | Switch to administrator | back to the login screen to sign in with your own account (the counter session keeps running) |
 
 ## Control Center — `sudo faheem-erp menu`
@@ -34,6 +35,9 @@ has no administrator rights, so the owner or support types theirs (polkit).
   - clear the ERP's memory caches (restarts it; nobody is signed out)
   - clear the counter browser's cache — or cache **and cookies** (the counter signs in again)
   - disk usage
+  - **reset test data** — removes all products, batches, stock, suppliers, purchases, sales, returns and
+    adjustments; keeps customers, users, settings and the WhatsApp setup. Typed `RESET`, backup first
+    (undo it from Backups → Restore)
 - **Settings** — select one to change it:
 
   | Setting | Meaning | Default |
@@ -78,7 +82,8 @@ database optimisation, firewall, address refresh, a backup). Updating is offered
 
 ```
 sudo faheem-erp status | start | stop | restart
-sudo faheem-erp update [VERSION] | update --check | rollback [VERSION]
+sudo faheem-erp update [VERSION] | update --check | rollback [VERSION] | force-update
+sudo faheem-erp reset-test-data
 sudo faheem-erp backup [--note TEXT] | backups | restore ID|--latest | drill [ID]
 sudo faheem-erp doctor [--fix [ID…]] [--report]
 sudo faheem-erp optimize database|cleanup|app-cache|browser-cache|browser-cookies|all|usage

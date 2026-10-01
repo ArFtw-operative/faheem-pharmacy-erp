@@ -60,7 +60,7 @@ export function create(ctx, params, root, saved) {
         <kbd data-shortcut="pos.saleType" title="Switch sale type">${esc(keys.keyFor("pos.saleType"))}</kbd>
       </div>
       <span class="edit-badge" hidden></span>
-      <span class="manual-badge" hidden title="Typed items not kept in stock — no inventory effect, own MB- number series">MANUAL BILL</span>
+      <span class="manual-badge" hidden title="Any item, stock not checked or changed — own MB- number series">MANUAL BILL</span>
       <span class="spacer"></span>
     </div>
     <div class="pos-search">
@@ -233,7 +233,7 @@ export function create(ctx, params, root, saved) {
     const qtyCell = editing === i ? `<input class="qty-in num" value="${l.qty}" aria-label="Quantity">` : `<b>${l.qty}</b>`;
     const rateCell = rateEditing === i ? `<input class="rate-in num" value="${num(l.rate) || ""}" placeholder="rate" aria-label="Rate per unit">` : num(l.rate) ? money(l.rate) : '<span class="bad">rate?</span>';
     return `<tr data-i="${i}" class="${i === sel ? "sel" : ""}${bad ? " bad" : ""}" title="${esc(bad)}">
-      <td class="num muted">${i + 1}</td><td class="mono muted">MANUAL</td>
+      <td class="num muted">${i + 1}</td><td class="mono${l.code ? "" : " muted"}">${esc(l.code || "TYPED")}</td>
       <td class="prod">${esc(l.name)}</td><td class="muted">—</td><td class="muted">—</td><td class="num">1</td>
       <td class="num qty">${qtyCell}</td><td class="num">${rateCell}</td>
       <td class="num disc">${discEditing === i ? `<input class="disc-in num" value="${num(l.disc) || ""}" placeholder="0" aria-label="Discount percent, max ${MAXD}">` : num(l.disc) ? `${num(l.disc)}% <small>−${money(lineDisc(l))}</small>` : '<span class="muted">—</span>'}</td>
@@ -267,7 +267,7 @@ export function create(ctx, params, root, saved) {
     const eb = $(".edit-badge", root);
     eb.hidden = !S.editing;
     if (S.editing) eb.textContent = `EDITING ${S.editing.invoice_no}`;
-    q.placeholder = S.manual ? "Manual bill: type the item name and press Enter, then its rate"
+    q.placeholder = S.manual ? "Manual bill: search any item (stock not checked) or type a name not in inventory"
       : "Search product name or code";
     tbody.innerHTML = S.lines.map(lineHtml).join("");
     $(".bill-empty", root).hidden = S.lines.length > 0;
@@ -344,10 +344,10 @@ export function create(ctx, params, root, saved) {
   function renderDetail() {
     const l = S.lines[sel];
     const d = $(".pos-detail", root);
-    if (!l) { d.innerHTML = S.manual ? '<span class="muted">Manual bill · type an item name and press Enter · rate, then quantity · the bill never changes stock</span>'
+    if (!l) { d.innerHTML = S.manual ? '<span class="muted">Manual bill · search any item or type one not in inventory · quantity, Tab → discount, Tab → rate · the bill never changes stock</span>'
       : '<span class="muted">No line selected · ↑↓ in the bill to select · see the shortcut bar for quantity, batch and remove</span>'; return; }
     if (l.manual) {
-      d.innerHTML = `<b>${esc(l.name)}</b><span>Manual line — not from stock, no batch</span><span>Rate <b>₹${money(l.rate)}</b> <kbd>Enter</kbd> on the line edits it</span>
+      d.innerHTML = `<b>${esc(l.name)}</b><span>${l.item_id ? "From inventory — manual bill: stock not checked or changed" : "Typed item — not in inventory"}</span><span>Rate <b>₹${money(l.rate)}</b> <kbd>Enter</kbd> on the line: rate → quantity · Tab → discount</span>
         <span>Discount <b>${num(l.disc) ? `${num(l.disc)}% (−₹${money(lineDisc(l))})` : "none"}</b></span>`;
       return;
     }
@@ -420,7 +420,23 @@ export function create(ctx, params, root, saved) {
       }
     };
   }
+  function addManualProduct(p) {
+    const b = p.batches[0];
+    const rate = b ? num(b.pack_mrp) : 0;
+    S.lines.push({ manual: true, name: String(p.name).slice(0, 250), code: p.code, item_id: p.id, qty: 1, rate, disc: 0,
+      batch_id: null, batches: [], base_unit: "UNIT", pack_unit: "UNIT", upp: 1, pack: p.pack_raw || "" });
+    q.value = ""; closeDrop();
+    const i = S.lines.length - 1;
+    if (rate > 0) {
+      editQty(i);
+      ctx.status(`${p.name}: quantity, Tab → discount · rate ₹${money(rate)} (MRP) — Enter on the line changes it`);
+    } else {
+      editRate(i);
+      ctx.status(`${p.name} has no MRP on record — type the rate, Enter, then the quantity`);
+    }
+  }
   function addManual(name) {
+    if (!name) return;
     S.lines.push({ manual: true, name: name.slice(0, 250), qty: 1, rate: 0, disc: 0, item_id: null, batch_id: null, batches: [], base_unit: "UNIT", pack_unit: "UNIT", upp: 1 });
     q.value = "";
     closeDrop();
@@ -492,7 +508,8 @@ export function create(ctx, params, root, saved) {
     };
     inp.onkeydown = (e) => {
       e.stopPropagation();
-      if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); commit(); }
+      if (e.key === "Tab" && l.manual && !e.shiftKey) { e.preventDefault(); if (commit()) editRate(i); }
+      else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); commit(); }
       else if (e.key === "Escape") { e.preventDefault(); discEditing = null; render(); q.focus(); }
       else if (/^F\d+$/.test(e.key)) { e.preventDefault(); commit(); }
     };
@@ -555,16 +572,21 @@ export function create(ctx, params, root, saved) {
       results.map((p, i) => {
         const b = p.batches[0];
         const inBill = S.lines.filter((l) => l.item_id === p.id).reduce((n, l) => n + l.qty, 0);
-        return `<tr data-i="${i}" class="${i === at ? "on" : ""}${p.batches.length ? "" : " off"}">
+        return `<tr data-i="${i}" class="${i === at ? "on" : ""}${p.batches.length || S.manual ? "" : " off"}">
           <td class="mono">${esc(p.code)}</td><td><b>${esc(p.name)}</b>${p.generic ? `<small>${esc(p.generic)}</small>` : ""}</td>
           <td class="num">${p.upp > 1 ? p.upp : esc(p.pack_raw || "1")}</td>
           <td class="num">${p.batches.length ? `${p.stock} ${esc(unitName(p.base_unit, p.stock))}<small>${esc(p.stock_label)}${inBill ? " · " + inBill + " in bill" : ""}</small>` : '<span class="bad-t">Out of stock</span>'}</td>
           <td class="${b && daysUntil(b.expiry) <= expiryDays ? "warn" : ""}">${b ? fmtExpShort(b.expiry) : "—"}</td>
           <td class="num">${b ? `₹${money(b.unit_mrp)}<small>${p.upp > 1 ? "/" + esc(unitName(p.base_unit, 1)) + " · ₹" + money(b.pack_mrp) + "/" + esc(unitName(p.pack_unit, 1)) : ""}</small>` : "—"}</td>
           <td>${esc(p.rack || "")}</td></tr>`;
-      }).join("")}</tbody></table><div class="drop-foot">↑↓ choose · Enter add · Esc close · # customer</div>`
+      }).join("")}${S.manual ? typedRow(results.length) : ""}</tbody></table><div class="drop-foot">${S.manual
+        ? "Manual bill · ↑↓ choose · Enter add (stock is not checked or changed) · last row adds the typed name · Esc close"
+        : "↑↓ choose · Enter add · Esc close · # customer"}</div>`
+      : S.manual ? `<table class="res"><tbody>${typedRow(0)}</tbody></table><div class="drop-foot">Not in inventory · Enter adds it as a typed item</div>`
       : `<div class="drop-empty">No product matches “${esc(lastTerm)}”.</div>`;
   }
+
+  const typedRow = (i) => `<tr data-i="${i}" class="new${i === at ? " on" : ""}"><td colspan="7">＋ Add “${esc(lastTerm)}” as a typed item (not in inventory)</td></tr>`;
 
   function renderCustomers() {
     drop.hidden = false;
@@ -656,15 +678,20 @@ export function create(ctx, params, root, saved) {
         if (cache.size > 200) cache.delete(cache.keys().next().value);
       }
       if (q.value.trim() !== term) return;   // a newer keystroke is in flight
-      at = results.findIndex((p) => p.batches.length);
-      if (at < 0) at = 0;
+      if (S.manual) {                        // manual bill: exact name first, else the first match, else the typed row
+        at = results.findIndex((p) => p.name.toLowerCase() === key);
+        if (at < 0) at = 0;
+      } else {
+        at = results.findIndex((p) => p.batches.length);
+        if (at < 0) at = 0;
+      }
       renderItems();
     } catch (err) { if (err.name !== "AbortError") ctx.status(err.message, "error"); }
   }
   const search = debounce(runSearch, 70);
 
   function moveDrop(d) {
-    const n = mode === "customers" ? results.length + 1 : results.length;
+    const n = mode === "customers" || (mode === "items" && S.manual) ? results.length + 1 : results.length;
     if (!n) return;
     at = (at + d + n) % n;
     if (mode === "customers") renderCustomers(); else if (mode === "items") renderItems(); else if (mode === "parked") renderParked(); else if (mode === "batch") renderBatch();
@@ -675,6 +702,7 @@ export function create(ctx, params, root, saved) {
   async function chooseDrop() {
     if (mode === "items") {
       const p = results[at];
+      if (S.manual) { if (p) addManualProduct(p); else addManual(q.value.trim()); return; }
       if (p) addProduct(p);
     } else if (mode === "customers") {
       if (at < results.length) { const c = results[at]; setCustomer(c); ctx.status(`Customer: ${c.name}`, "ok"); }
@@ -684,7 +712,7 @@ export function create(ctx, params, root, saved) {
   }
 
   q.addEventListener("input", () => {
-    if (q.value.trim().startsWith("#")) search.flush(); else if (!S.manual) search(); else closeDrop();
+    if (q.value.trim().startsWith("#")) search.flush(); else search();
   });
   q.addEventListener("keydown", async (e) => {
     if (e.key === "ArrowDown") {
@@ -700,7 +728,7 @@ export function create(ctx, params, root, saved) {
       if (!drop.hidden && (mode === "parked" || mode === "batch")) { await chooseDrop(); return; }
       const term = q.value.trim();
       if (!term) { if (S.lines.length) { $(".p-recv", root).focus(); } return; }
-      if (S.manual && !term.startsWith("#")) { addManual(term); return; }
+      if (S.manual && !term.startsWith("#")) { search.cancel(); await runSearch(); await chooseDrop(); return; }
       // scanner / fast typist: search now, then add an exact single match
       if (mode !== "customers" && mode !== "parked") { search.cancel(); await runSearch(); }
       if (mode === "customers" && !results.length) { renderNewCustomer(term.slice(1).trim()); return; }
@@ -819,7 +847,7 @@ export function create(ctx, params, root, saved) {
       const lines = [];
       const manual = !!(p.payload && p.payload.manual);
       for (const c of cart) {
-        if (manual) { lines.push({ manual: true, name: c.name, qty: Number(c.qty || c.quantity) || 1, rate: num(c.rate), disc: Math.min(num(c.disc), MAXD), item_id: null, batch_id: null, batches: [], base_unit: "UNIT", pack_unit: "UNIT", upp: 1 }); continue; }
+        if (manual) { lines.push({ manual: true, name: c.name, code: c.code || "", pack: c.pack || "", qty: Number(c.qty || c.quantity) || 1, rate: num(c.rate), disc: Math.min(num(c.disc), MAXD), item_id: c.item_id || null, batch_id: null, batches: [], base_unit: "UNIT", pack_unit: "UNIT", upp: 1 }); continue; }
         if (!c.item_id) continue;
         const fresh = await api(`/api/items/${c.item_id}/batches`);
         const batches = (fresh.batches || []).map((b) => ({ id: b.id, batch_no: b.batch_no, expiry: b.expiry, stock: b.quantity, pack_mrp: b.mrp, upp: b.units_per_pack, unit_mrp: b.unit_mrp }));
@@ -1062,7 +1090,7 @@ export function create(ctx, params, root, saved) {
     const body = {
       invoice_type: S.manual ? "MANUAL" : "INVENTORY",
       lines: S.lines.map((l) => (l.manual
-        ? { name: l.name, quantity: l.qty, rate: num(l.rate), discount_pct: CAN["sales.discount"] ? num(l.disc) : 0 }
+        ? { name: l.name, item_id: l.item_id || null, pack: l.pack || "", quantity: l.qty, rate: num(l.rate), discount_pct: CAN["sales.discount"] ? num(l.disc) : 0 }
         : { item_id: l.item_id, batch_id: l.batch_id || null, quantity: l.qty, discount_pct: CAN["sales.discount"] ? num(l.disc) : 0 })),
       customer_id: S.customer ? S.customer.id : null,
       customer_type: S.saleType,
@@ -1186,7 +1214,7 @@ export function create(ctx, params, root, saved) {
       S.editing = { id: d.sale_id, invoice_no: d.invoice_no };
       S.manual = d.invoice_type === "MANUAL";
       S.lines = d.lines.map((l) => (l.manual
-        ? { manual: true, name: l.name, qty: l.qty, rate: l.rate, disc: Math.min(num(l.disc), MAXD), item_id: null, batch_id: null, batches: [], base_unit: "UNIT", pack_unit: "UNIT", upp: 1 }
+        ? { manual: true, name: l.name, code: l.code || "", qty: l.qty, rate: l.rate, disc: Math.min(num(l.disc), MAXD), item_id: l.item_id || null, batch_id: null, batches: [], base_unit: "UNIT", pack_unit: "UNIT", upp: 1 }
         : { ...lineFrom({ id: l.item_id, code: l.code, name: l.name, pack_raw: l.pack_raw, upp: l.upp, loose: l.loose, base_unit: l.base_unit,
             pack_unit: l.pack_unit, form: l.form, rack: l.rack, content: l.content, batches: l.batches }),
           batch_id: l.batch_id, qty: l.qty, disc: Math.min(num(l.disc), MAXD) }));

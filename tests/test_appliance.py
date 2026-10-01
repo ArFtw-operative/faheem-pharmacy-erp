@@ -225,3 +225,24 @@ def test_update_without_registry_token_uses_anonymous_access(box):
     (box.etc / "registry.token").unlink()                                             # public images
     box.run("update.sh", check=True)
     assert box.env("FAHEEM_VERSION") == "1.4.0"
+
+
+def test_force_update_prefers_a_newer_release(box):
+    box.run("force-update.sh", check=True)                                            # 1.4.0 published > 1.3.0
+    assert box.env("FAHEEM_VERSION") == "1.4.0" and len(box.snapshots()) == 1       # via the transactional update
+
+
+def test_reset_test_data_keeps_customers(db):
+    from app.models import Customer, Item
+    from app.services import customer_service, data_reset, inventory_service as inv, sales_service
+
+    item = inv.create_item(db, name="DOLO 650 TAB", pack_size="15S")
+    inv.add_or_update_batch(db, item, batch_no="B1", quantity=3, unit="PACK", movement_type="OPENING_STOCK", mrp="30")
+    cust = customer_service.create_customer(db, name="Asha", mobile="9876543210")
+    sales_service.create_sale(db, lines=[{"item_id": item.id, "quantity": 1}], customer_id=cust.id)
+    db.commit()
+    data_reset.wipe(db, keep_customers=True)
+    db.commit()
+    assert db.query(Item).count() == 0 and db.query(Customer).count() == 1
+    nxt = customer_service.create_customer(db, name="Ravi", mobile="9876500000")
+    assert nxt.customer_id != cust.customer_id                                        # the customer series continues

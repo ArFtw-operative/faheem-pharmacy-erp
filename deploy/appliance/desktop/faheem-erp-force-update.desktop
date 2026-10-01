@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Force Update ERP
+Comment=Install the newest fixes from prod right now (backup first; data and settings kept)
+Exec=/opt/faheem-erp/current/bin/faheem-admin force-update
+Icon=/opt/faheem-erp/current/kiosk/icon.png
+Terminal=false
+Categories=Office;Finance;

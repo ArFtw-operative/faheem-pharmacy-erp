@@ -7,90 +7,74 @@ import { $, api, esc, fmtDateTime } from "erp/core";
 import { WA_ICON, normalizePhone } from "erp/whatsapp";
 
 const STATE = {
-  CONNECTED: ["Connected", "ok"], DISCONNECTED: ["Disconnected", "bad"], QR_REQUIRED: ["QR required", "warn"],
-  STARTING: ["Starting…", "warn"], NOT_CONFIGURED: ["Not set up", "bad"], ERROR: ["Gateway not reachable", "bad"],
+  CONNECTED: ["Connected", "ok"], DISCONNECTED: ["Disconnected", "bad"], QR_REQUIRED: ["Waiting for the phone to scan the QR code", "warn"],
+  STARTING: ["Starting…", "warn"], NOT_CONFIGURED: ["Not set up", "bad"], ERROR: ["Gateway error", "bad"],
 };
 
 export function create(ctx, params, root) {
   let data = null, poll = null, previewTimer = null, connectUntil = 0;
   ctx.setTitle("Settings");
-  root.innerHTML = `<div class="settings">
-    <nav class="set-nav"><h2>Settings</h2><button type="button" class="on" data-sec="whatsapp">${WA_ICON} WhatsApp Invoicing</button></nav>
-    <section class="set-body"><p class="muted">Loading…</p></section></div>`;
-  const body = $(".set-body", root);
+  root.innerHTML = `<div class="masters erpset">
+    <div class="mtabs" role="tablist"><button type="button" class="on" role="tab">WhatsApp invoicing</button>
+      <span class="hint">Administrator only · invoices only, never bulk or promotional messages</span></div>
+    <section class="set-scroll"><p class="muted es-pad">Loading…</p></section></div>`;
+  const body = $(".set-scroll", root);
 
   async function load() {
     try { data = await api("/api/erp/settings/whatsapp"); render(); }
     catch (err) { body.innerHTML = `<p class="bad">${esc(err.message)}</p>`; }
   }
 
+  const sec = (title, right, inner, foot = "") => `<section class="es">
+      <header><b>${title}</b>${right ? `<span>${right}</span>` : ""}</header>
+      <div class="es-body">${inner}</div>${foot ? `<footer>${foot}</footer>` : ""}</section>`;
+  const row = (label, value) => `<div class="es-row"><label>${label}</label><div>${value}</div></div>`;
+
   function render() {
     const c = data.connection, [label, tone] = STATE[c.state] || [c.state, "bad"];
     const q = data.queue || {};
+    const canLink = c.state !== "NOT_CONFIGURED";
     body.innerHTML = `
-      <header class="set-head"><h1>${WA_ICON} WhatsApp Invoicing</h1>
-        <p class="muted">Customers who ask for it get their invoice PDF on WhatsApp from the pharmacy's own number. Only invoices — never bulk or promotional messages.</p></header>
+      ${sec("Connection", "",
+        row("Status", `<b class="st-${tone}">${esc(label)}</b>`)
+        + row("Detail", `<span>${esc(c.detail || "—")}</span>`)
+        + (c.state === "QR_REQUIRED" && c.qr ? row("Link the phone", `<div class="es-qr"><img src="${esc(c.qr)}" alt="WhatsApp pairing QR code" width="220" height="220">
+            <ol><li>On the pharmacy phone open WhatsApp.</li><li>Settings → Linked devices → Link a device.</li><li>Point the phone at this code. This screen updates when it is linked.</li></ol></div>`) : "")
+        + (c.state === "NOT_CONFIGURED" ? row("Setup", `<span>The WhatsApp gateway is off on this PC. Turn it on in <b>ERP Control Center → Settings → WhatsApp invoices</b>
+            (or <code>sudo faheem-erp whatsapp enable</code>), then press Refresh.</span>`) : "")
+        + row("Session", "Survives restarts — after a reboot it reconnects by itself while the phone keeps the link."),
+        `<button type="button" class="btn primary" data-act="connect" ${canLink ? "" : "disabled"}>${c.state === "CONNECTED" ? "Reconnect" : c.state === "QR_REQUIRED" ? "New QR code" : "Connect WhatsApp"}</button>
+         <button type="button" class="btn" data-act="logout" ${c.state === "CONNECTED" || c.state === "QR_REQUIRED" ? "" : "disabled"}>Log out WhatsApp</button>
+         <button type="button" class="btn" data-act="refresh">Refresh <kbd data-shortcut="settings.refresh">${esc(keys.keyFor("settings.refresh"))}</kbd></button>`)}
 
-      <div class="set-card">
-        <h3>Connection <span class="wa-pill ${tone}">${label}</span></h3>
-        <p class="muted">${esc(c.detail || "")}</p>
-        ${c.state === "QR_REQUIRED" && c.qr ? `<div class="wa-qr"><img src="${esc(c.qr)}" alt="WhatsApp pairing QR code" width="240" height="240">
-          <ol><li>On the pharmacy phone open <b>WhatsApp</b>.</li><li>Tap <b>⋮ / Settings → Linked devices → Link a device</b>.</li>
-          <li>Point the phone at this code. This page updates by itself when it is linked.</li></ol></div>` : ""}
-        ${c.state === "NOT_CONFIGURED" ? `<div class="hint-box"><b>Set up the WhatsApp gateway on the server first</b><br>
-          Open <b>ERP Control Center → Settings → WhatsApp invoices</b> on the pharmacy PC, or run
-          <code>sudo faheem-erp whatsapp enable</code>. The gateway runs on this PC only and is never reachable from the network.
-          Then return here to link the phone.</div>` : ""}
-        <div class="set-actions">
-          <button type="button" class="btn primary" data-act="connect" ${c.state === "NOT_CONFIGURED" ? "disabled" : ""}>${c.state === "CONNECTED" ? "Reconnect" : c.state === "QR_REQUIRED" ? "New QR code" : "Connect WhatsApp"}</button>
-          <button type="button" class="btn danger" data-act="logout" ${c.state === "CONNECTED" || c.state === "QR_REQUIRED" ? "" : "disabled"}>Log out WhatsApp</button>
-          <button type="button" class="btn" data-act="refresh">Refresh <kbd data-shortcut="settings.refresh">${esc(keys.keyFor("settings.refresh"))}</kbd></button>
-        </div>
-        <p class="muted small">The linked session survives restarts: after a reboot it reconnects by itself, no new QR needed while the phone keeps the link.</p>
-      </div>
+      ${sec("Invoice message", "",
+        row("Message", `<textarea class="wa-template" rows="3" maxlength="1000">${esc(data.template)}</textarea>`)
+        + row("Insert field", Object.entries(data.placeholders).map(([k, v]) => `<button type="button" class="es-field" data-ph="${k}" title="${esc(v)}">{${k}}</button>`).join(""))
+        + row("Preview", `<div class="es-preview">…</div>`),
+        `<button type="button" class="btn primary" data-act="save-template">Save message</button>
+         <button type="button" class="btn" data-act="default-template">Use default</button>`)}
 
-      <div class="set-card">
-        <h3>Invoice message</h3>
-        <textarea class="wa-template" rows="3" maxlength="1000">${esc(data.template)}</textarea>
-        <p class="small">Insert: ${Object.entries(data.placeholders).map(([k, v]) => `<button type="button" class="chip ph" data-ph="${k}" title="${esc(v)}">{${k}}</button>`).join(" ")}</p>
-        <div class="wa-preview"><span class="muted small">Preview</span><div class="wa-bubble">…</div></div>
-        <div class="set-actions"><button type="button" class="btn primary" data-act="save-template">Save message</button>
-          <button type="button" class="btn" data-act="default-template">Use default</button></div>
-      </div>
+      ${sec("Image sent with invoices", data.ad.updated_at ? `replaced ${esc(fmtDateTime(data.ad.updated_at + "Z"))}` : "",
+        row("Image", `<div class="es-img">${data.ad.has_image ? `<img src="/api/erp/settings/whatsapp/image?t=${encodeURIComponent(data.ad.updated_at)}" alt="Image sent with invoices">` : '<span class="muted">No image</span>'}</div>
+            <span class="muted small">PNG / JPEG / WebP up to 2 MB, sent after the invoice only when a customer asks for it.</span>`)
+        + row("Send", `<label class="es-chk"><input type="checkbox" class="ad-enabled" ${data.ad.enabled ? "checked" : ""} ${data.ad.has_image ? "" : "disabled"}> Send this image with invoices</label>`)
+        + row("Caption", `<input class="ad-caption" maxlength="300" value="${esc(data.ad.caption)}" placeholder="e.g. Free BP check every Sunday">`),
+        `<label class="btn">${data.ad.has_image ? "Replace image" : "Upload image"}<input type="file" class="ad-file" accept="image/png,image/jpeg,image/webp" hidden></label>
+         ${data.ad.has_image ? '<button type="button" class="btn" data-act="remove-image">Remove image</button>' : ""}
+         <button type="button" class="btn primary" data-act="save-ad">Save</button>`)}
 
-      <div class="set-card">
-        <h3>Image sent with invoices</h3>
-        <p class="muted small">An offer or notice (PNG / JPEG / WebP, up to 2 MB) attached after the invoice — only when a customer asks for their invoice. Replace it any time; earlier invoices keep what they were sent with.</p>
-        <div class="wa-ad">
-          <div class="wa-ad-img">${data.ad.has_image ? `<img src="/api/erp/settings/whatsapp/image?t=${encodeURIComponent(data.ad.updated_at)}" alt="Image sent with invoices">` : '<span class="muted">No image</span>'}</div>
-          <div class="wa-ad-form">
-            <label class="chk"><input type="checkbox" class="ad-enabled" ${data.ad.enabled ? "checked" : ""} ${data.ad.has_image ? "" : "disabled"}> Send this image with invoices</label>
-            <label>Caption<input class="ad-caption" maxlength="300" value="${esc(data.ad.caption)}" placeholder="e.g. Free BP check every Sunday"></label>
-            <div class="set-actions">
-              <label class="btn">${data.ad.has_image ? "Replace image" : "Upload image"}<input type="file" class="ad-file" accept="image/png,image/jpeg,image/webp" hidden></label>
-              ${data.ad.has_image ? '<button type="button" class="btn danger" data-act="remove-image">Remove</button>' : ""}
-              <button type="button" class="btn primary" data-act="save-ad">Save</button>
-            </div>
-            ${data.ad.updated_at ? `<p class="muted small">Image replaced ${esc(fmtDateTime(data.ad.updated_at + "Z"))}</p>` : ""}
-          </div>
-        </div>
-      </div>
+      ${sec("Test", "",
+        row("Mobile", `<input class="test-phone" inputmode="tel" maxlength="16" placeholder="98765 43210">
+            <span class="muted small">Sends the latest bill's invoice, with the message and image above.</span>`),
+        `<button type="button" class="btn" data-act="test" ${c.state === "CONNECTED" ? "" : "disabled"}>Send test</button>`)}
 
-      <div class="set-card">
-        <h3>Test</h3>
-        <p class="muted small">Sends the latest bill's invoice (with the message and image above) to a number you choose — e.g. your own.</p>
-        <div class="set-actions"><input class="test-phone" inputmode="tel" maxlength="16" placeholder="98765 43210">
-          <button type="button" class="btn wa-btn" data-act="test" ${c.state === "CONNECTED" ? "" : "disabled"}>${WA_ICON} Send test</button></div>
-      </div>
-
-      <div class="set-card">
-        <h3>Activity <span class="muted small">sent ${q.sent || 0} · queued ${(q.queued || 0) + (q.sending || 0)} · failed ${q.failed || 0}</span></h3>
-        ${data.recent.length ? `<table class="kvtab wa-log"><thead><tr><th>Invoice</th><th>To</th><th>Status</th><th>When</th><th>Note</th></tr></thead><tbody>
+      ${sec("Activity", `sent ${q.sent || 0} · queued ${(q.queued || 0) + (q.sending || 0)} · failed ${q.failed || 0}`,
+        data.recent.length ? `<div class="grid es-grid"><table><colgroup><col style="width:170px"><col style="width:140px"><col style="width:110px"><col style="width:150px"><col></colgroup>
+          <thead><tr><th>Invoice</th><th>To</th><th>Status</th><th>When</th><th>Note</th></tr></thead><tbody>
           ${data.recent.map((m) => `<tr><td class="mono">${esc(m.invoice_no)}</td><td class="mono">${esc(m.customer_phone)}</td>
-            <td><span class="wa-st wa-${m.whatsapp_status}">${esc(m.whatsapp_status)}</span>${m.is_resend ? ' <small class="muted">resend</small>' : ""}</td>
-            <td class="muted">${esc(fmtDateTime(m.sent_at || m.queued_at))}</td><td class="small ${m.whatsapp_status === "failed" ? "bad" : "muted"}">${esc(m.last_error || "")}</td></tr>`).join("")}
-          </tbody></table>` : '<p class="muted">Nothing sent yet.</p>'}
-      </div>`;
+            <td class="st-${m.whatsapp_status === "sent" ? "ok" : m.whatsapp_status === "failed" ? "bad" : "warn"}">${esc(m.whatsapp_status)}${m.is_resend ? " · resend" : ""}</td>
+            <td>${esc(fmtDateTime(m.sent_at || m.queued_at))}</td><td class="${m.whatsapp_status === "failed" ? "st-bad" : "muted"}">${esc(m.last_error || "")}</td></tr>`).join("")}
+          </tbody></table></div>` : '<p class="muted es-pad">Nothing sent yet.</p>')}`;
     preview();
     // after Connect, keep checking for a while even through "disconnected": the session is booting
     if (c.state === "QR_REQUIRED" || c.state === "STARTING" || Date.now() < connectUntil) startPoll(); else stopPoll();
@@ -117,8 +101,8 @@ export function create(ctx, params, root) {
       if (!t) return;
       try {
         const d = await api("/api/erp/settings/whatsapp/preview", { method: "POST", body: { template: t.value } });
-        $(".wa-bubble", body).textContent = d.text;
-      } catch (err) { $(".wa-bubble", body).textContent = err.message; }
+        $(".es-preview", body).textContent = d.text;
+      } catch (err) { $(".es-preview", body).textContent = err.message; }
     }, 250);
   }
 
@@ -127,7 +111,7 @@ export function create(ctx, params, root) {
       if (name === "refresh") return load();
       if (name === "connect") {
         const btn = $('[data-act="connect"]', body);
-        if (btn) { btn.disabled = true; btn.textContent = "Starting… (up to a minute)"; }
+        if (btn) { btn.disabled = true; btn.textContent = "Starting…"; }
         ctx.status("Starting WhatsApp — the QR code appears here in a moment…");
         connectUntil = Date.now() + 180000;
         data = await api("/api/erp/settings/whatsapp/connect", { method: "POST" }); render();

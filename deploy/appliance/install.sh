@@ -119,6 +119,8 @@ main() {
   uid="$(id -u faheem-erp)" gid="$(id -g faheem-erp)"
   # the desktop account that logs in automatically and gets the ERP: yours, unless --counter-user
   admin="${SUDO_USER:-}"; [ "$admin" = root ] && admin=""
+  [ -n "$admin" ] || admin="$(sed -n 's/^FAHEEM_ADMIN_USER=//p' "$ENV_FILE" 2>/dev/null | tail -1)"
+  [ -n "$counter_user" ] || counter_user="$(sed -n 's/^FAHEEM_COUNTER_USER=//p' "$ENV_FILE" 2>/dev/null | tail -1)"
   desk="${counter_user:-$admin}"
   if [ -n "$counter_user" ] && ! id "$counter_user" >/dev/null 2>&1; then
     useradd --create-home --shell /bin/bash --comment "Faheem Pharmacy counter (automatic login)" "$counter_user"
@@ -158,6 +160,7 @@ main() {
   fi
 
   step "Configuration"
+  existing=0; [ -f "$ENV_FILE" ] && existing=1
 
   if [ ! -f "$ENV_FILE" ]; then
 
@@ -245,7 +248,8 @@ EOF
     [ -z "$import" ] || warn "--import-sqlite ignored: this installation already has a database"
   fi
 
-  if [ -z "$whatsapp" ]; then whatsapp=0; [ "$interactive" = 1 ] && ask_yn "Enable WhatsApp invoices (customer-requested bills only)?" n && whatsapp=1 || true; fi
+  if [ -z "$whatsapp" ] && [ "$existing" = 1 ]; then whatsapp=0                # keep the current choice
+  elif [ -z "$whatsapp" ]; then whatsapp=0; [ "$interactive" = 1 ] && ask_yn "Enable WhatsApp invoices (customer-requested bills only)?" n && whatsapp=1 || true; fi
   [ "$whatsapp" = 1 ] && { env_set WHATSAPP_ENABLED true; install -d -m 750 "$FAHEEM_DATA/whatsapp/tokens" "$FAHEEM_DATA/whatsapp/userdata"; }
 
   # download the other images here, with progress, so the first start is not a silent wait
@@ -259,6 +263,9 @@ EOF
   ok "ERP running on http://127.0.0.1:$port"
 
   step "Network access"
+  if [ -z "$lan" ] && [ "$existing" = 1 ]; then
+    lan=0; grep -qi '^LAN_ACCESS=true' "$ENV_FILE" && lan=1; static=${static:-0}      # keep the current choice
+  fi
   if [ -z "$lan" ]; then lan=1; [ "$interactive" = 1 ] && { ask_yn "Allow other PCs / phones on the shop network or store VPN to use the ERP (HTTPS)?" y || lan=0; }; fi
   if [ "$lan" = 1 ]; then
     "$FAHEEM_HOME/current/bin/network.sh" lan enable --yes
@@ -314,15 +321,17 @@ github_latest() {     # newest published GitHub release (vX.Y.Z → X.Y.Z); the 
   curl -fsS -m 20 -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
     | sed -n 's/.*"tag_name": *"v\{0,1\}\([0-9][0-9.]*\)".*/\1/p' | head -1
 }
-source_version() {    # APP_VERSION on the prod branch
-  curl -fsS -m 20 "https://raw.githubusercontent.com/$REPO/prod/app/config.py" \
+source_version() {    # APP_VERSION of the commit being built (FAHEEM_SOURCE_REF) or of the prod branch
+  curl -fsS -m 20 "https://raw.githubusercontent.com/$REPO/${FAHEEM_SOURCE_REF:-prod}/app/config.py" \
     | sed -n 's/^APP_VERSION: str = "\([0-9][0-9.]*\)".*/\1/p' | grep .
 }
 build_from_source() {   # the same image the release workflow builds, made here from the prod branch
   local v="$1" dir sha
   dir="$(mktemp -d)"
-  sha="$(curl -fsS -m 20 -H "Accept: application/vnd.github.sha" "https://api.github.com/repos/$REPO/commits/prod" 2>/dev/null | cut -c1-7)"
-  curl -fsSL -m 300 "https://codeload.github.com/$REPO/tar.gz/refs/heads/prod" | tar -xz -C "$dir" --strip-components=1 \
+  local ref="${FAHEEM_SOURCE_REF:-}"
+  [ -n "$ref" ] || ref="$(curl -fsS -m 20 -H "Accept: application/vnd.github.sha" "https://api.github.com/repos/$REPO/commits/prod" 2>/dev/null || true)"
+  sha="${ref:0:7}"
+  curl -fsSL -m 300 "https://codeload.github.com/$REPO/tar.gz/${ref:-refs/heads/prod}" | tar -xz -C "$dir" --strip-components=1 \
     || die "could not download the source of $REPO"
   ok "Source downloaded (prod${sha:+ @ $sha}); building the image…"
   docker build --pull -q -t "$IMAGE_DEFAULT:$v" --build-arg APP_VERSION="$v" --build-arg GIT_COMMIT="${sha:-source}" \
@@ -405,14 +414,21 @@ setup_kiosk() {   # setup_kiosk <desktop account>: Chromium, automatic login, th
   fi
   home="$(getent passwd "$desk" | cut -d: -f6)"
   install -d -o "$desk" -g "$(id -gn "$desk")" "$home/.config" "$home/.config/autostart"
-  install -m 644 -o "$desk" -g "$(id -gn "$desk")" "$FAHEEM_HOME/current/kiosk/faheem-erp-app-autostart.desktop" "$home/.config/autostart/faheem-erp-app.desktop"
+  # (a re-run keeps an "off" choice made in Settings)
+  [ -f "$home/.config/autostart/faheem-erp-app.desktop" ] && grep -q '^Hidden=true' "$home/.config/autostart/faheem-erp-app.desktop" \
+    || install -m 644 -o "$desk" -g "$(id -gn "$desk")" "$FAHEEM_HOME/current/kiosk/faheem-erp-app-autostart.desktop" "$home/.config/autostart/faheem-erp-app.desktop"
   if [ -n "$counter_user" ] && command -v dbus-run-session >/dev/null; then   # a password-less account must never lock
     runuser -u "$desk" -- dbus-run-session -- sh -c 'gsettings set org.gnome.desktop.screensaver lock-enabled false;
       gsettings set org.gnome.desktop.lockdown disable-lock-screen true; gsettings set org.gnome.desktop.session idle-delay 0;
       gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type nothing' >/dev/null 2>&1 || true
   fi
-  "$FAHEEM_HOME/current/bin/settings.sh" set auto-login on >/dev/null && ok "Automatic login of '$desk'; the ERP opens full screen at login" \
-    || warn "automatic login could not be set (no supported login manager?)"
+  if [ "$existing" = 1 ] && [ "$("$FAHEEM_HOME/current/bin/settings.sh" get auto-login 2>/dev/null)" = off ] \
+     && ! grep -q '^AutomaticLogin=faheem$' /etc/gdm3/custom.conf /etc/gdm3/daemon.conf 2>/dev/null; then
+    ok "Automatic login stays off (Settings)"
+  else
+    "$FAHEEM_HOME/current/bin/settings.sh" set auto-login on >/dev/null && ok "Automatic login of '$desk'; the ERP opens full screen at login" \
+      || warn "automatic login could not be set (no supported login manager?)"
+  fi
 }
 
 main "$@"
