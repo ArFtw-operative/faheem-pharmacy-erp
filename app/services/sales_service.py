@@ -142,6 +142,7 @@ def _add_manual_lines(db: Session, sale: Sale, lines: list[dict[str, Any]]) -> t
         gross_total += gross
         sale_item = SaleItem(
             sale_id=sale.id, item_id=item.id if item else None, batch_id=None, product_name=name,
+            item_code=" ".join(str(line.get("code") if line.get("code") is not None else (item.article_id if item else "") or "").split())[:40],
             batch_no=" ".join(str(line.get("batch") or "").split())[:60], expiry_date=expiry,
             quantity=qty, mrp=money(rate), rate=money(rate),
             pack_mrp=money(rate), units_per_pack=1, pack_size=str(line.get("pack") or (item.pack_size if item else "") or "")[:60], base_unit="UNIT",

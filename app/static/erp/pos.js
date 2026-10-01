@@ -235,15 +235,15 @@ export function create(ctx, params, root, saved) {
     const bad = problem(l);
     const f = (field, value, cls, extra = "") => `<input class="mi ${cls}" data-f="${field}" data-i="${i}" value="${esc(value)}" ${extra}>`;
     return `<tr data-i="${i}" class="manual-row${i === sel ? " sel" : ""}${bad ? " bad" : ""}" title="${esc(bad)}">
-      <td class="num muted">${i + 1}</td><td class="mono${l.code ? "" : " muted"}">${esc(l.code || "TYPED")}</td>
+      <td class="num muted">${i + 1}</td><td>${f("code", l.code || "", "mono mi-code", 'maxlength="40" placeholder="code" aria-label="Code"')}</td>
       <td class="prod">${f("name", l.name, "mi-name", 'maxlength="250" aria-label="Item"')}</td>
       <td>${f("batch", l.batch || "", "mi-batch", 'maxlength="60" placeholder="—" aria-label="Batch"')}</td>
       <td>${f("expiry", l.expiry || "", "mi-exp", 'maxlength="10" placeholder="MM/YY" aria-label="Expiry"')}</td>
-      <td class="num">1</td>
+      <td>${f("pack", l.pack || "", "mi-pack", 'maxlength="60" placeholder="pack" aria-label="Pack"')}</td>
       <td class="num">${f("qty", l.qty || "", "num mi-qty", 'inputmode="numeric" aria-label="Quantity"')}</td>
       <td class="num">${f("rate", num(l.rate) || "", "num mi-rate", 'inputmode="decimal" placeholder="rate" aria-label="Rate"')}</td>
       <td class="num">${f("disc", num(l.disc) || "", "num mi-disc", `inputmode="decimal" placeholder="0" aria-label="Discount %" ${CAN["sales.discount"] ? "" : "disabled"}`)}</td>
-      <td class="num strong mi-amt">${money(lineNet(l))}</td></tr>`;
+      <td class="num">${f("amount", lineNet(l) ? money(lineNet(l)).replace(/,/g, "") : "", "num strong mi-amt", 'inputmode="decimal" placeholder="0.00" aria-label="Amount"')}</td></tr>`;
   }
   function focusField(i, field) {
     let el = $(`input.mi[data-i="${i}"][data-f="${field}"]`, tbody);
@@ -1138,7 +1138,7 @@ export function create(ctx, params, root, saved) {
     const body = {
       invoice_type: S.manual ? "MANUAL" : "INVENTORY",
       lines: S.lines.map((l) => (l.manual
-        ? { name: l.name, item_id: l.item_id || null, pack: l.pack || "", batch: l.batch || "", expiry: l.expiry || "",
+        ? { name: l.name, item_id: l.item_id || null, code: l.code || "", pack: l.pack || "", batch: l.batch || "", expiry: l.expiry || "",
             quantity: l.qty, rate: num(l.rate), discount_pct: CAN["sales.discount"] ? num(l.disc) : 0 }
         : { item_id: l.item_id, batch_id: l.batch_id || null, quantity: l.qty, discount_pct: CAN["sales.discount"] ? num(l.disc) : 0 })),
       customer_id: S.customer ? S.customer.id : null,
@@ -1231,6 +1231,16 @@ export function create(ctx, params, root, saved) {
     const v = t.value, field = t.dataset.f;
     let err = "";
     if (field === "name") { l.name = v.slice(0, 250); if (!v.trim()) err = "Enter the item name"; }
+    else if (field === "code") l.code = v.trim().slice(0, 40);
+    else if (field === "pack") l.pack = v.trim().slice(0, 60);
+    else if (field === "amount") {                      // the line's amount: the rate follows (after its discount)
+      const a = Number(v.replace(/,/g, "")), keep = 1 - num(l.disc) / 100;
+      if (a > 0 && l.qty > 0 && keep > 0) {
+        l.rate = r2(a / (l.qty * keep));
+        const rate = $(`input.mi[data-i="${i}"][data-f="rate"]`, tbody);
+        if (rate) rate.value = l.rate;
+      } else err = "Enter the amount (and a quantity first)";
+    }
     else if (field === "batch") l.batch = v.trim().slice(0, 60);
     else if (field === "expiry") { l.expiry = v.trim(); if (!expOk(l.expiry)) err = "Expiry as MM/YY, e.g. 05/28"; }
     else if (field === "qty") { const n = Number(v.trim()); l.qty = Number.isSafeInteger(n) && n > 0 ? n : 0; if (!l.qty) err = "Enter a whole quantity"; }
@@ -1239,7 +1249,7 @@ export function create(ctx, params, root, saved) {
     t.classList.toggle("bad", !!err && field !== "expiry");      // a half-typed expiry is judged when the field is left
     t.dataset.err = err;
     const tr = t.closest("tr"), bad = problem(l);
-    $(".mi-amt", tr).textContent = money(lineNet(l));
+    if (field !== "amount") $(".mi-amt", tr).value = lineNet(l) ? money(lineNet(l)).replace(/,/g, "") : "";
     tr.classList.toggle("bad", !!bad); tr.title = bad;
     renderTotals();
   });

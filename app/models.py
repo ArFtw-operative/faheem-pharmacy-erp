@@ -474,6 +474,7 @@ class SaleItem(Base):
     item_id: Mapped[int | None] = mapped_column(ForeignKey("items.id"))
     batch_id: Mapped[int | None] = mapped_column(ForeignKey("batches.id"))
     product_name: Mapped[str] = mapped_column(String(250))
+    item_code: Mapped[str] = mapped_column(String(40), default="", server_default="")   # typed on manual-bill lines
     batch_no: Mapped[str] = mapped_column(String(60), default="")
     expiry_date: Mapped[date | None] = mapped_column(Date)
     # base units sold from this batch; ``mrp``/``rate`` are per base unit and

@@ -3,6 +3,14 @@
 Release notes for Faheem Pharmacy. Versions follow semantic versioning; every release
 lists its database migrations. Upgrades keep all business history (see docs/UPGRADES.md).
 
+## 1.5.1 — 2026-10-01
+
+- **Manual bill:** every column of a line is a field — code, item, batch, expiry, pack, quantity, rate,
+  discount and amount (typing the amount sets the rate, after the line's discount). The code is stored
+  on the line (defaults to the product's code when chosen from inventory).
+
+**Migrations:** `a7c9e1f3b5d8` adds `sale_items.item_code` (additive). **Fixtures:** `tests/fixtures/releases/1.5.1.db`.
+
 ## 1.5.0 — 2026-10-01
 
 - **Settings → Invoice Store:** premium A4 invoice templates for WhatsApp (with / without stamp; printing

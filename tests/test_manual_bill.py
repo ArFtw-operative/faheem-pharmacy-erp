@@ -118,3 +118,18 @@ def test_manual_lines_keep_batch_and_expiry_and_reopen_as_manual_for_editing(cli
     assert edited.invoice_no == sale.invoice_no and edited.total == Decimal("380.00")
     assert (edited.items[0].quantity, edited.items[0].batch_no, edited.items[0].expiry_date) == (5, "DB45", date(2028, 6, 1))
     assert db.query(InventoryMovement).count() == moves                                     # still never touches stock
+
+
+def test_manual_line_code_is_kept_and_defaults_to_the_product_code(client, db):
+    login(client)
+    item = inv.create_item(db, name="PAN 40 TAB", pack_size="15S")
+    db.commit()
+    sale = sales_service.create_sale(db, invoice_type="MANUAL", lines=[
+        {"item_id": item.id, "name": "PAN 40 TAB", "quantity": 1, "rate": "12"},                 # no code sent
+        {"item_id": item.id, "name": "PAN 40 TAB", "code": "PAN-X1", "quantity": 1, "rate": "12"},
+        {"name": "Crepe bandage", "code": " CB 10 ", "pack": "1 roll", "quantity": 1, "rate": "85"}])
+    db.commit()
+    assert [l.item_code for l in sale.items] == [item.article_id, "PAN-X1", "CB 10"]
+    assert sale.items[2].pack_size == "1 roll"
+    lines = client.get(f"/api/erp/sales/{sale.id}/edit").json()["lines"]
+    assert [l["code"] for l in lines] == [item.article_id, "PAN-X1", "CB 10"] and lines[2]["pack"] == "1 roll"
