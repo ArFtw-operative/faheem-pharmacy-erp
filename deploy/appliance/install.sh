@@ -233,8 +233,13 @@ EOF
   if [ -z "$whatsapp" ]; then whatsapp=0; [ "$interactive" = 1 ] && ask_yn "Enable WhatsApp invoices (customer-requested bills only)?" n && whatsapp=1 || true; fi
   [ "$whatsapp" = 1 ] && { env_set WHATSAPP_ENABLED true; install -d -m 750 "$FAHEEM_DATA/whatsapp/tokens" "$FAHEEM_DATA/whatsapp/userdata"; }
 
+  # download the other images here, with progress, so the first start is not a silent wait
+  for img in $(dc config --images 2>/dev/null | sort -u | grep -v "^$IMAGE_DEFAULT:"); do
+    docker image inspect "$img" >/dev/null 2>&1 || { log "Downloading $img…"; docker pull "$img" || die "could not download $img"; }
+  done
   systemctl enable faheem-erp.service faheem-erp-maintenance.timer faheem-erp-boot-check.timer >/dev/null
-  systemctl restart faheem-erp.service || die "the ERP did not start — run: sudo faheem-erp doctor"
+  log "Starting the ERP (the first start takes a minute or two)…"
+  systemctl restart faheem-erp.service || die "the ERP did not start — see: sudo journalctl -u faheem-erp -n 50 ; sudo faheem-erp doctor"
   systemctl start faheem-erp-maintenance.timer faheem-erp-boot-check.timer
   ok "ERP running on http://127.0.0.1:$port"
 
