@@ -3,6 +3,16 @@
 Release notes for Faheem Pharmacy. Versions follow semantic versioning; every release
 lists its database migrations. Upgrades keep all business history (see docs/UPGRADES.md).
 
+## 1.6.0 — 2026-10-01
+
+- **Crash recovery ("graceful snaps"):** open tabs and every unfinished POS bill (lines, customer,
+  discounts, payment entered, manual-bill fields) are saved to the database a moment after each change,
+  every 15 s and when the page closes — per user and counter. After a crash, power cut or reboot the
+  next login reopens the same tabs and bills and says so in the status bar. A bill that was completed
+  just before the crash is recognised and not billed twice.
+
+**Migrations:** `b8d0f2a4c6e9` adds `workspace_snapshots` (additive). **Fixtures:** `tests/fixtures/releases/1.6.0.db`.
+
 ## 1.5.2 — 2026-10-01
 
 - **WhatsApp number check:** before an invoice is queued the customer's primary mobile is checked with

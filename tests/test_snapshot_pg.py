@@ -25,7 +25,7 @@ def pg():
     Base.metadata.create_all(engine)
     with engine.begin() as c:
         c.execute(text("CREATE TABLE alembic_version (version_num varchar(32) PRIMARY KEY)"))
-        c.execute(text("INSERT INTO alembic_version VALUES ('a7c9e1f3b5d8')"))
+        c.execute(text("INSERT INTO alembic_version VALUES ('b8d0f2a4c6e9')"))
     with Session(engine) as db:
         from app.services.category_service import DEFAULTS as DEFAULT_CATEGORIES
         from app.models import Category
@@ -51,7 +51,7 @@ def test_postgres_snapshot_restores_exactly_and_drills(pg, tmp_path, monkeypatch
     assert before["count:sales"] == 1 and before["check:ledger_mismatched_batches"] == 0
     m = snapshot.create("manual", db=pg, uploads=up, store=store)
     assert m["engine"] == "postgresql" and m["fingerprint"] == before and (store / m["id"] / "database.dump").exists()
-    assert m["schema"] == ["a7c9e1f3b5d8"]
+    assert m["schema"] == ["b8d0f2a4c6e9"]
     pg.execute("DELETE FROM sale_payments"); pg.execute("DELETE FROM inventory_movements WHERE movement_type = 'SALE'")
     assert snapshot.fingerprint(pg) != before
     out = snapshot.restore(m["id"], db=pg, uploads=up, store=store)
@@ -82,7 +82,7 @@ def test_postgres_fresh_install_upgrade_rehearsal_and_rollback(tmp_path, monkeyp
     head, = up.code_heads()
     from alembic.script import ScriptDirectory
     prev = ScriptDirectory.from_config(up._alembic_config()).get_revision(head).down_revision
-    db.execute('ALTER TABLE sale_items DROP COLUMN "item_code"')       # the newest migration's column
+    db.execute('DROP TABLE workspace_snapshots')                         # the newest migration's table
     db.execute("UPDATE alembic_version SET version_num = ?", (prev,))
     db.execute("INSERT INTO categories (code, name, is_active, sort_order, created_at) VALUES ('MEDICINE', 'Medicine', true, 10, now())")
     assert up.state(db)["state"] == "pending"

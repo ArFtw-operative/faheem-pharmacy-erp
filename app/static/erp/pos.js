@@ -41,6 +41,14 @@ export function create(ctx, params, root, saved) {
   // opened for an exchange: the returning customer is already on the new bill
   if (!(saved && saved.lines) && params && params.customer) { S.customer = params.customer; S.exchangeNote = params.note || ""; }
   S.saleType = saleType(saved?.saleType ?? saved?.customer?.customer_type ?? saved?.customer?.type);
+  // a bill restored after a crash may have been completed just before it: never bill it twice
+  if (saved && saved.lines && saved.lines.length && saved.requestId && !saved.editing) {
+    api(`/api/erp/sales/by-request/${encodeURIComponent(saved.requestId)}`).then((done) => {
+      if (S.requestId !== saved.requestId) return;
+      S = blank(); sel = -1; render(); ctx.save(S);
+      ctx.status(`This bill was already completed as ${done.invoice_no} (₹${money(done.total)}) before the restart — find it in Sales`, "warn");
+    }).catch(() => { /* not completed: carry on with the restored bill */ });
+  }
   let sel = S.lines.length ? S.lines.length - 1 : -1;
   let editing = null;         // index of the line whose qty is being edited
   let discEditing = null;     // index of the line whose discount % is being edited

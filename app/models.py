@@ -860,3 +860,16 @@ class WhatsAppMessage(Base):
     next_attempt_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+
+
+class WorkspaceSnapshot(Base):
+    """The open work of one user at one counter (tabs, unfinished bills), saved continuously so a
+    crash or power cut never loses it: reopened at the next login."""
+    __tablename__ = "workspace_snapshots"
+    __table_args__ = (UniqueConstraint("user_id", "terminal", name="uq_workspace_user_terminal"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    terminal: Mapped[str] = mapped_column(String(64), default="")
+    data: Mapped[str] = mapped_column(Text, default="{}")
+    saved_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

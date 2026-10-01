@@ -36,7 +36,7 @@ SECRET_KEY: str = os.environ.get(
 SESSION_COOKIE: str = "pharmacy_session"
 
 APP_NAME: str = "Faheem Pharmacy"
-APP_VERSION: str = "1.5.2"
+APP_VERSION: str = "1.6.0"
 GIT_COMMIT: str = os.environ.get("GIT_COMMIT", "development")
 BUILD_DATE: str = os.environ.get("BUILD_DATE", "development")
 # Full build version (e.g. 0.1.0.7) written by the Windows build; falls back to APP_VERSION.

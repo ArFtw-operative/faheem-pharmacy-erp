@@ -208,6 +208,7 @@ def create_app() -> FastAPI:
         stock_history,
         whatsapp,
         invoice_store,
+        workspace,
     )
 
     for router in (
@@ -225,6 +226,7 @@ def create_app() -> FastAPI:
         adjustments.router,
         whatsapp.router,
         invoice_store.router,
+        workspace.router,
     ):
         app.include_router(router)
 

@@ -43,8 +43,55 @@ function renderKeys() {
   $("#st-keys").innerHTML = hints.map(([k, label]) => `<span><kbd>${esc(k)}</kbd>${esc(label)}</span>`).join("");
 }
 
+// ------------------------------------------------------------------ durable workspace (crash recovery)
+// Open tabs and each tab's unfinished state (POS bills…) are written to the server a moment after every
+// change, every 15 s and when the page closes — committed to the database, so a crash, power cut or
+// reboot loses nothing: the next login at this counter reopens the same work.
+const TERMINAL = (() => {
+  let t = store.get("terminal", "");
+  if (!t) {
+    t = (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2)).replace(/[^A-Za-z0-9-]/g, "");
+    store.set("terminal", t);
+  }
+  return t;
+})();
+const tabStates = {};
+let flushTimer = null, lastSent = "", restoring = false;
+function snapshotData() {
+  return {
+    tabs: tabs.map((t) => ({ id: t.id, module: t.module, params: t.params, title: t.title })),
+    active: active && active.id,
+    states: Object.fromEntries(tabs.filter((t) => tabStates[t.id] !== undefined).map((t) => [t.id, tabStates[t.id]])),
+  };
+}
+function scheduleFlush(delay = 800) {
+  if (restoring) return;
+  clearTimeout(flushTimer);
+  flushTimer = setTimeout(flush, delay);
+}
+async function flush() {
+  flushTimer = null;
+  if (restoring) return;
+  const body = JSON.stringify({ terminal: TERMINAL, data: snapshotData() });
+  if (body === lastSent) return;
+  try {
+    const r = await fetch("/api/erp/workspace", { method: "PUT", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+                                                  body, keepalive: body.length < 60000 });
+    if (r.ok) lastSent = body; else if (r.status !== 401) scheduleFlush(5000);
+  } catch { scheduleFlush(5000); }                          // server restarting: try again shortly
+}
+function flushNow() {                                         // the page is closing: a beacon outlives it
+  if (restoring) return;
+  const body = JSON.stringify({ terminal: TERMINAL, data: snapshotData() });
+  if (body !== lastSent && navigator.sendBeacon && navigator.sendBeacon("/api/erp/workspace", new Blob([body], { type: "application/json" }))) lastSent = body;
+}
+setInterval(flush, 15000);
+window.addEventListener("pagehide", flushNow);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushNow(); });
+
 // ------------------------------------------------------------------ tabs
 function saveTabs() {
+  scheduleFlush();
   try {
     sessionStorage.setItem("erp:tabs", JSON.stringify({
       tabs: tabs.map((t) => ({ module: t.module, params: t.params, id: t.id })),
@@ -53,6 +100,8 @@ function saveTabs() {
   } catch { /* private mode */ }
 }
 function saveTabState(tab, state) {
+  tabStates[tab.id] = state === undefined ? null : JSON.parse(JSON.stringify(state));   // a copy of this moment
+  scheduleFlush();
   try { sessionStorage.setItem("erp:tab:" + tab.id, JSON.stringify(state)); } catch { /* ignore */ }
 }
 function loadTabState(id) {
@@ -111,7 +160,9 @@ async function open(module, params = {}, { id, focus = true, fresh = false } = {
     isActive: () => tab === active,
   };
   ctx.tabId = tab.id;
-  tab.screen = mod.create(ctx, params, tab.el, loadTabState(tab.id));
+  const initial = loadTabState(tab.id);
+  if (initial !== null) tabStates[tab.id] = initial;
+  tab.screen = mod.create(ctx, params, tab.el, initial);
   tabs.push(tab);
   activate(tab, focus);
   saveTabs();
@@ -143,6 +194,7 @@ async function closeTab(tab = active) {
   if (tab.screen.destroy) tab.screen.destroy();
   tab.el.remove();
   try { sessionStorage.removeItem("erp:tab:" + tab.id); } catch { /* ignore */ }
+  delete tabStates[tab.id];
   if (active === tab) {
     active = null;
     const next = tabs[Math.min(i, tabs.length - 1)];
@@ -369,8 +421,23 @@ window.addEventListener("beforeunload", (e) => { if (tabs.some((t) => t.dirty)) 
 
 // ------------------------------------------------------------------ start
 (async function start() {
-  let saved = null;
+  let saved = null, recovered = null;
   try { saved = JSON.parse(sessionStorage.getItem("erp:tabs") || "null"); } catch { saved = null; }
+  if (!(saved && saved.tabs && saved.tabs.length)) {
+    // a fresh browser session (reboot, crash, new login): the last snapshot of this counter
+    try {
+      const snap = await api("/api/erp/workspace?terminal=" + encodeURIComponent(TERMINAL));
+      const d = snap && snap.data;
+      if (d && Array.isArray(d.tabs) && d.tabs.length) {
+        for (const [id, state] of Object.entries(d.states || {})) {
+          try { sessionStorage.setItem("erp:tab:" + id, JSON.stringify(state)); } catch { /* ignore */ }
+        }
+        saved = { tabs: d.tabs.filter((t) => MODULES[t.module] && CAN_OPEN.has(t.module)), active: d.active };
+        recovered = snap;
+      }
+    } catch { /* no snapshot: start fresh */ }
+  }
+  restoring = true;
   const [, , pathMod, item] = location.pathname.split("/");
   const mod = BOOT.initial_module || pathMod;
   if (saved && saved.tabs && saved.tabs.length) {
@@ -386,7 +453,15 @@ window.addEventListener("beforeunload", (e) => { if (tabs.some((t) => t.dirty)) 
     const first = CAN_OPEN.has("pos") ? "pos" : CAN_OPEN.has("inventory") ? "inventory" : null;
     if (first) await open(first);
   }
-  if (!store.get("seenHelp", false)) {
+  restoring = false;
+  if (recovered) {
+    const bills = (recovered.data.tabs || []).filter((t) => t.module === "pos" && recovered.data.states?.[t.id]?.lines?.length).length;
+    const when = new Date(recovered.saved_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    status(`Restored your open work from ${when}: ${saved.tabs.length} tab${saved.tabs.length === 1 ? "" : "s"}`
+      + (bills ? `, ${bills} unfinished bill${bills === 1 ? "" : "s"}` : "") + " — continue where you left off", "ok");
+  }
+  scheduleFlush(2000);
+  if (!recovered && !store.get("seenHelp", false)) {
     status("Keyboard ERP: Ctrl+K commands · Alt+P POS · Alt+I Inventory · Ctrl+F product lookup · Alt+1…9 switch tabs");
     store.set("seenHelp", true);
   }

@@ -103,6 +103,17 @@ sudo faheem-erp maintenance | power reboot|poweroff | version | uninstall
 3. Cleanup (old images and releases, journal, caches); on Sundays also VACUUM ANALYZE.
 4. If **daily-reboot** is on: restart the PC.
 
+## Work in progress survives crashes
+
+Everything open on a counter — the tabs, and each unfinished POS bill with its lines, customer,
+discounts and payment typed — is saved to the database about a second after every change (and every
+15 s, and when the page closes), separately for each user and counter. After a crash, power cut or
+reboot the ERP reopens the same tabs and bills at the next login and says so in the status bar:
+"Restored your open work from 11:17: 3 tabs, 2 unfinished bills — continue where you left off".
+A bill that had in fact been completed just before the crash is recognised (the status bar names its
+invoice number) and is not billed again. Purchases and adjustments are saved on the server as you
+work, so they are where you left them too.
+
 ## After a power cut or a PC that was off
 
 - The ERP starts with the PC (`faheem-erp.service`); its containers restart by themselves and
