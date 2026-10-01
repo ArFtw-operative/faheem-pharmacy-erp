@@ -17,6 +17,8 @@
 #    --static-ip | --no-static-ip pin this PC's current address                     (asked with --lan)
 #    --whatsapp | --no-whatsapp   WhatsApp invoice gateway                          (asked; default no)
 #    --no-kiosk                   no auto-login desktop user / full-screen browser
+#    --build-from-source          build the image on this PC from the prod branch (automatic while no
+#                                 release has been published yet)
 #    --port N                     local port of the ERP (default 8000, bound to 127.0.0.1)
 #    --no-daily-reboot            DAILY_HOST_REBOOT=false
 #    --yes                        do not ask; take the defaults above
@@ -35,7 +37,7 @@ main() {
   ENV_FILE="$FAHEEM_ETC/faheem.env" TOKEN_FILE="$FAHEEM_ETC/registry.token"
 
   local token_file="" version="" owner_user="syed.faheem" owner_name="Syed Faheem" import="" lan="" static="" whatsapp=""
-  local kiosk=1 port=8000 reboot=true yes=0
+  local kiosk=1 port=8000 reboot=true yes=0 build_source=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --registry-token-file) token_file="$2"; shift 2 ;;
@@ -47,6 +49,7 @@ main() {
       --static-ip) static=1; shift ;;  --no-static-ip) static=0; shift ;;
       --whatsapp) whatsapp=1; shift ;;  --no-whatsapp) whatsapp=0; shift ;;
       --no-kiosk) kiosk=0; shift ;;
+      --build-from-source) build_source=1; shift ;;
       --port) port="$2"; shift 2 ;;
       --no-daily-reboot) reboot=false; shift ;;
       --yes) yes=1; shift ;;
@@ -74,13 +77,13 @@ main() {
   [ -z "$import" ] || [ -f "$import" ] || die "no SQLite file at $import"
 
   step "Release"
-  published="$(github_latest || true)"
-  if [ -z "$version" ] && [ -z "$published" ] && [ ! -f "$ENV_FILE" ]; then
-    die "No release of Faheem Pharmacy ERP has been published yet (github.com/$REPO/releases is empty).
-   Publish one first: merge dev into prod on GitHub and wait for the Release workflow to finish
-   (docs/UPDATE.md), then run this installer again."
-  fi
-  [ -n "$published" ] && ok "Newest published release: $published"
+  published="$(github_latest || true)" from_source=0
+  if [ "$build_source" = 1 ] || { [ -z "$version" ] && [ -z "$published" ] && [ ! -f "$ENV_FILE" ]; }; then
+    from_source=1
+    version="$(source_version)" || die "could not read the version from github.com/$REPO (internet?)"
+    warn "No published release yet — version $version will be built on this PC from the prod branch (5–15 minutes).
+   Later updates come from published releases as usual."
+  elif [ -n "$published" ]; then ok "Newest published release: $published"; fi
 
   step "Installing system packages"
   export DEBIAN_FRONTEND=noninteractive
@@ -127,7 +130,9 @@ main() {
   ok "faheem-erp (uid $uid) runs the ERP; folders under /opt, /etc, /var/lib, /var/log, /var/backups"
 
   step "Registry access"
-  if [ -n "$token_file" ]; then install -m 600 -o root -g root "$token_file" "$TOKEN_FILE"
+  if [ "$from_source" = 1 ] && [ -z "$token_file" ] && [ -z "${FAHEEM_REGISTRY_TOKEN:-}" ]; then
+    ok "Building from source — no registry token needed now"
+  elif [ -n "$token_file" ]; then install -m 600 -o root -g root "$token_file" "$TOKEN_FILE"
   elif [ -n "${FAHEEM_REGISTRY_TOKEN:-}" ]; then (umask 077; printf '%s' "$FAHEEM_REGISTRY_TOKEN" > "$TOKEN_FILE")
   elif [ ! -s "$TOKEN_FILE" ] && ! anonymous_pull_ok; then
     [ "$interactive" = 1 ] || die "the release images are private: give --registry-token-file FILE or FAHEEM_REGISTRY_TOKEN"
@@ -186,7 +191,11 @@ EOF
   echo "$port" > "$FAHEEM_HOME/port"; chmod 644 "$FAHEEM_HOME/port"
 
   step "Installing release $version"
-  docker pull --quiet "$IMAGE_DEFAULT:$version" >/dev/null || die "could not pull $IMAGE_DEFAULT:$version"
+  if [ "$from_source" = 1 ]; then
+    build_from_source "$version"
+  elif ! docker image inspect "$IMAGE_DEFAULT:$version" >/dev/null 2>&1; then
+    docker pull --quiet "$IMAGE_DEFAULT:$version" >/dev/null || die "could not pull $IMAGE_DEFAULT:$version"
+  fi
   extract "$version"
   ln -sfn "releases/$version" "$FAHEEM_HOME/current.new" && mv -Tf "$FAHEEM_HOME/current.new" "$FAHEEM_HOME/current"
   # from here on the release's own tooling is used
@@ -270,6 +279,22 @@ ask_yn() {   # ask_yn "question" y|n
 github_latest() {     # newest published GitHub release (vX.Y.Z → X.Y.Z); the repository is public
   curl -fsS -m 20 -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
     | sed -n 's/.*"tag_name": *"v\{0,1\}\([0-9][0-9.]*\)".*/\1/p' | head -1
+}
+source_version() {    # APP_VERSION on the prod branch
+  curl -fsS -m 20 "https://raw.githubusercontent.com/$REPO/prod/app/config.py" \
+    | sed -n 's/^APP_VERSION: str = "\([0-9][0-9.]*\)".*/\1/p' | grep .
+}
+build_from_source() {   # the same image the release workflow builds, made here from the prod branch
+  local v="$1" dir sha
+  dir="$(mktemp -d)"
+  sha="$(curl -fsS -m 20 -H "Accept: application/vnd.github.sha" "https://api.github.com/repos/$REPO/commits/prod" 2>/dev/null | cut -c1-7)"
+  curl -fsSL -m 300 "https://codeload.github.com/$REPO/tar.gz/refs/heads/prod" | tar -xz -C "$dir" --strip-components=1 \
+    || die "could not download the source of $REPO"
+  ok "Source downloaded (prod${sha:+ @ $sha}); building the image…"
+  docker build --pull -q -t "$IMAGE_DEFAULT:$v" --build-arg APP_VERSION="$v" --build-arg GIT_COMMIT="${sha:-source}" \
+    --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$dir" >/dev/null || die "building the image failed (see above)"
+  rm -rf "$dir"
+  ok "Image $IMAGE_DEFAULT:$v built on this PC"
 }
 registry_bearer() {   # a pull token for the image repository: with the stored token, or anonymous
   local repo="${IMAGE_DEFAULT#ghcr.io/}" url
