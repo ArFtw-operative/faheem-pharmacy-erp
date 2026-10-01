@@ -12,9 +12,9 @@ lists its database migrations. Upgrades keep all business history (see docs/UPGR
   `app-at-login`), and **Start ERP** / **Restart ERP** open it afterwards.
 - **WhatsApp:** the gateway's access token is sent the way WPPConnect 2.10 expects (the bare token —
   before, every call was refused and no QR appeared); a refusal now shows as an error.
-- **Counter account clarity:** "Switch to administrator" shortcut; the counter session never shows a
-  lock screen (its account has no password); the installer explains that the PC logs in as the counter
-  user and that your own account and password are unchanged.
+- **Your own account, no extra user:** the PC logs into the account that ran the installer and opens
+  the ERP there. No separate "faheem" account is created any more (`--counter-user NAME` makes it opt-in);
+  a re-run moves the automatic login back to you and tells you how to remove the old account.
 - **Network moves:** the ERP follows a new network address by itself (NetworkManager hook), so moving
   the PC to the store's Wi-Fi keeps shop-network access working; `network static` warns for wired profiles.
 - **WhatsApp → Connect** no longer appears to do nothing while the gateway starts its browser: the

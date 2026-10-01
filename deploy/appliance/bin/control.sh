@@ -96,7 +96,7 @@ maintenance_menu() {
 settings_menu() {
   while :; do
     local items=() k v
-    for k in boot-start counter-screen app-at-login auto-login auto-update daily-reboot maintenance-time backup-days backup-keep; do
+    for k in boot-start app-at-login auto-login auto-update daily-reboot maintenance-time backup-days backup-keep; do
       v="$("$here/settings.sh" get "$k" 2>/dev/null)"; items+=("$k" "$v")
     done
     k="$(W --menu "Select a setting to change it:" 20 70 10 "${items[@]}" \

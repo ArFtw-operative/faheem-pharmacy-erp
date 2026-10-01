@@ -16,7 +16,9 @@
 #    --lan | --no-lan             HTTPS access from the shop network / store VPN   (asked; default yes)
 #    --static-ip | --no-static-ip pin this PC's current address                     (asked with --lan)
 #    --whatsapp | --no-whatsapp   WhatsApp invoice gateway                          (asked; default no)
-#    --no-kiosk                   no auto-login desktop user / full-screen browser
+#    --no-kiosk                   no automatic login / ERP at login
+#    --counter-user NAME          log in automatically as this separate account instead of yours (created
+#                                 without a password if missing). Default: your own account (the one running sudo)
 #    --build-from-source          build the image on this PC from the prod branch (automatic while no
 #                                 release has been published yet)
 #    --port N                     local port of the ERP (default 8000, bound to 127.0.0.1)
@@ -36,7 +38,7 @@ main() {
   FAHEEM_LOGS=/var/log/faheem-erp FAHEEM_BACKUPS=/var/backups/faheem-erp
   ENV_FILE="$FAHEEM_ETC/faheem.env" TOKEN_FILE="$FAHEEM_ETC/registry.token"
 
-  local token_file="" version="" owner_user="syed.faheem" owner_name="Syed Faheem" import="" lan="" static="" whatsapp=""
+  local counter_user="" token_file="" version="" owner_user="syed.faheem" owner_name="Syed Faheem" import="" lan="" static="" whatsapp=""
   local kiosk=1 port=8000 reboot=true yes=0 build_source=0
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -49,6 +51,7 @@ main() {
       --static-ip) static=1; shift ;;  --no-static-ip) static=0; shift ;;
       --whatsapp) whatsapp=1; shift ;;  --no-whatsapp) whatsapp=0; shift ;;
       --no-kiosk) kiosk=0; shift ;;
+      --counter-user) counter_user="$2"; shift 2 ;;
       --build-from-source) build_source=1; shift ;;
       --port) port="$2"; shift 2 ;;
       --no-daily-reboot) reboot=false; shift ;;
@@ -114,11 +117,12 @@ main() {
     useradd --system --user-group --home-dir "$FAHEEM_DATA" --no-create-home --shell /usr/sbin/nologin faheem-erp
   fi
   uid="$(id -u faheem-erp)" gid="$(id -g faheem-erp)"
-  if [ "$kiosk" = 1 ] && ! id faheem >/dev/null 2>&1; then
-    # a separate counter account: logs in automatically, no password, no sudo, no docker.
-    # Your own account and its password are not touched.
-    useradd --create-home --shell /bin/bash --comment "Faheem Pharmacy counter (automatic login)" faheem
-    passwd -l faheem >/dev/null
+  # the desktop account that logs in automatically and gets the ERP: yours, unless --counter-user
+  admin="${SUDO_USER:-}"; [ "$admin" = root ] && admin=""
+  desk="${counter_user:-$admin}"
+  if [ -n "$counter_user" ] && ! id "$counter_user" >/dev/null 2>&1; then
+    useradd --create-home --shell /bin/bash --comment "Faheem Pharmacy counter (automatic login)" "$counter_user"
+    passwd -l "$counter_user" >/dev/null          # no password, no sudo, no docker
   fi
   install -d -m 755 -o root -g root "$FAHEEM_HOME" "$FAHEEM_HOME/releases"
   install -d -m 750 -o root -g faheem-erp "$FAHEEM_ETC"
@@ -182,6 +186,8 @@ FAHEEM_LAN_IP=
 FAHEEM_HOSTNAME=
 FAHEEM_ALLOWED_NETWORKS=10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10
 FAHEEM_ADMIN_USER=
+FAHEEM_DESK_USER=
+FAHEEM_COUNTER_USER=
 EOF
     )
     ok "Secrets generated in $ENV_FILE (0600)"
@@ -214,10 +220,10 @@ EOF
   ok "Tooling in $FAHEEM_HOME/current"
 
   step "Services, Control Center and desktop shortcuts"
-  admin="${SUDO_USER:-}"; [ "$admin" = root ] && admin=""
   [ -n "$admin" ] && env_set FAHEEM_ADMIN_USER "$admin"
+  env_set FAHEEM_DESK_USER "$desk"; env_set FAHEEM_COUNTER_USER "$counter_user"
   install_host_files
-  ok "systemd units, faheem-erp command, polkit rule, menu entries; shortcuts on the desktop of: faheem${admin:+, $admin}"
+  ok "systemd units, faheem-erp command, polkit rule, menu entries; desktop shortcuts for: ${desk:-nobody}${counter_user:+, $admin}"
 
   step "Database"
   dc up -d postgres
@@ -262,7 +268,7 @@ EOF
     ok "The ERP is reachable only on this PC (enable later: sudo faheem-erp lan enable)"
   fi
 
-  if [ "$kiosk" = 1 ]; then step "Counter screen (kiosk)"; setup_kiosk; fi
+  if [ "$kiosk" = 1 ]; then step "ERP at login"; setup_kiosk "$desk"; fi
 
   step "First backup"
   "$FAHEEM_HOME/current/bin/backup.sh" --reason manual --note "after install" >/dev/null && ok "Backup written to $FAHEEM_BACKUPS/snapshots"
@@ -270,16 +276,15 @@ EOF
 
   echo
   ok "Faheem Pharmacy ERP $version is installed."
-  echo "   This PC:        http://127.0.0.1:$port   (opens full-screen at login of 'faheem')"
+  echo "   This PC:        http://127.0.0.1:$port   (opens full screen when ${desk:-the desktop user} logs in)"
   if flag LAN_ACCESS; then echo "   Shop network:   https://$(env_get FAHEEM_LAN_IP)   https://$(env_get FAHEEM_HOSTNAME).local"
                            echo "   Other devices first install: http://$(env_get FAHEEM_LAN_IP)/faheem-erp-ca.crt"; fi
   echo "   Maintenance:    05:00 India time daily (backup, update$( [ "$reboot" = true ] && echo ", reboot"))"
   echo "   Control Center: desktop icon \"ERP Control Center\"  or  sudo faheem-erp menu"
   echo "   Command line:   sudo faheem-erp status | doctor | backup | update | settings | logs"
-  if [ "$kiosk" = 1 ]; then
-    echo "   At startup the PC logs in automatically as the counter account 'faheem' (no password, no admin"
-    echo "   rights) and opens the ERP. Your own account $(env_get FAHEEM_ADMIN_USER) and its password are unchanged:"
-    echo "   for administration use 'Switch to administrator' (desktop) or Log Out, then pick your own name."
+  if [ "$kiosk" = 1 ] && [ -n "$desk" ]; then
+    echo "   At startup the PC logs in automatically as '$desk' and the ERP opens full screen."
+    echo "   Turn either off in ERP Control Center → Settings (auto-login, app-at-login)."
   fi
   open_app_now
 }
@@ -381,42 +386,33 @@ pw_ok() {
   [[ "$1" =~ [A-Za-z] && "$1" =~ [0-9] ]] || { warn "use letters and numbers"; return 1; }
 }
 
-setup_kiosk() {
-  local browser=""
+setup_kiosk() {   # setup_kiosk <desktop account>: Chromium, automatic login, the ERP full screen at login
+  local desk="$1" browser="" home
   for b in chromium chromium-browser google-chrome google-chrome-stable; do command -v "$b" >/dev/null && { browser="$b"; break; }; done
   if [ -z "$browser" ]; then
     if [ "$ID" = ubuntu ]; then snap install chromium >/dev/null && browser=chromium
     else apt-get install -y -qq chromium >/dev/null && browser=chromium; fi
   fi
-  [ -n "$browser" ] && ok "Browser: $browser" || warn "no Chromium browser could be installed"
-  local home; home="$(getent passwd faheem | cut -d: -f6)"
-  install -d -o faheem -g faheem "$home/.config" "$home/.config/autostart"
-  install -m 644 -o faheem -g faheem "$FAHEEM_HOME/current/kiosk/faheem-erp-kiosk.desktop" "$home/.config/autostart/faheem-erp-kiosk.desktop"
-  # the counter session never locks or blanks: its account has no password, so a lock screen could not be opened
-  if command -v dbus-run-session >/dev/null && command -v gsettings >/dev/null; then
-    runuser -u faheem -- dbus-run-session -- sh -c 'gsettings set org.gnome.desktop.screensaver lock-enabled false;
+  [ -n "$browser" ] && ok "Browser engine: $browser" || warn "no Chromium could be installed"
+  # an account created automatically by earlier installers is no longer logged into
+  if [ "$desk" != faheem ] && getent passwd faheem | cut -d: -f5 | grep -q "Faheem Pharmacy counter"; then
+    rm -f "$(getent passwd faheem | cut -d: -f6)/.config/autostart/faheem-erp-kiosk.desktop"
+    warn "the separate 'faheem' counter account from an earlier install is not used any more; remove it with: sudo userdel -r faheem"
+  fi
+  if [ -z "$desk" ]; then
+    warn "run the installer with sudo from your desktop account to have it log in and open the ERP automatically"
+    return 0
+  fi
+  home="$(getent passwd "$desk" | cut -d: -f6)"
+  install -d -o "$desk" -g "$(id -gn "$desk")" "$home/.config" "$home/.config/autostart"
+  install -m 644 -o "$desk" -g "$(id -gn "$desk")" "$FAHEEM_HOME/current/kiosk/faheem-erp-app-autostart.desktop" "$home/.config/autostart/faheem-erp-app.desktop"
+  if [ -n "$counter_user" ] && command -v dbus-run-session >/dev/null; then   # a password-less account must never lock
+    runuser -u "$desk" -- dbus-run-session -- sh -c 'gsettings set org.gnome.desktop.screensaver lock-enabled false;
       gsettings set org.gnome.desktop.lockdown disable-lock-screen true; gsettings set org.gnome.desktop.session idle-delay 0;
       gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type nothing' >/dev/null 2>&1 || true
   fi
-  if [ -d /etc/gdm3 ]; then
-    local f=/etc/gdm3/custom.conf; [ -f "$f" ] || f=/etc/gdm3/daemon.conf
-    [ -f "$f" ] || printf '[daemon]\n' > "$f"
-    [ -f "$f.faheem-orig" ] || cp -p "$f" "$f.faheem-orig"
-    grep -q '^\[daemon\]' "$f" || printf '\n[daemon]\n' >> "$f"
-    sed -i '/^AutomaticLoginEnable *=/d; /^AutomaticLogin *=/d' "$f"
-    sed -i '/^\[daemon\]/a AutomaticLoginEnable=true\nAutomaticLogin=faheem' "$f"
-    ok "Auto-login of 'faheem' (GDM)"
-  elif [ -d /etc/lightdm ]; then
-    install -d /etc/lightdm/lightdm.conf.d
-    printf '[Seat:*]\nautologin-user=faheem\nautologin-user-timeout=0\n' > /etc/lightdm/lightdm.conf.d/50-faheem-erp.conf
-    ok "Auto-login of 'faheem' (LightDM)"
-  elif [ -d /etc/sddm.conf.d ] || command -v sddm >/dev/null; then
-    install -d /etc/sddm.conf.d
-    printf '[Autologin]\nUser=faheem\n' > /etc/sddm.conf.d/50-faheem-erp.conf
-    ok "Auto-login of 'faheem' (SDDM)"
-  else
-    warn "no desktop login manager found — install a desktop (e.g. ubuntu-desktop-minimal) for the counter screen"
-  fi
+  "$FAHEEM_HOME/current/bin/settings.sh" set auto-login on >/dev/null && ok "Automatic login of '$desk'; the ERP opens full screen at login" \
+    || warn "automatic login could not be set (no supported login manager?)"
 }
 
 main "$@"

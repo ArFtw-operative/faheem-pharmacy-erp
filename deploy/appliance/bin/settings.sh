@@ -3,9 +3,9 @@
 # faheem-erp settings set KEY VALUE        change one
 #
 #   boot-start        on|off   start the ERP when the PC starts (faheem-erp.service)
-#   counter-screen    on|off   open the ERP full-screen when the counter user logs in
-#   app-at-login      on|off   open the ERP app when the administrator logs in
-#   auto-login        on|off   log the counter user in automatically at boot
+#   app-at-login      on|off   open the ERP full screen when the desktop user logs in
+#   auto-login        on|off   log the desktop user in automatically at boot
+# The desktop user is your own account (FAHEEM_DESK_USER; set by the installer).
 #   auto-update       on|off   install new releases during maintenance
 #   daily-reboot      on|off   restart the PC after the morning maintenance
 #   maintenance-time  HH:MM    time of the daily maintenance (India time), default 05:00
@@ -16,11 +16,9 @@ SCRIPT_NAME=settings
 . "$(dirname "$(readlink -f "$0")")/../lib.sh"
 require_root
 
-kiosk_home="$(getent passwd faheem | cut -d: -f6 || true)"
-AUTOSTART="$kiosk_home/.config/autostart/faheem-erp-kiosk.desktop"
-admin="$(env_get FAHEEM_ADMIN_USER)"
-admin_home="$( [ -n "$admin" ] && getent passwd "$admin" | cut -d: -f6 || true)"
-APP_AUTOSTART="$admin_home/.config/autostart/faheem-erp-app.desktop"
+desk="$(env_get FAHEEM_DESK_USER)"; desk="${desk:-$(env_get FAHEEM_ADMIN_USER)}"
+desk_home="$( [ -n "$desk" ] && getent passwd "$desk" | cut -d: -f6 || true)"
+APP_AUTOSTART="$desk_home/.config/autostart/faheem-erp-app.desktop"
 TIMER_DROPIN=/etc/systemd/system/faheem-erp-maintenance.timer.d/time.conf
 onoff() { case "$1" in on|true|yes|1) echo on ;; off|false|no|0) echo off ;; *) die "use on or off" ;; esac; }
 
@@ -29,8 +27,7 @@ gdm_conf() { local f; for f in /etc/gdm3/custom.conf /etc/gdm3/daemon.conf; do [
 get() {
   case "$1" in
     boot-start) systemctl is-enabled --quiet faheem-erp.service 2>/dev/null && echo on || echo off ;;
-    counter-screen) [ -f "$AUTOSTART" ] && ! grep -q '^X-GNOME-Autostart-enabled=false' "$AUTOSTART" && echo on || echo off ;;
-    app-at-login) [ -n "$admin_home" ] && [ -f "$APP_AUTOSTART" ] && ! grep -q '^Hidden=true' "$APP_AUTOSTART" && echo on || echo off ;;
+    app-at-login) [ -n "$desk_home" ] && [ -f "$APP_AUTOSTART" ] && ! grep -q '^Hidden=true' "$APP_AUTOSTART" && echo on || echo off ;;
     auto-login)
       if [ -n "$(gdm_conf)" ]; then grep -q '^AutomaticLoginEnable=true' "$(gdm_conf)" && echo on || echo off
       elif [ -f /etc/lightdm/lightdm.conf.d/50-faheem-erp.conf ] || [ -f /etc/sddm.conf.d/50-faheem-erp.conf ]; then echo on
@@ -50,28 +47,22 @@ set_() {
     boot-start)
       if [ "$(onoff "$val")" = on ]; then systemctl enable faheem-erp.service >/dev/null
       else systemctl disable faheem-erp.service >/dev/null; fi ;;
-    counter-screen)
-      [ -n "$kiosk_home" ] || die "no counter user"
-      install -d -o faheem -g faheem "$kiosk_home/.config/autostart"
-      [ -f "$AUTOSTART" ] || install -m 644 -o faheem -g faheem "$FAHEEM_HOME/current/kiosk/faheem-erp-kiosk.desktop" "$AUTOSTART"
-      sed -i '/^X-GNOME-Autostart-enabled=/d; /^Hidden=/d' "$AUTOSTART"
-      if [ "$(onoff "$val")" = on ]; then echo "X-GNOME-Autostart-enabled=true" >> "$AUTOSTART"
-      else printf 'X-GNOME-Autostart-enabled=false\nHidden=true\n' >> "$AUTOSTART"; fi ;;
     app-at-login)
-      [ -n "$admin_home" ] || die "no administrator account recorded (FAHEEM_ADMIN_USER)"
-      install -d -o "$admin" -g "$(id -gn "$admin")" "$admin_home/.config/autostart"
-      install -m 644 -o "$admin" -g "$(id -gn "$admin")" "$FAHEEM_HOME/current/kiosk/faheem-erp-app-autostart.desktop" "$APP_AUTOSTART"
+      [ -n "$desk_home" ] || die "no desktop account recorded (FAHEEM_DESK_USER) — run the installer from your desktop account"
+      install -d -o "$desk" -g "$(id -gn "$desk")" "$desk_home/.config/autostart"
+      install -m 644 -o "$desk" -g "$(id -gn "$desk")" "$FAHEEM_HOME/current/kiosk/faheem-erp-app-autostart.desktop" "$APP_AUTOSTART"
       [ "$(onoff "$val")" = on ] || printf 'X-GNOME-Autostart-enabled=false\nHidden=true\n' >> "$APP_AUTOSTART" ;;
     auto-login)
+      [ "$(onoff "$val")" = off ] || [ -n "$desk" ] || die "no desktop account recorded (FAHEEM_DESK_USER)"
       local f; f="$(gdm_conf)"
       if [ -n "$f" ]; then
         sed -i '/^AutomaticLoginEnable *=/d; /^AutomaticLogin *=/d' "$f"
-        [ "$(onoff "$val")" = on ] && sed -i '/^\[daemon\]/a AutomaticLoginEnable=true\nAutomaticLogin=faheem' "$f"
+        [ "$(onoff "$val")" = on ] && sed -i "/^\\[daemon\\]/a AutomaticLoginEnable=true\\nAutomaticLogin=$desk" "$f"
       elif [ -d /etc/lightdm ]; then
-        if [ "$(onoff "$val")" = on ]; then install -d /etc/lightdm/lightdm.conf.d; printf '[Seat:*]\nautologin-user=faheem\nautologin-user-timeout=0\n' > /etc/lightdm/lightdm.conf.d/50-faheem-erp.conf
+        if [ "$(onoff "$val")" = on ]; then install -d /etc/lightdm/lightdm.conf.d; printf '[Seat:*]\nautologin-user=%s\nautologin-user-timeout=0\n' "$desk" > /etc/lightdm/lightdm.conf.d/50-faheem-erp.conf
         else rm -f /etc/lightdm/lightdm.conf.d/50-faheem-erp.conf; fi
       elif [ -d /etc/sddm.conf.d ]; then
-        if [ "$(onoff "$val")" = on ]; then printf '[Autologin]\nUser=faheem\n' > /etc/sddm.conf.d/50-faheem-erp.conf
+        if [ "$(onoff "$val")" = on ]; then printf '[Autologin]\nUser=%s\n' "$desk" > /etc/sddm.conf.d/50-faheem-erp.conf
         else rm -f /etc/sddm.conf.d/50-faheem-erp.conf; fi
       else die "no supported login manager"; fi ;;
     auto-update) env_set AUTO_UPDATE "$([ "$(onoff "$val")" = on ] && echo true || echo false)" ;;
@@ -89,7 +80,7 @@ set_() {
   ok "$key: $(get "$key")"
 }
 
-KEYS=(boot-start counter-screen app-at-login auto-login auto-update daily-reboot maintenance-time backup-days backup-keep)
+KEYS=(boot-start app-at-login auto-login auto-update daily-reboot maintenance-time backup-days backup-keep)
 case "${1:-show}" in
   show) for k in "${KEYS[@]}"; do printf '%-18s %s\n' "$k" "$(get "$k")"; done
         printf '%-18s %s\n' "next maintenance" "$(systemctl show faheem-erp-maintenance.timer -p NextElapseUSecRealtime --value 2>/dev/null)" ;;

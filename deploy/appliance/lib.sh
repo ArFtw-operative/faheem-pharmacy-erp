@@ -177,7 +177,9 @@ install_host_files() {
   [ -d /etc/NetworkManager/dispatcher.d ] && install -m 755 -o root -g root "$rel/networkmanager/90-faheem-erp" /etc/NetworkManager/dispatcher.d/90-faheem-erp
   # the app may start the stack without a password, for these users only, and only that command
   local users="" sudoers=/etc/sudoers.d/faheem-erp tmp
-  for u in faheem ${FAHEEM_ADMIN_USER:-$(env_get FAHEEM_ADMIN_USER)}; do id "$u" >/dev/null 2>&1 && users+="${users:+, }$u"; done
+  local people
+  people="$(printf '%s\n' "$(env_get FAHEEM_DESK_USER)" "${FAHEEM_ADMIN_USER:-$(env_get FAHEEM_ADMIN_USER)}" | grep . | sort -u | tr '\n' ' ')"
+  for u in $people; do id "$u" >/dev/null 2>&1 && users+="${users:+, }$u"; done
   if [ -n "$users" ]; then
     tmp="$(mktemp)"
     printf '# Faheem Pharmacy ERP: the desktop app starts the ERP if it is not running
@@ -186,22 +188,21 @@ install_host_files() {
     if visudo -cf "$tmp" >/dev/null 2>&1; then install -m 440 -o root -g root "$tmp" "$sudoers"; fi
     rm -f "$tmp"
   fi
-  # the app opens at login: windowed for the administrator (the counter user gets the kiosk)
-  for u in ${FAHEEM_ADMIN_USER:-$(env_get FAHEEM_ADMIN_USER)}; do
+  # the app opens full screen at login of the desktop account (your own unless a counter account was chosen)
+  for u in $(env_get FAHEEM_DESK_USER); do
     id "$u" >/dev/null 2>&1 || continue
     d="$(getent passwd "$u" | cut -d: -f6 || true)/.config/autostart"
     install -d -o "$u" -g "$(id -gn "$u")" "$d"
     [ -f "$d/faheem-erp-app.desktop" ] || install -m 644 -o "$u" -g "$(id -gn "$u")" "$rel/kiosk/faheem-erp-app-autostart.desktop" "$d/faheem-erp-app.desktop"
   done
-  # the counter user's kiosk autostart follows the release (keeps an "off" choice)
-  d="$(getent passwd faheem | cut -d: -f6 || true)/.config/autostart/faheem-erp-kiosk.desktop"
-  if [ -f "$d" ] && ! grep -q '^Hidden=true' "$d"; then install -m 644 -o faheem -g faheem "$rel/kiosk/faheem-erp-kiosk.desktop" "$d"; fi
-  # shortcuts on the desktop of the counter user and of the administrator who installed
-  for u in faheem ${FAHEEM_ADMIN_USER:-$(env_get FAHEEM_ADMIN_USER)}; do
+  # shortcuts on the desktop of the desktop account and of the administrator who installed
+  for u in $people; do
     id "$u" >/dev/null 2>&1 || continue
     d="$(desktop_dir "$u")" || continue
     uid="$(id -u "$u")"
     for f in "$rel"/desktop/*.desktop; do
+      # "Switch to administrator" only makes sense when a separate counter account logs in automatically
+      [ "$(basename "$f")" = faheem-erp-switch-user.desktop ] && [ -z "$(env_get FAHEEM_COUNTER_USER)" ] && continue
       install -m 755 -o "$u" -g "$(id -gn "$u")" "$f" "$d/$(basename "$f")"
       # GNOME shows a launcher as runnable only when it is marked trusted (needs the user's session)
       [ -S "/run/user/$uid/bus" ] && runuser -u "$u" -- env DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
