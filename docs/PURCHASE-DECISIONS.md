@@ -108,6 +108,12 @@ reference data is not proof that a supplier delivered a particular pack variant.
 - PDF printed line counts are checked when available. A mismatch cannot be
   bypassed by accepting a monetary difference. Original PDF invoice suffixes are
   preserved. Printed discount amounts are evidence, not assumed percentages.
+- Dense monospaced PDF exports use a fixed-width reader that retains adjacent
+  HSN, product, pack, manufacturer, batch, expiry, quantity and free columns.
+  It records page provenance, checks `No.of Items` / `No.of Units` controls,
+  and prefers readings that agree with the printed item count. `FR` means free
+  quantity. Text already shortened by the supplier's PDF export cannot be
+  reconstructed from the PDF alone; verify it against the original CSV or pack.
 - Scanned/image-only PDFs still require verified text/OCR extraction or manual
   entry. Unsupported layouts fail for review; arbitrary PDF extraction and OCR
   are not claimed to have universal accuracy.

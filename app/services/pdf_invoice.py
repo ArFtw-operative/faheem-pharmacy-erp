@@ -37,6 +37,7 @@ class PdfGrid:
     rows: list[list[str]] = field(default_factory=list)    # rows[0] is the header
     score: float = 0.0
     notes: list[str] = field(default_factory=list)
+    row_pages: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -94,6 +95,78 @@ def _biggest_text(page) -> str:
 
 
 # --------------------------------------------------------------------------- word geometry
+def fixed_width(doc) -> PdfGrid | None:
+    """Read monospaced print exports without merging neighbouring columns.
+
+    Headings identify fields; whitespace shared by the body rows locates cuts.
+    Heading starts alone are unsafe: a right-aligned quantity or expiry can
+    start to their left. Only use this reader when every page has a recognisable
+    fixed-width header, and never cut through a non-space token.
+    """
+    from app.services import column_mapper
+
+    rows, header, counts, row_pages = [], None, [], []
+    for page_number, page in enumerate(doc, 1):
+        lines = []
+        for block in page.get_text("dict")["blocks"]:
+            for line in block.get("lines", []):
+                spans = line.get("spans", [])
+                if spans and all(s.get("flags", 0) & 8 for s in spans if s["text"].strip()):
+                    lines.append("".join(s["text"] for s in spans))
+        candidates = []
+        for index, line in enumerate(lines):
+            cells = [(m.start(), m.group().rstrip()) for m in
+                     re.finditer(r"\S(?:.*?\S)?(?=\s{2,}|$)", line)]
+            labels = [v for _, v in cells]
+            mapped = column_mapper.map_header([labels], 0, sample=0)
+            if {"name", "quantity", "rate", "mrp"} <= set(mapped.columns):
+                candidates.append((_header_score(labels), index, cells, mapped))
+        if not candidates:
+            return None
+        _, at, cells, mapped = max(candidates, key=lambda c: c[0])
+        labels = [v for _, v in cells]
+        if header is not None and labels != header:
+            return None
+        header = labels
+        body = []
+        for line in lines[at + 1:]:
+            if re.fullmatch(r"\s*[-_=]{3,}\s*", line):
+                if body:
+                    break
+                continue
+            if _TOTALS_ROW.match(line) or re.match(r"^\s*(continued|page\s+\d)", line, re.I):
+                break
+            if len(re.findall(r"(?<!\S)-?\d+(?:\.\d+)?(?!\S)", line)) >= 3:
+                body.append(line)
+        if not body:
+            return None
+        cuts = [0]
+        for start, _ in cells[1:]:
+            # Search only the gap near this heading, never into the preceding
+            # heading's field. Different alignments usually differ by 1–3 chars.
+            possible = [p for p in range(start, max(cuts[-1] + 1, start - 16) - 1, -1)
+                        if all(not (len(line) > p and line[p - 1].strip() and line[p].strip()) for line in body)]
+            if not possible:
+                return None
+            cuts.append(possible[0])
+        parsed = [[line[a:cuts[i + 1] if i + 1 < len(cuts) else len(line)].strip()
+                   for i, a in enumerate(cuts)] for line in body]
+        # Reject a wrongly aligned reading rather than coercing chopped tokens.
+        for values in parsed:
+            if not values[mapped.columns["name"]] or any(
+                not re.fullmatch(r"-?[\d,]+(?:\.\d+)?(?:\s*\+\s*[\d,]+(?:\.\d+)?)?", values[mapped.columns[f]])
+                for f in ("quantity", "rate", "mrp")
+            ):
+                return None
+        rows.extend(parsed)
+        row_pages.extend([page_number] * len(parsed))
+        counts.append(len(parsed))
+    if not rows:
+        return None
+    return PdfGrid(method="fixed_width", rows=[header] + rows, row_pages=row_pages,
+                   notes=[f"Read {len(rows)} product rows across {len(counts)} pages; page counts: {', '.join(map(str, counts))}"])
+
+
 def _lines(page, y_tol: float = 2.5) -> list[list[tuple]]:
     words = sorted(page.get_text("words"), key=lambda w: (round(w[1], 1), w[0]))
     lines: list[list[tuple]] = []

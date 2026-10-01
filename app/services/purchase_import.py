@@ -292,7 +292,7 @@ def _parse_pdf(content: bytes, doc: RawDocument, *, learned=None, vocab=None, ad
     candidates: list[RawDocument] = []
     try:
         facts = pdf_invoice.facts(pdf)
-        for reader in (pdf_invoice.ruled, pdf_invoice.geometry):
+        for reader in (pdf_invoice.fixed_width, pdf_invoice.ruled, pdf_invoice.geometry):
             try:
                 grid = reader(pdf)
             except Exception:
@@ -305,6 +305,13 @@ def _parse_pdf(content: bytes, doc: RawDocument, *, learned=None, vocab=None, ad
             except ImportError_:
                 continue
             d.method = grid.method
+            d.warnings.extend(grid.notes)
+            if grid.row_pages:
+                for part in d.parts or [d]:
+                    for line in part.lines:
+                        index = line.row - 2  # grid header is row 1
+                        if 0 <= index < len(grid.row_pages):
+                            line.page = grid.row_pages[index]
             candidates.append(d)
     finally:
         pdf.close()
@@ -314,7 +321,11 @@ def _parse_pdf(content: bytes, doc: RawDocument, *, learned=None, vocab=None, ad
     if not candidates:
         raise ImportError_("No invoice table could be read from this PDF. Use the supplier's CSV/Excel file or "
                            "enter the invoice manually.")
-    best = max(candidates, key=quality)
+    expected_lines = re.search(r"(?:Total\s+Lines|No\.?\s*of\s*Items)\s*:?\s*(\d+)", text, re.I)
+    def candidate_score(d):
+        count = sum(len(p.lines) for p in (d.parts or [d]))
+        return (bool(expected_lines and count == int(expected_lines.group(1))), quality(d))
+    best = max(candidates, key=candidate_score)
     for f in ("lines", "invoice_no", "invoice_date", "declared_total", "charges", "customer_name", "column_map",
               "parts", "method", "supplier_name"):
         setattr(doc, f, getattr(best, f))
@@ -332,12 +343,12 @@ def _parse_pdf(content: bytes, doc: RawDocument, *, learned=None, vocab=None, ad
         part.invoice_date = part.invoice_date or facts.invoice_date
     doc.warnings.append(f"PDF table read by {doc.method} reading")
     # Printed controls are evidence of extraction completeness, not stock lines.
-    if m := re.search(r"(?:Printed\s+)?Total\s+Lines\s+(\d+)", text, re.I):
+    if m := expected_lines:
         doc.charges["_expected_lines"] = m.group(1)
         count = sum(len(p.lines) for p in (doc.parts or [doc]))
         if count != int(m.group(1)):
             doc.charges["_extraction_issues"] = [f"Read {count} lines but PDF declares {m.group(1)}"]
-    if m := re.search(r"(?:Printed\s+)?Total\s+Qty\s+([\d,.]+)", text, re.I):
+    if m := re.search(r"(?:Total\s+Qty|No\.?\s*of\s*Units)\s*:?\s*([\d,.]+)", text, re.I):
         doc.charges["_expected_qty"] = m.group(1).replace(",", "")
         from app.services.receipt_decision import quantities
         try:
@@ -349,6 +360,9 @@ def _parse_pdf(content: bytes, doc: RawDocument, *, learned=None, vocab=None, ad
                 doc.charges.setdefault("_extraction_issues", []).append(f"Extracted Qty totals {billed} billed / {received} received; PDF declares {declared}")
         except ValueError:
             doc.charges.setdefault("_extraction_issues", []).append("Cannot reconcile printed Qty because a quantity is invalid")
+    for key, label in (("round_off", r"Round(?:ing|\s*off)"), ("printed_gst", r"GST\s*(?:Amt|Amount)")):
+        if m := re.search(r"\b" + label + r"\s*:\s*(-?[\d,]+\.\d{2})", text, re.I):
+            doc.charges.setdefault(key, m.group(1).replace(",", ""))
     if m := re.search(r"Printed\s+Total\s+Discount\s+(?:Rs\.?\s*)?([\d,.]+)", text, re.I):
         doc.charges["_printed_discount_amount"] = m.group(1).replace(",", "")
         doc.warnings.append("Printed discount amount retained as evidence; confirm its basis before changing invoice charges")
