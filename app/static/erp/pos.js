@@ -45,6 +45,7 @@ export function create(ctx, params, root, saved) {
   let editing = null;         // index of the line whose qty is being edited
   let discEditing = null;     // index of the line whose discount % is being edited
   let rateEditing = null;     // manual bill: index of the line whose rate is being typed
+  let metaEditing = null;     // manual bill: index of the line whose batch / expiry are being typed
   let lastBill = null;
   let busy = false;
 
@@ -234,7 +235,9 @@ export function create(ctx, params, root, saved) {
     const rateCell = rateEditing === i ? `<input class="rate-in num" value="${num(l.rate) || ""}" placeholder="rate" aria-label="Rate per unit">` : num(l.rate) ? money(l.rate) : '<span class="bad">rate?</span>';
     return `<tr data-i="${i}" class="${i === sel ? "sel" : ""}${bad ? " bad" : ""}" title="${esc(bad)}">
       <td class="num muted">${i + 1}</td><td class="mono${l.code ? "" : " muted"}">${esc(l.code || "TYPED")}</td>
-      <td class="prod">${esc(l.name)}</td><td class="muted">—</td><td class="muted">—</td><td class="num">1</td>
+      <td class="prod">${esc(l.name)}</td>${metaEditing === i
+        ? `<td><input class="batch-in" value="${esc(l.batch || "")}" maxlength="60" placeholder="batch" aria-label="Batch"></td><td><input class="exp-in" value="${esc(l.expiry || "")}" maxlength="10" placeholder="MM/YY" aria-label="Expiry MM/YY"></td>`
+        : `<td class="mono${l.batch ? "" : " muted"}">${esc(l.batch || "—")}</td><td class="${l.expiry ? "" : "muted"}">${esc(l.expiry || "—")}</td>`}<td class="num">1</td>
       <td class="num qty">${qtyCell}</td><td class="num">${rateCell}</td>
       <td class="num disc">${discEditing === i ? `<input class="disc-in num" value="${num(l.disc) || ""}" placeholder="0" aria-label="Discount percent, max ${MAXD}">` : num(l.disc) ? `${num(l.disc)}% <small>−${money(lineDisc(l))}</small>` : '<span class="muted">—</span>'}</td>
       <td class="num strong">${money(lineNet(l))}</td></tr>`;
@@ -279,7 +282,10 @@ export function create(ctx, params, root, saved) {
       : `${hint}<span class="cc-empty">Walk-in — click to choose a customer</span>`;
     renderTotals();
     renderDetail();
-    if (rateEditing !== null) {
+    if (metaEditing !== null) {
+      const b = $(".batch-in", tbody), x = $(".exp-in", tbody);
+      if (b && x) { b.focus(); b.select(); bindMeta(b, x); }
+    } else if (rateEditing !== null) {
       const inp = $(".rate-in", tbody);
       if (inp) { inp.focus(); inp.select(); bindRate(inp); }
     } else if (editing !== null) {
@@ -347,7 +353,8 @@ export function create(ctx, params, root, saved) {
     if (!l) { d.innerHTML = S.manual ? '<span class="muted">Manual bill · search any item or type one not in inventory · quantity, Tab → discount, Tab → rate · the bill never changes stock</span>'
       : '<span class="muted">No line selected · ↑↓ in the bill to select · see the shortcut bar for quantity, batch and remove</span>'; return; }
     if (l.manual) {
-      d.innerHTML = `<b>${esc(l.name)}</b><span>${l.item_id ? "From inventory — manual bill: stock not checked or changed" : "Typed item — not in inventory"}</span><span>Rate <b>₹${money(l.rate)}</b> <kbd>Enter</kbd> on the line: rate → quantity · Tab → discount</span>
+      d.innerHTML = `<b>${esc(l.name)}</b><span>${l.item_id ? "From inventory — manual bill: stock not checked or changed" : "Typed item — not in inventory"}</span><span>Rate <b>₹${money(l.rate)}</b> <kbd>Enter</kbd> rate → quantity · Tab → discount</span>
+        <span>Batch <b>${esc(l.batch || "—")}</b> · Expiry <b>${esc(l.expiry || "—")}</b> <kbd data-shortcut="pos.batch">${esc(keys.keyFor("pos.batch"))}</kbd> edits them</span>
         <span>Discount <b>${num(l.disc) ? `${num(l.disc)}% (−₹${money(lineDisc(l))})` : "none"}</b></span>`;
       return;
     }
@@ -392,14 +399,14 @@ export function create(ctx, params, root, saved) {
   }
   function editQty(i = sel, seed = null) {
     if (i < 0 || !S.lines[i]) return;
-    sel = i; editing = i; discEditing = null;
+    sel = i; editing = i; discEditing = null; metaEditing = null; rateEditing = null;
     render();
     const inp = $(".qty-in", tbody);
     if (inp && seed !== null) { inp.value = seed; inp.setSelectionRange(seed.length, seed.length); }
   }
   function editRate(i = sel) {
     if (i < 0 || !S.lines[i] || !S.lines[i].manual) return;
-    sel = i; rateEditing = i; editing = null; discEditing = null;
+    sel = i; rateEditing = i; editing = null; discEditing = null; metaEditing = null;
     render();
   }
   function bindRate(inp) {
@@ -411,6 +418,7 @@ export function create(ctx, params, root, saved) {
         const v = Number(String(inp.value).replace(/,/g, ""));
         if (!(v > 0)) { ctx.status("Enter the rate per unit (more than 0)", "error"); inp.classList.add("bad"); inp.select(); return; }
         l.rate = r2(v); rateEditing = null;
+        if (e.key === "Tab" && !e.shiftKey) { editMeta(i); return; }   // … discount → rate → batch → expiry
         editQty(i);                                    // name → rate → quantity
       } else if (e.key === "Escape") {
         e.preventDefault(); rateEditing = null;
@@ -419,6 +427,37 @@ export function create(ctx, params, root, saved) {
         render(); q.focus();
       }
     };
+  }
+  function editMeta(i = sel) {
+    if (i < 0 || !S.lines[i] || !S.lines[i].manual) return;
+    sel = i; metaEditing = i; editing = null; discEditing = null; rateEditing = null;
+    render();
+    ctx.status(`${S.lines[i].name}: batch, Tab → expiry (MM/YY), Enter — both optional`);
+  }
+  const expOk = (v) => !v || /^(0?[1-9]|1[0-2])\s*[\/.-]\s*(\d{2}|\d{4})$/.test(v) || /^\d{4}-\d{2}(-\d{2})?$/.test(v)
+    || /^[a-z]{3}[a-z]*[\s\/.'-]*\d{2,4}$/i.test(v);
+  function bindMeta(b, x) {
+    const done = () => {
+      const l = S.lines[metaEditing], v = x.value.trim();
+      if (!expOk(v)) { ctx.status("Expiry as MM/YY, e.g. 05/28", "error"); x.classList.add("bad"); x.focus(); x.select(); return; }
+      l.batch = b.value.trim().slice(0, 60); l.expiry = v; metaEditing = null;
+      render(); q.focus();
+      ctx.status(`${l.name}: batch ${l.batch || "—"} · expiry ${l.expiry || "—"}`, "ok");
+    };
+    const cancel = () => { metaEditing = null; render(); q.focus(); };
+    b.onkeydown = (e) => {
+      e.stopPropagation();
+      if (e.key === "Tab" && !e.shiftKey) { e.preventDefault(); x.focus(); x.select(); }
+      else if (e.key === "Enter") { e.preventDefault(); done(); }
+      else if (e.key === "Escape") { e.preventDefault(); cancel(); }
+    };
+    x.onkeydown = (e) => {
+      e.stopPropagation();
+      if (e.key === "Tab" && e.shiftKey) { e.preventDefault(); b.focus(); b.select(); }
+      else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); done(); }
+      else if (e.key === "Escape") { e.preventDefault(); cancel(); }
+    };
+    x.oninput = () => x.classList.toggle("bad", !expOk(x.value.trim()));
   }
   function addManualProduct(p) {
     const b = p.batches[0];
@@ -489,7 +528,7 @@ export function create(ctx, params, root, saved) {
   function editDisc(i = sel) {
     if (i < 0 || !S.lines[i]) { ctx.status("Select a bill line first (↑↓), then use Item discount", "warn"); return; }
     if (!CAN["sales.discount"]) { ctx.status("You do not have discount permission", "warn"); return; }
-    sel = i; editing = null; discEditing = i;
+    sel = i; editing = null; discEditing = i; metaEditing = null; rateEditing = null;
     render();
     ctx.status(`Item discount for ${S.lines[i].name}: 0–${MAXD}% · Enter saves · Esc cancels`);
   }
@@ -525,7 +564,7 @@ export function create(ctx, params, root, saved) {
   function removeLine(i = sel) {
     if (!S.lines[i]) return;
     const [l] = S.lines.splice(i, 1);
-    editing = null; discEditing = null;
+    editing = null; discEditing = null; metaEditing = null;
     sel = Math.min(i, S.lines.length - 1);
     render();
     ctx.status(`Removed ${l.name}`);
@@ -763,7 +802,7 @@ export function create(ctx, params, root, saved) {
   function openBatch() {
     const l = S.lines[sel];
     if (!l) return;
-    if (l.manual) { ctx.status("A manual line has no batch — it is not from stock", "warn"); return; }
+    if (l.manual) { editMeta(sel); return; }          // manual line: type its batch and expiry
     batchLine = sel; mode = "batch";
     at = l.batch_id ? l.batches.findIndex((b) => b.id === l.batch_id) + 1 : 0;
     renderBatch();
@@ -847,7 +886,7 @@ export function create(ctx, params, root, saved) {
       const lines = [];
       const manual = !!(p.payload && p.payload.manual);
       for (const c of cart) {
-        if (manual) { lines.push({ manual: true, name: c.name, code: c.code || "", pack: c.pack || "", qty: Number(c.qty || c.quantity) || 1, rate: num(c.rate), disc: Math.min(num(c.disc), MAXD), item_id: c.item_id || null, batch_id: null, batches: [], base_unit: "UNIT", pack_unit: "UNIT", upp: 1 }); continue; }
+        if (manual) { lines.push({ manual: true, name: c.name, code: c.code || "", pack: c.pack || "", batch: c.batch || "", expiry: c.expiry || "", qty: Number(c.qty || c.quantity) || 1, rate: num(c.rate), disc: Math.min(num(c.disc), MAXD), item_id: c.item_id || null, batch_id: null, batches: [], base_unit: "UNIT", pack_unit: "UNIT", upp: 1 }); continue; }
         if (!c.item_id) continue;
         const fresh = await api(`/api/items/${c.item_id}/batches`);
         const batches = (fresh.batches || []).map((b) => ({ id: b.id, batch_no: b.batch_no, expiry: b.expiry, stock: b.quantity, pack_mrp: b.mrp, upp: b.units_per_pack, unit_mrp: b.unit_mrp }));
@@ -1090,7 +1129,8 @@ export function create(ctx, params, root, saved) {
     const body = {
       invoice_type: S.manual ? "MANUAL" : "INVENTORY",
       lines: S.lines.map((l) => (l.manual
-        ? { name: l.name, item_id: l.item_id || null, pack: l.pack || "", quantity: l.qty, rate: num(l.rate), discount_pct: CAN["sales.discount"] ? num(l.disc) : 0 }
+        ? { name: l.name, item_id: l.item_id || null, pack: l.pack || "", batch: l.batch || "", expiry: l.expiry || "",
+            quantity: l.qty, rate: num(l.rate), discount_pct: CAN["sales.discount"] ? num(l.disc) : 0 }
         : { item_id: l.item_id, batch_id: l.batch_id || null, quantity: l.qty, discount_pct: CAN["sales.discount"] ? num(l.disc) : 0 })),
       customer_id: S.customer ? S.customer.id : null,
       customer_type: S.saleType,
@@ -1131,7 +1171,7 @@ export function create(ctx, params, root, saved) {
       ctx.status(`✓ Bill ${d.invoice_no} ${wasEdit ? "updated (stock re-posted to its batches)" : "completed"} · ₹${money(d.total)}${d.change && num(d.change) > 0 ? ` · return ₹${money(d.change)}` : ""}`, "ok");
       cache.clear();
       const wasManual = S.manual && !wasEdit;
-      S = blank(); S.manual = wasManual; sel = -1; editing = null; discEditing = null; rateEditing = null;
+      S = blank(); S.manual = wasManual; sel = -1; editing = null; discEditing = null; rateEditing = null; metaEditing = null;
       render();
       askInvoice(d, summary, wasEdit);
     } catch (ex) {
@@ -1214,7 +1254,7 @@ export function create(ctx, params, root, saved) {
       S.editing = { id: d.sale_id, invoice_no: d.invoice_no };
       S.manual = d.invoice_type === "MANUAL";
       S.lines = d.lines.map((l) => (l.manual
-        ? { manual: true, name: l.name, code: l.code || "", qty: l.qty, rate: l.rate, disc: Math.min(num(l.disc), MAXD), item_id: l.item_id || null, batch_id: null, batches: [], base_unit: "UNIT", pack_unit: "UNIT", upp: 1 }
+        ? { manual: true, name: l.name, code: l.code || "", pack: l.pack || "", batch: l.batch || "", expiry: l.expiry || "", qty: l.qty, rate: l.rate, disc: Math.min(num(l.disc), MAXD), item_id: l.item_id || null, batch_id: null, batches: [], base_unit: "UNIT", pack_unit: "UNIT", upp: 1 }
         : { ...lineFrom({ id: l.item_id, code: l.code, name: l.name, pack_raw: l.pack_raw, upp: l.upp, loose: l.loose, base_unit: l.base_unit,
             pack_unit: l.pack_unit, form: l.form, rack: l.rack, content: l.content, batches: l.batches }),
           batch_id: l.batch_id, qty: l.qty, disc: Math.min(num(l.disc), MAXD) }));

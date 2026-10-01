@@ -132,12 +132,18 @@ def _add_manual_lines(db: Session, sale: Sale, lines: list[dict[str, Any]]) -> t
         rate = to_decimal(line.get("rate") or 0)
         if rate <= 0:
             raise SaleError(f"{name}: enter the rate")
+        from app.services.sheet_import import parse_expiry
+
+        expiry = parse_expiry(line.get("expiry"))
+        if str(line.get("expiry") or "").strip() and expiry is None:
+            raise SaleError(f"{name}: expiry “{line.get('expiry')}” — type it as MM/YY, e.g. 05/28")
         gross = money(rate * qty)
         disc = _line_discount(line, gross, name, cap)
         gross_total += gross
         sale_item = SaleItem(
             sale_id=sale.id, item_id=item.id if item else None, batch_id=None, product_name=name,
-            batch_no=str(line.get("batch") or "")[:60], quantity=qty, mrp=money(rate), rate=money(rate),
+            batch_no=" ".join(str(line.get("batch") or "").split())[:60], expiry_date=expiry,
+            quantity=qty, mrp=money(rate), rate=money(rate),
             pack_mrp=money(rate), units_per_pack=1, pack_size=str(line.get("pack") or (item.pack_size if item else "") or "")[:60], base_unit="UNIT",
             cost_rate=Decimal("0"), discount=disc, line_total=money(gross - disc), line_no=line_no,
             financial_status=financials.MISSING, financial_cost_source="MANUAL_BILL",

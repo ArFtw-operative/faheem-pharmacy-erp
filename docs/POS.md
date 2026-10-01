@@ -43,8 +43,9 @@ inventory at all. A manual bill never checks or changes stock and has its own nu
 
 - Search works as usual and **any** product can be chosen, whatever its stock; its MRP becomes the rate.
   When nothing matches, the last row (or Enter) adds the typed name as an item not in inventory.
-- After adding: quantity → **Tab** → discount % → **Tab** → rate; Enter returns to the item search.
-  In the cart, Enter on a line edits rate → quantity, F7 the discount.
+- After adding: quantity → **Tab** → discount % → **Tab** → rate → **Tab** → batch → **Tab** → expiry (MM/YY);
+  Enter returns to the item search. In the cart: Enter edits rate → quantity, F7 the discount, F5 batch and expiry.
+- A saved manual bill is edited from Sales (F4) like any bill: it opens as a manual bill again.
 - Complete the sale as usual (payment, invoice, WhatsApp). The bill is stored like any other: Sales
   history, bill register, item-wise sales (as a separate "· manual bill" row, since its quantity is per
   typed unit), returns. Cost is unknown, so it adds to revenue but not to profit.

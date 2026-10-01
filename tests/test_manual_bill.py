@@ -88,3 +88,33 @@ def test_api_manual_bill(client, db):
     sale = db.get(Sale, r.json()["sale_id"])
     assert sale.invoice_type == "MANUAL" and len(sale.payments) == 2
     assert client.get(f"/sales/{sale.id}/invoice").status_code == 200
+
+
+def test_manual_lines_keep_batch_and_expiry_and_reopen_as_manual_for_editing(client, db):
+    from datetime import date
+
+    login(client)
+    dolo = inv.create_item(db, name="DOLO 650 TAB", pack_size="15S")                      # no stock at all
+    db.commit()
+    sale = sales_service.create_sale(db, invoice_type="MANUAL", round_off_mode="NONE", lines=[
+        {"item_id": dolo.id, "name": "DOLO 650 TAB", "quantity": 3, "rate": "30", "batch": " DB 44 ", "expiry": "05/28"},
+        {"name": "Hot water bag", "quantity": 1, "rate": "240"}])
+    db.commit()
+    assert (sale.items[0].batch_no, sale.items[0].expiry_date) == ("DB 44", date(2028, 5, 1))
+    with pytest.raises(sales_service.SaleError, match="MM/YY"):
+        sales_service.create_sale(db, invoice_type="MANUAL", lines=[{"name": "X", "quantity": 1, "rate": "5", "expiry": "soon"}])
+    db.rollback()
+    payload = client.get(f"/api/erp/sales/{sale.id}/edit").json()
+    assert payload["invoice_type"] == "MANUAL" and all(l["manual"] for l in payload["lines"])    # not a stock bill
+    first = payload["lines"][0]
+    assert (first["item_id"], first["batch"], first["expiry"]) == (dolo.id, "DB 44", "05/28")
+    moves = db.query(InventoryMovement).count()
+    r = client.put(f"/api/sales/{sale.id}", json={"payment_mode": "CASH", "round_off_mode": "NONE", "lines": [
+        {"item_id": dolo.id, "name": "DOLO 650 TAB", "quantity": 5, "rate": "28", "batch": "DB45", "expiry": "06/2028"},
+        {"name": "Hot water bag", "quantity": 1, "rate": "240"}]})
+    assert r.status_code == 200, r.text
+    db.expire_all()
+    edited = db.get(Sale, sale.id)
+    assert edited.invoice_no == sale.invoice_no and edited.total == Decimal("380.00")
+    assert (edited.items[0].quantity, edited.items[0].batch_no, edited.items[0].expiry_date) == (5, "DB45", date(2028, 6, 1))
+    assert db.query(InventoryMovement).count() == moves                                     # still never touches stock

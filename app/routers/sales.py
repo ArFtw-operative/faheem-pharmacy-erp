@@ -656,8 +656,12 @@ def api_sale_edit_payload(sale_id: int, db: Session = Depends(get_db),
     for line in sorted(sale.items, key=lambda l: (l.line_no or 0, l.id)):
         gross = (line.line_total or 0) + (line.discount or 0)
         pct = float(round(line.discount / gross * 100, 2)) if gross else 0.0
-        if not line.item_id:
-            lines.append({"manual": True, "name": line.product_name, "qty": line.quantity, "rate": float(line.rate), "disc": pct})
+        if (sale.invoice_type or "INVENTORY") == "MANUAL" or not line.item_id:
+            item = db.get(Item, line.item_id) if line.item_id else None
+            lines.append({"manual": True, "name": line.product_name, "qty": line.quantity, "rate": float(line.rate), "disc": pct,
+                          "item_id": item.id if item else None, "code": item.article_id if item else "",
+                          "pack": line.pack_size or "", "batch": line.batch_no or "",
+                          "expiry": line.expiry_date.strftime("%m/%y") if line.expiry_date else ""})
             continue
         item = db.get(Item, line.item_id)
         if item is None:
