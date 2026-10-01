@@ -29,6 +29,7 @@ umask 027
 
 main() {
   IMAGE_DEFAULT="ghcr.io/arftw-operative/faheem-pharmacy-erp"
+  REPO="ArFtw-operative/faheem-pharmacy-erp"
   FAHEEM_HOME=/opt/faheem-erp FAHEEM_ETC=/etc/faheem-erp FAHEEM_DATA=/var/lib/faheem-erp
   FAHEEM_LOGS=/var/log/faheem-erp FAHEEM_BACKUPS=/var/backups/faheem-erp
   ENV_FILE="$FAHEEM_ETC/faheem.env" TOKEN_FILE="$FAHEEM_ETC/registry.token"
@@ -72,6 +73,15 @@ main() {
   [[ "$port" =~ ^[0-9]+$ ]] || die "--port must be a number"
   [ -z "$import" ] || [ -f "$import" ] || die "no SQLite file at $import"
 
+  step "Release"
+  published="$(github_latest || true)"
+  if [ -z "$version" ] && [ -z "$published" ] && [ ! -f "$ENV_FILE" ]; then
+    die "No release of Faheem Pharmacy ERP has been published yet (github.com/$REPO/releases is empty).
+   Publish one first: merge dev into prod on GitHub and wait for the Release workflow to finish
+   (docs/UPDATE.md), then run this installer again."
+  fi
+  [ -n "$published" ] && ok "Newest published release: $published"
+
   step "Installing system packages"
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
@@ -97,13 +107,8 @@ main() {
   ok "Docker $(docker version --format '{{.Server.Version}}'), Compose $cv"
 
   step "Accounts and folders"
-  if ! id faheem-erp >/dev/null 2>&1; then
-    if getent passwd 10001 >/dev/null || getent group 10001 >/dev/null; then
-      useradd --system --user-group --home-dir "$FAHEEM_DATA" --no-create-home --shell /usr/sbin/nologin faheem-erp
-    else
-      groupadd --system --gid 10001 faheem-erp
-      useradd --system --uid 10001 --gid 10001 --home-dir "$FAHEEM_DATA" --no-create-home --shell /usr/sbin/nologin faheem-erp
-    fi
+  if ! id faheem-erp >/dev/null 2>&1; then     # a normal system account; the containers run as its uid
+    useradd --system --user-group --home-dir "$FAHEEM_DATA" --no-create-home --shell /usr/sbin/nologin faheem-erp
   fi
   uid="$(id -u faheem-erp)" gid="$(id -g faheem-erp)"
   if [ "$kiosk" = 1 ] && ! id faheem >/dev/null 2>&1; then
@@ -126,7 +131,8 @@ main() {
   elif [ -n "${FAHEEM_REGISTRY_TOKEN:-}" ]; then (umask 077; printf '%s' "$FAHEEM_REGISTRY_TOKEN" > "$TOKEN_FILE")
   elif [ ! -s "$TOKEN_FILE" ] && ! anonymous_pull_ok; then
     [ "$interactive" = 1 ] || die "the release images are private: give --registry-token-file FILE or FAHEEM_REGISTRY_TOKEN"
-    printf 'The release images are private. Registry token (GitHub, read:packages only; not shown): ' > /dev/tty
+    echo "The release images are private (or GitHub → Packages → faheem-pharmacy-erp is not set to Public yet)."
+    printf 'Registry token (GitHub classic token, read:packages only; not shown): ' > /dev/tty
     IFS= read -rs t < /dev/tty; echo > /dev/tty
     [ -n "$t" ] || die "no token given"
     (umask 077; printf '%s' "$t" > "$TOKEN_FILE"); unset t
@@ -144,7 +150,7 @@ main() {
 
   if [ ! -f "$ENV_FILE" ]; then
 
-    [ -n "$version" ] || version="$(newest_release)"
+    [ -n "$version" ] || version="${published:-$(newest_release)}"
     [ -n "$version" ] || die "GHCR lists no releases yet — the first release is published when prod's release workflow finishes"
     (umask 077; cat > "$ENV_FILE" <<EOF
 # Faheem Pharmacy ERP — this PC's configuration. Root-only (0600). Never copy into Git or chat.
@@ -179,7 +185,7 @@ EOF
   chown root:root "$ENV_FILE"; chmod 600 "$ENV_FILE"
   echo "$port" > "$FAHEEM_HOME/port"; chmod 644 "$FAHEEM_HOME/port"
 
-  step "Release $version"
+  step "Installing release $version"
   docker pull --quiet "$IMAGE_DEFAULT:$version" >/dev/null || die "could not pull $IMAGE_DEFAULT:$version"
   extract "$version"
   ln -sfn "releases/$version" "$FAHEEM_HOME/current.new" && mv -Tf "$FAHEEM_HOME/current.new" "$FAHEEM_HOME/current"
@@ -261,6 +267,10 @@ ask_yn() {   # ask_yn "question" y|n
   a="${a:-$2}"; case "$a" in y|Y|yes) return 0 ;; *) return 1 ;; esac
 }
 
+github_latest() {     # newest published GitHub release (vX.Y.Z → X.Y.Z); the repository is public
+  curl -fsS -m 20 -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
+    | sed -n 's/.*"tag_name": *"v\{0,1\}\([0-9][0-9.]*\)".*/\1/p' | head -1
+}
 registry_bearer() {   # a pull token for the image repository: with the stored token, or anonymous
   local repo="${IMAGE_DEFAULT#ghcr.io/}" url
   url="https://ghcr.io/token?scope=repository:${repo}:pull&service=ghcr.io"
