@@ -115,8 +115,10 @@ main() {
   fi
   uid="$(id -u faheem-erp)" gid="$(id -g faheem-erp)"
   if [ "$kiosk" = 1 ] && ! id faheem >/dev/null 2>&1; then
-    useradd --create-home --shell /bin/bash --comment "Faheem Pharmacy counter" faheem
-    passwd -l faheem >/dev/null                      # signs in only by auto-login at this PC; no sudo, no docker
+    # a separate counter account: logs in automatically, no password, no sudo, no docker.
+    # Your own account and its password are not touched.
+    useradd --create-home --shell /bin/bash --comment "Faheem Pharmacy counter (automatic login)" faheem
+    passwd -l faheem >/dev/null
   fi
   install -d -m 755 -o root -g root "$FAHEEM_HOME" "$FAHEEM_HOME/releases"
   install -d -m 750 -o root -g faheem-erp "$FAHEEM_ETC"
@@ -274,7 +276,11 @@ EOF
   echo "   Maintenance:    05:00 India time daily (backup, update$( [ "$reboot" = true ] && echo ", reboot"))"
   echo "   Control Center: desktop icon \"ERP Control Center\"  or  sudo faheem-erp menu"
   echo "   Command line:   sudo faheem-erp status | doctor | backup | update | settings | logs"
-  [ "$kiosk" = 1 ] && echo "   The counter user 'faheem' gets the ERP full-screen after a restart."
+  if [ "$kiosk" = 1 ]; then
+    echo "   At startup the PC logs in automatically as the counter account 'faheem' (no password, no admin"
+    echo "   rights) and opens the ERP. Your own account $(env_get FAHEEM_ADMIN_USER) and its password are unchanged:"
+    echo "   for administration use 'Switch to administrator' (desktop) or Log Out, then pick your own name."
+  fi
   open_app_now
 }
 
@@ -386,6 +392,12 @@ setup_kiosk() {
   local home; home="$(getent passwd faheem | cut -d: -f6)"
   install -d -o faheem -g faheem "$home/.config" "$home/.config/autostart"
   install -m 644 -o faheem -g faheem "$FAHEEM_HOME/current/kiosk/faheem-erp-kiosk.desktop" "$home/.config/autostart/faheem-erp-kiosk.desktop"
+  # the counter session never locks or blanks: its account has no password, so a lock screen could not be opened
+  if command -v dbus-run-session >/dev/null && command -v gsettings >/dev/null; then
+    runuser -u faheem -- dbus-run-session -- sh -c 'gsettings set org.gnome.desktop.screensaver lock-enabled false;
+      gsettings set org.gnome.desktop.lockdown disable-lock-screen true; gsettings set org.gnome.desktop.session idle-delay 0;
+      gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type nothing' >/dev/null 2>&1 || true
+  fi
   if [ -d /etc/gdm3 ]; then
     local f=/etc/gdm3/custom.conf; [ -f "$f" ] || f=/etc/gdm3/daemon.conf
     [ -f "$f" ] || printf '[daemon]\n' > "$f"

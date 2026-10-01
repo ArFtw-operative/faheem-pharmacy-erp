@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# "Switch to administrator": back to the login screen to choose another account (the counter session
+# keeps running in the background). The counter user has no password and no administrator rights.
+for cmd in gdmflexiserver "dm-tool switch-to-greeter"; do
+  command -v "${cmd%% *}" >/dev/null 2>&1 && exec $cmd
+done
+exec gnome-session-quit --logout

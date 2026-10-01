@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Switch to administrator
+Comment=Back to the login screen to sign in with your own (administrator) account
+Exec=/opt/faheem-erp/current/bin/switch-user
+Icon=system-users
+Terminal=false
+Categories=System;

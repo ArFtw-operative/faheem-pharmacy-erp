@@ -11,7 +11,12 @@ The installer creates two more accounts:
 
 | Account | What it is |
 |---|---|
-| `faheem` | the counter user: logs in automatically and gets the ERP full-screen. No password, no `sudo`, no Docker. |
+| `faheem` | the counter user: logs in automatically and gets the ERP full-screen. No password, no `sudo`, no Docker, no lock screen. |
+
+Your own account and its password are never changed. Because the PC logs in as `faheem` at startup,
+do administration from **your** account: desktop **Switch to administrator** (or Log Out) → pick your
+name. A password typed for `sudo` inside the counter session is checked against `faheem` and fails.
+The ERP shortcuts work from either session: in their password dialog choose your account.
 | `faheem-erp` | system account the ERP containers run as. Cannot log in. |
 
 ## 2. Tokens

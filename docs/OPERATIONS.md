@@ -15,6 +15,7 @@ has no administrator rights, so the owner or support types theirs (polkit).
 | Back up ERP | verified backup now |
 | Restart ERP / Shut down ERP / Start ERP | the ERP only; the PC stays on. Start / Restart open the app afterwards |
 | ERP Maintenance | optimise the database, free disk space, clear caches |
+| Switch to administrator | back to the login screen to sign in with your own account (the counter session keeps running) |
 
 ## Control Center — `sudo faheem-erp menu`
 
