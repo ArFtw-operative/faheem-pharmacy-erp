@@ -31,7 +31,7 @@ BASE_UNITS = ("UNIT", "TABLET", "CAPSULE", "BOTTLE", "TUBE", "PIECE", "PACK", "S
 PACK_UNITS = ("PACK", "STRIP", "BOX", "BOTTLE", "TUBE", "PIECE", "VIAL", "SACHET", "KIT", "JAR", "UNIT")
 DOSAGE_FORMS = ("", "TABLET", "CAPSULE", "SYRUP", "SUSPENSION", "DROPS", "INJECTION", "CREAM",
                 "OINTMENT", "GEL", "LOTION", "POWDER", "SACHET", "INHALER", "SPRAY", "SOAP",
-                "DEVICE", "KIT", "OTHER")
+                "DEVICE", "KIT", "SUPPOSITORY", "OTHER")
 
 _PLURAL = {"BOX": "boxes", "PIECE": "pieces", "PAIR": "pairs"}
 
@@ -112,6 +112,7 @@ def parse_pack(raw: Any) -> PackInfo:
         return PackInfo(raw=text, kind="CONTENT", units_per_pack=1, confident=True, unit_hint=container,
                         content_qty=Decimal(label.group(2)), content_unit=_CONTENT_UNITS[label.group(3).upper()])
     key = re.sub(r"\s+", "", text.upper()).replace("'", "").replace("’", "")
+    key = key.replace("×", "X").replace("*", "X").rstrip(".")
     if not key:
         return PackInfo(raw=text)
     # typed/OCR look-alikes in a strip count: "lOS" → 10S, "I5S" → 15S (the raw text is kept)
@@ -131,17 +132,17 @@ def parse_pack(raw: Any) -> PackInfo:
         outer = int(m.group(1)) if m.group(1) else None
         return PackInfo(raw=text, kind="CONTENT", units_per_pack=outer or 1, outer_count=outer,
                         content_qty=Decimal(m.group(2)), content_unit=_CONTENT_UNITS[m.group(3)],
-                        confident=outer is None)
+                        confident=outer in (None, 1))
     # 1, 1PCS, 1N, 1NOS
-    if m := re.fullmatch(r"(\d+)(S|PCS|PC|N|NOS|TAB|TABS|CAP|CAPS)?", key):
+    if m := re.fullmatch(r"(\d+)(S|PCS|PC|N|NOS|T|C|TAB|TABS|CAP|CAPS)?", key):
         n = int(m.group(1))
         if n <= 0:
             return PackInfo(raw=text)
         suffix = m.group(2) or ""
         return PackInfo(raw=text, kind="SINGLE" if n == 1 else "COUNT", units_per_pack=n, confident=True,
-                        strip=suffix in ("S", "TAB", "TABS", "CAP", "CAPS"),
+                        strip=suffix in ("S", "T", "C", "TAB", "TABS", "CAP", "CAPS"),
                         unit_hint={"PCS": "PIECE", "PC": "PIECE", "N": "PIECE", "NOS": "PIECE",
-                                   "TAB": "TABLET", "TABS": "TABLET", "CAP": "CAPSULE", "CAPS": "CAPSULE"}.get(suffix, ""))
+                                   "T": "TABLET", "C": "CAPSULE", "TAB": "TABLET", "TABS": "TABLET", "CAP": "CAPSULE", "CAPS": "CAPSULE"}.get(suffix, ""))
     # AxB, AxBxC with an optional trailing S / X
     if m := re.fullmatch(r"(\d+)X(\d+)(?:X(\d+))?(?:S|X|PCS)?", key):
         parts = [int(p) for p in m.groups() if p]
@@ -151,10 +152,12 @@ def parse_pack(raw: Any) -> PackInfo:
         if len(parts) == 2 and parts[0] == 1:
             # 1X10 / 1X3: one pack holding N — the pack is the purchasable unit
             return PackInfo(raw=text, kind="COUNT", units_per_pack=parts[1], outer_count=1, confident=True, strip=strip)
-        inner = parts[-1] if len(parts) == 2 else parts[1] * parts[2]
-        if len(parts) == 3 and parts[2] == 1:
-            inner = parts[1]
-        return PackInfo(raw=text, kind="NESTED", units_per_pack=inner, outer_count=parts[0], confident=False, strip=strip)
+        inner, outer = parts[-1], parts[0]
+        if len(parts) == 3:
+            # Keep the retail count separate from intermediate cartons:
+            # 20 × 5 × 10 contains 100 inner packs of ten, not twenty of fifty.
+            inner, outer = (parts[1], parts[0]) if parts[2] == 1 else (parts[2], parts[0] * parts[1])
+        return PackInfo(raw=text, kind="NESTED", units_per_pack=inner, outer_count=outer, confident=False, strip=strip)
     return PackInfo(raw=text)
 
 

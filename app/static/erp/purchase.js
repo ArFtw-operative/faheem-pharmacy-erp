@@ -221,7 +221,18 @@ export function create(ctx, params, root) {
       <span class="spacer"></span>
       ${s.gst && (s.gst.problems.length || s.gst.missing_rate_lines) ? `<button type="button" class="chip warn gst-chip" title="GST details (${esc(keys.keyFor("purchase.gst"))})">GST ⚠ ${s.gst.problems.length + (s.gst.missing_rate_lines ? 1 : 0)}</button>` : ""}
       ${p.warnings ? `<span class="hint" title="${esc(p.warnings)}">⚠ file notes</span>` : ""}
+      ${s.automation?.mode !== "off" && s.automation && isOpen() ? `<button type="button" class="chip automation-chip">Automatic ${s.automation.resolved_rows}/${s.automation.total_rows} · ${s.automation.exceptions.length} exceptions</button>` : ""}
       ${postBtn}`;
+    const automation = $(".automation-chip", bar);
+    if (automation) automation.onclick = async () => {
+      const a = s.automation;
+      const out = await modal({ title: "Automatic intake", wide: true, submitLabel: "Recheck evidence",
+        body: `<p>${a.resolved_rows} of ${a.total_rows} rows have resolved checks. This measures readiness, not independently verified accuracy.</p>
+          ${a.document_blockers.length ? `<p><b>Invoice checks</b></p><ul>${a.document_blockers.map(b => `<li>${esc(b.message)}</li>`).join("")}</ul>` : ""}
+          ${a.exceptions.length ? `<p><b>Rows requiring information</b></p><ul>${a.exceptions.map(e => `<li>Line ${e.line}: ${esc(e.name)} — ${esc(e.codes.join(", ").replaceAll("_", " "))}</li>`).join("")}</ul>` : "<p>No row exceptions.</p>"}`,
+        onSubmit: () => api(`/api/erp/purchases/${p.id}/prepare`, { method: "POST" }) });
+      if (out) await load();
+    };
     const post = $(".p-post", bar);
     if (post) post.onclick = () => postDoc();
     const gchip = $(".gst-chip", bar);

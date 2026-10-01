@@ -125,6 +125,8 @@ def _document(p: Purchase) -> dict:
     db = object_session(p)
     summary = purchasing.summary(p)
     summary["gst"] = purchasing.gst_summary(db, p)
+    from app.services import purchase_automation
+    summary["automation"] = purchase_automation.assessment(db, p)
     ctx = (G.bill_discount_factor(p), summary["gst"]["mode"])
     return {"purchase": _header(p), "summary": summary,
             "lines": [_line_view(l, ctx) for l in sorted(p.items, key=lambda l: l.line_no)]}
@@ -196,9 +198,20 @@ async def purchase_import(file: UploadFile = File(...), supplier_id: str = Form(
     if sid and db.get(Supplier, sid) is None:
         raise HTTPException(400, "Supplier not found")
     inv_date = purchasing.parse_date(invoice_date) if invoice_date else None
-    drafts = _run(db, purchasing.import_file, file.filename or "invoice", content, supplier_id=sid,
+    from app.services import purchase_automation
+    drafts = _run(db, purchase_automation.import_file, file.filename or "invoice", content, supplier_id=sid,
                   invoice_no=invoice_no, invoice_date=inv_date, supplier_total=supplier_total or None, user=user)
     return {**_document(_doc(db, drafts[0].id)), "drafts": [d.id for d in drafts]}
+
+
+@router.post("/api/erp/purchases/{purchase_id}/prepare")
+def purchase_prepare(purchase_id: int, db: Session = Depends(get_db),
+                     user: User = Depends(require_permission("purchase.create"))):
+    from app.services import purchase_automation
+    p = _doc(db, purchase_id)
+    purchasing._open(p)
+    _run(db, purchase_automation.prepare, p, user=user)
+    return _document(p)
 
 
 @router.post("/api/erp/purchases")

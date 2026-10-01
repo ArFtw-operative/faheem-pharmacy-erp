@@ -137,6 +137,9 @@ def _parse(db: Session, filename: str, content: bytes, supplier: Supplier | None
 def _stage(db: Session, purchase: Purchase, part: purchase_import.RawDocument) -> None:
     """Put a parsed invoice's raw lines into the draft and check each one."""
     purchase.charges = dict(part.charges) or None
+    if part.supplier_name or part.supplier_gstin:
+        purchase.charges = {**(purchase.charges or {}), "_supplier_evidence": {
+            "name": part.supplier_name, "gstin": part.supplier_gstin}}
     purchase.column_map = part.column_map or None
     notes = list(part.warnings)
     if not purchase.supplier_id and (part.supplier_name or part.supplier_gstin):
@@ -667,6 +670,8 @@ def refresh_line(db: Session, purchase: Purchase, line: PurchaseItem) -> Purchas
         return line
     issues = _normalise(db, purchase, line)
     _match(db, purchase, line)
+    from app.services import purchase_automation
+    purchase_automation.prepare_line(db, purchase, line)
     if issues_has(issues, "qty_fraction") and line.item is not None:
         issues = _normalise(db, purchase, line)      # part packs are judged by the matched product's pack size
     decision = receipt_decision.resolve(db, purchase, line)
@@ -676,6 +681,7 @@ def refresh_line(db: Session, purchase: Purchase, line: PurchaseItem) -> Purchas
     if not issues_has(issues, "gst_slab"):
         issues += _gst_history(db, purchase, line)
     issues += _product_issues(db, line)
+    issues = purchase_automation.review_issues(db, purchase, line, issues)
     accepted = set((line.corrections or {}).get("_accepted") or [])
     for i in issues:
         i["accepted"] = i["code"] in accepted and i["code"] in ACCEPTABLE
@@ -764,6 +770,8 @@ def correct(db: Session, purchase: Purchase, line: PurchaseItem, changes: dict, 
     before = {"corrections": dict(corrections), "item_id": line.item_id}
     if any(k in EDITABLE or k in ("item_id", "new_product") for k in changes):
         corrections.pop("_accepted", None)  # acknowledgements apply only to the values reviewed
+    if any(k in ("base_unit", "pack_unit", "units_per_pack", "dosage_form", "item_id") for k in changes):
+        corrections.pop("_automation", None)
     stamp = {"by": _actor(user), "at": utcnow().isoformat(timespec="seconds")}
     raw = line.raw or {}
     for field, value in changes.items():
@@ -1027,6 +1035,9 @@ def post(db: Session, purchase: Purchase, *, user: User | None = None, accept_di
         raise PurchaseError("Choose the supplier before posting", "NO_SUPPLIER")
     if not purchase.invoice_no:
         raise PurchaseError("Enter the supplier's invoice number before posting", "NO_INVOICE_NO")
+    # Different drafts of the same supplier invoice must serialize too (including
+    # invoice-number case variants, which the database's case-sensitive index misses).
+    db.execute(select(Supplier.id).where(Supplier.id == purchase.supplier_id).with_for_update()).scalar_one()
     if (purchase.charges or {}).get("_extraction_issues"):
         raise PurchaseError("PDF extraction did not reconcile with its printed controls. Correct the source extraction and reimport.", "EXTRACTION_INCOMPLETE", purchase.charges["_extraction_issues"])
     open_lines = [l for l in purchase.items if l.status not in DONE]
@@ -1068,16 +1079,23 @@ def post(db: Session, purchase: Purchase, *, user: User | None = None, accept_di
     reference = purchase.reference_no or f"PUR-{next_number(db, 'purchase_ref'):06d}"
     try:
         with db.begin_nested():
+            created_items = {}
             for line in sorted(target, key=lambda l: l.line_no):
                 item = line.item
+                identity = (line.product_name.casefold(), line.manufacturer.casefold(), line.pack_size.casefold(),
+                            line.base_unit, line.pack_unit, line.units_per_pack, line.dosage_form)
+                if item is None and line.new_product and identity in created_items:
+                    item = created_items[identity]
+                    line.item, line.match_method = item, "NEW_PRODUCT"
                 if item is None and line.new_product:
                     item = inventory_service.create_item(
                         db, name=line.product_name, category=category_service.ensure(db, line.category or "GENERAL", user=user),
                         pack_size=line.pack_size, manufacturer=line.manufacturer, hsn_code=line.hsn_code, mrp=line.mrp,
                         base_unit=line.base_unit or "UNIT", pack_unit=line.pack_unit or "PACK",
                         units_per_pack=line.units_per_pack or 1, dosage_form=line.dosage_form or None, user=user)
-                    item.packaging_source = "MANUAL"     # units confirmed by a person during review
+                    item.packaging_source = "AUTO" if (line.corrections or {}).get("_automation") else "MANUAL"
                     line.item, line.match_method = item, "NEW_PRODUCT"
+                    created_items[identity] = item
                 if item is None:
                     raise PurchaseError(f"Line {line.line_no} has no product", "LINES_NOT_READY")
                 receipt = line.receipt_decision or {}
@@ -1144,8 +1162,8 @@ def close_remaining(db: Session, purchase: Purchase, *, reason: str, user: User 
 
 
 def _remember_mapping(db: Session, purchase: Purchase, line: PurchaseItem, user: User | None) -> None:
-    """A human-confirmed line teaches the supplier mapping for next time."""
-    if not purchase.supplier_id or line.item is None or (line.match_method not in ("MANUAL", "NEW_PRODUCT", "SUPPLIER_MAP") and not (line.corrections or {}).get("_invoice_unit")):
+    """A posted deterministic identity teaches the supplier mapping for next time."""
+    if not purchase.supplier_id or line.item is None or (line.match_method not in ("MANUAL", "NEW_PRODUCT", "SUPPLIER_MAP", "EXACT_NAME", "CODE", "CANONICAL_NAME_PACK") and not (line.corrections or {}).get("_invoice_unit")):
         return
     code = line.supplier_code or ""
     key = "" if code else description_key(line.description_raw or line.product_name)
@@ -1160,6 +1178,9 @@ def _remember_mapping(db: Session, purchase: Purchase, line: PurchaseItem, user:
         m.uses = (m.uses or 0) + 1
         if m.item_id != line.item.id and line.match_method == "MANUAL":
             m.item_id, m.confirmed_by, m.confirmed_at = line.item.id, user.id if user else None, utcnow()
+            m.receipt_conventions = None
+        if line.match_method == "MANUAL":
+            m.description_raw = (line.description_raw or line.product_name)[:250]
 
 
 def cancel(db: Session, purchase: Purchase, *, reason: str, user: User | None = None) -> Purchase:

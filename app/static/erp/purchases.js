@@ -65,14 +65,14 @@ export function create(ctx, params, root) {
     if (!suppliers.length) await loadSuppliers().catch(() => {});
     const active = suppliers.filter((s) => s.active);
     const out = await modal({
-      title: "Import supplier invoice", wide: true, submitLabel: "Import for review",
+      title: "Import supplier invoice", wide: true, submitLabel: "Import invoice",
       body: `<div class="form-grid">
         <label class="full">Supplier file — CSV, XLS, XLSX or computer-generated PDF<input type="file" name="file" accept=".csv,.tsv,.txt,.xls,.xlsx,.xlsm,.pdf" required autofocus></label>
         <label class="full">Supplier<select name="supplier_id"><option value="">Choose…</option>${active.map((s) => `<option value="${s.id}">${esc(s.name)}${s.gst_number ? " · " + esc(s.gst_number) : ""}</option>`).join("")}</select></label>
         <label>Supplier invoice no.<input name="invoice_no" maxlength="60" placeholder="read from the file when present"></label>
         <label>Invoice date<input name="invoice_date" type="date"></label>
         <label>Supplier's invoice total ₹<input name="supplier_total" inputmode="decimal" placeholder="read from the file when present"></label>
-        <p class="full hint">Photos and scanned PDFs are not imported (no reliable text). Nothing reaches stock until the reviewed invoice is posted.
+        <p class="full hint">Configured automatic intake prepares products and checks quantities, totals and duplicates. When automatic posting is enabled, a fully verified invoice posts immediately; exceptions remain in a draft.
           <a href="/api/erp/purchases/template.csv">Download CSV template</a></p></div>`,
       onOpen: (form) => {
         // keyboard flow: Space opens the chooser; once a file is picked, move on — Enter submits
@@ -89,8 +89,11 @@ export function create(ctx, params, root) {
       const drafts = out.drafts || [out.purchase.id];
       for (const d of drafts.slice(1).reverse()) await ctx.open("purchase", { id: d }, { focus: false });
       ctx.open("purchase", { id: drafts[0] });
-      ctx.status(drafts.length > 1 ? `File held ${drafts.length} invoices — each opened as its own draft`
-        : `Imported ${out.summary.rows} line(s) · ${out.summary.blocking} need review`, out.summary.blocking ? "warn" : "ok");
+      const a = out.summary.automation;
+      ctx.status(drafts.length > 1 ? `File held ${drafts.length} invoices — opened each result`
+        : out.purchase.status === "POSTED" ? `${out.purchase.reference_no}: ${out.summary.rows} lines received`
+        : a && a.mode !== "off" ? `${a.resolved_rows}/${a.total_rows} rows resolved · ${a.exceptions.length} row exceptions · ${a.document_blockers.length} invoice checks`
+        : `Imported ${out.summary.rows} line(s) · ${out.summary.blocking} need review`, out.summary.blocking || a?.document_blockers.length ? "warn" : "ok");
       panels.register.reload();
     }
   }

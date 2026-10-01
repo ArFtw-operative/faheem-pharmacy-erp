@@ -43,6 +43,7 @@ class PackagingError(Exception):
 
 # dosage form from free text (name / generic); order matters (first hit wins)
 _FORM_WORDS = [
+    ("SUPPOSITORY", r"\b(SUPP|SUPPOSITORY|SUPPOSITORIES)\b"),
     ("TABLET", r"\b(TAB|TABS|TABLET|TABLETS|TB|LOZ|LOZENGE|LOZENGES|CHEWABLE)\b"),
     # "KNEE CAP" / "ANKLE CAP" are supports, not capsules
     ("CAPSULE", r"(?<!KNEE )(?<!ANKLE )(?<!ELBOW )(?<!NIPPLE )(?<!SHOWER )\b(CAP|CAPS|CAPSULE|CAPSULES|SOFTGEL|SOFTGELS|ROTACAP|ROTACAPS)\b"),
@@ -73,6 +74,9 @@ def detect_form(item: Item) -> str:
     if item.dosage_form:
         return item.dosage_form
     for text in (item.generic_name or "", item.name or ""):
+        # Supplier exports commonly glue the dose form to a numerical strength.
+        # Split only after a number/strength, never brand suffixes (e.g. Kneecap).
+        text = re.sub(r"(\d(?:\.?\d+)?\s*(?:MG|MCG|GM|ML)?)(?=TABS?\b|TABLETS?\b|CAPS?\b|CAPSULES?\b)", r"\1 ", text, flags=re.I)
         padded = f" {text.upper()} "
         for form, pattern in _FORM_WORDS:
             if re.search(pattern, padded):
@@ -123,6 +127,8 @@ def resolve(item: Item) -> UOM | None:
             return UOM("SACHET", "BOX", n, None, "", form, f"Pack “{raw}”: box of {n} sachets")
         if form == "INJECTION":
             return UOM("VIAL", "BOX", n, None, "", form, f"Pack “{raw}”: box of {n} vials")
+        if form == "SUPPOSITORY":
+            return UOM("PIECE", "PACK", n, None, "", form, f"Pack “{raw}”: {n} suppositories")
         if info.strip and form in ("", "TABLET", "CAPSULE"):
             # "15 S" with no other clue: a strip of 15 solid doses
             return UOM("TABLET", "STRIP", n, None, "", "TABLET", f"Pack “{raw}”: strip of {n}")
@@ -145,6 +151,8 @@ def resolve(item: Item) -> UOM | None:
                    f"{info.content_qty.normalize()} {cunit.lower()} per {unit.lower()} (content, not stock)")
     if info.kind in ("KIT", "SINGLE") and info.unit_hint:
         unit = info.unit_hint
+        if unit in ("TABLET", "CAPSULE"):
+            return UOM(unit, "STRIP", 1, None, "", unit, f"Pack “{raw}”: one {unit.lower()}")
         return UOM(unit, unit, 1, None, "", form or ("KIT" if unit == "KIT" else ""), f"Pack “{raw}”: sold per {unit.lower()}")
     # no usable pack text: fall back to the form's natural sale unit when sold whole
     if form in _WHOLE_UNIT:

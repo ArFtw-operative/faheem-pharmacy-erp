@@ -57,6 +57,9 @@ def signature(purchase, line):
                 [{k: c.get(k) for k in ("field", "column", "level")} for c in (purchase.column_map or [])], item.id if item else None,
                 item.units_per_pack if item else line.units_per_pack,
                 item.base_unit if item else line.base_unit]
+    annotation = re.sub(r"[\d.,+\s]", "", str(v.get("quantity", ""))).casefold()
+    if annotation:
+        identity.append(annotation)
     return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
 
 
@@ -116,7 +119,7 @@ def decide(line, confirmation=None):
         factor = confirmation["units_per_invoice_unit"]
         basis = confirmation["mrp_basis"]
         out["source"] = confirmation.get("source", "CONFIRMED")
-        evidence.append("Invoice unit confirmed by an operator for this product and source pack")
+        evidence.extend(confirmation.get("evidence") or ["Invoice unit confirmed by an operator for this product and source pack"])
     elif master:
         annotated = re.search(r"\s+(nos?\.?|pcs?\.?|packs?|strips?|boxes)\s*$", str(v.get("quantity", "")), re.I)
         if annotated:
@@ -126,7 +129,7 @@ def decide(line, confirmation=None):
                 issue("quantity_unit_label", "The Qty column names a unit that differs from the product pack. Verify the invoice-unit conversion and MRP basis.", "units_per_invoice_unit")
                 return out
         # A nested printed carton never establishes the transaction level by itself.
-        if pack.kind == "NESTED" or (pack.kind == "CONTENT" and pack.outer_count):
+        if pack.kind == "NESTED" or (pack.kind == "CONTENT" and (pack.outer_count or 1) > 1):
             inner = pack.units_per_pack if pack.kind == "NESTED" else 1
             outer = inner * (pack.outer_count or 1)
             out["candidates"] = [{"units_per_invoice_unit": n} for n in sorted({1, inner, outer, master})]
@@ -190,7 +193,13 @@ def resolve(db, purchase, line):
         entry = (learned.receipt_conventions or {}).get(scope) if learned else None
         if entry:
             confirmed = {**entry, "source": "SUPPLIER_MEMORY"}
+    if confirmed is None:
+        from app.services import purchase_automation
+        if purchase_automation.enabled(db):
+            confirmed = purchase_automation.receipt_evidence(db, purchase, line)
     result = decide(line, confirmed)
+    if confirmed and confirmed.get("history_line_ids"):
+        result["history_line_ids"] = confirmed["history_line_ids"]
     if not line.pack_size:
         from app.services.medicine_reference import unique_pack_evidence
         result["reference_evidence"] = unique_pack_evidence(line.product_name, line.manufacturer)
