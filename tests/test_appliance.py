@@ -154,10 +154,18 @@ def test_maintenance_skips_update_when_backup_fails(box):
     assert box.env("FAHEEM_VERSION") == "1.3.0"
 
 
-def test_boot_check_only_when_last_check_is_old(box):
+def test_boot_check_catches_up_after_a_power_cut_but_never_reboots(box):
+    import json
+
+    (box.data / "state/status.json").write_text(json.dumps({"operation": "updating to 1.4.0"}))   # cut mid-update
     (box.data / "state/last-update-check").write_text(str(int(time.time()) - 3600))
+    out = box.run("boot-check.sh", check=True)
+    assert [s.split("-")[-1] for s in box.snapshots()] == ["scheduled"]          # missed backup taken now
+    state = json.loads((box.data / "state/status.json").read_text())
+    assert state["operation"] == "" and state["interrupted_operation"] == "updating to 1.4.0"
+    assert box.env("FAHEEM_VERSION") == "1.3.0" and "REBOOT" not in out.stdout    # update checked < 24 h ago
     box.run("boot-check.sh", check=True)
-    assert box.env("FAHEEM_VERSION") == "1.3.0"
+    assert len(box.snapshots()) == 1                                              # a fresh backup exists: none taken
     (box.data / "state/last-update-check").write_text(str(int(time.time()) - 90000))
     box.run("boot-check.sh", check=True)
     assert box.env("FAHEEM_VERSION") == "1.4.0"

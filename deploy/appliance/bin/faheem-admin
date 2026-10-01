@@ -17,6 +17,11 @@ shift
 printf '\e]0;Faheem Pharmacy ERP\a'
 pkexec /usr/local/bin/faheem-erp "$@"
 rc=$?
+# starting the ERP from the desktop also opens the app
+if [ $rc -eq 0 ] && { [ "${1:-}" = start ] || [ "${1:-}" = restart ]; }; then
+  setsid /opt/faheem-erp/current/bin/faheem-app >/dev/null 2>&1 < /dev/null &
+  echo "Opening Faheem Pharmacy ERP…"; sleep 2; exit 0
+fi
 if [ "${1:-}" != menu ]; then
   echo; [ $rc -eq 126 ] && echo "Not authorised (an administrator password is needed)."
   read -rp "Press Enter to close… " _

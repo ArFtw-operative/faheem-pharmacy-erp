@@ -8,12 +8,12 @@ has no administrator rights, so the owner or support types theirs (polkit).
 
 | Shortcut | Does |
 |---|---|
-| Faheem Pharmacy ERP | opens the ERP in a window (the counter screen opens full-screen at login) |
+| Faheem Pharmacy ERP | the ERP app in its own window; starts the ERP first if it is not running (no password) |
 | ERP Control Center | the menu below |
 | ERP Doctor | diagnoses the appliance and offers the fixes it found |
 | Update ERP | installs the newest release (backup, rehearsal and automatic rollback included) |
 | Back up ERP | verified backup now |
-| Restart ERP / Shut down ERP / Start ERP | the ERP only; the PC stays on |
+| Restart ERP / Shut down ERP / Start ERP | the ERP only; the PC stays on. Start / Restart open the app afterwards |
 | ERP Maintenance | optimise the database, free disk space, clear caches |
 
 ## Control Center — `sudo faheem-erp menu`
@@ -39,6 +39,7 @@ has no administrator rights, so the owner or support types theirs (polkit).
   |---|---|---|
   | boot-start | start the ERP when the PC starts | on |
   | counter-screen | open the ERP full-screen when the counter user logs in | on |
+  | app-at-login | open the ERP app when the administrator logs in | on |
   | auto-login | log the counter user in automatically at boot | on |
   | auto-update | install new releases during the morning maintenance | on |
   | daily-reboot | restart the PC after the morning maintenance | on |
@@ -96,5 +97,15 @@ sudo faheem-erp maintenance | power reboot|poweroff | version | uninstall
 3. Cleanup (old images and releases, journal, caches); on Sundays also VACUUM ANALYZE.
 4. If **daily-reboot** is on: restart the PC.
 
-A PC that was off at 05:00 does not catch up later (no surprise reboot during business). Five minutes
-after boot it only checks for an update, and only if the last check is more than 24 hours old.
+## After a power cut or a PC that was off
+
+- The ERP starts with the PC (`faheem-erp.service`); its containers restart by themselves and
+  PostgreSQL recovers its own state (data checksums on).
+- The counter user is logged in automatically and gets the ERP full-screen; the administrator gets the
+  app window as soon as they log in. Until the ERP is ready the app shows "Starting services…", then
+  opens it by itself.
+- Five minutes after boot the **catch-up** runs: a backup if the newest is more than 24 hours old, and
+  an update check if the last one is more than 24 hours old. It never reboots — a missed 05:00 reboot
+  is simply skipped.
+- If the power went off in the middle of an update or restore, Status and the doctor say so. An update
+  is safe either way: its database change is one transaction, and the pre-update backup exists.

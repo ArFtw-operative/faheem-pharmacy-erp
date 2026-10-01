@@ -4,6 +4,7 @@
 #
 #   boot-start        on|off   start the ERP when the PC starts (faheem-erp.service)
 #   counter-screen    on|off   open the ERP full-screen when the counter user logs in
+#   app-at-login      on|off   open the ERP app when the administrator logs in
 #   auto-login        on|off   log the counter user in automatically at boot
 #   auto-update       on|off   install new releases during maintenance
 #   daily-reboot      on|off   restart the PC after the morning maintenance
@@ -17,6 +18,9 @@ require_root
 
 kiosk_home="$(getent passwd faheem | cut -d: -f6 || true)"
 AUTOSTART="$kiosk_home/.config/autostart/faheem-erp-kiosk.desktop"
+admin="$(env_get FAHEEM_ADMIN_USER)"
+admin_home="$( [ -n "$admin" ] && getent passwd "$admin" | cut -d: -f6 || true)"
+APP_AUTOSTART="$admin_home/.config/autostart/faheem-erp-app.desktop"
 TIMER_DROPIN=/etc/systemd/system/faheem-erp-maintenance.timer.d/time.conf
 onoff() { case "$1" in on|true|yes|1) echo on ;; off|false|no|0) echo off ;; *) die "use on or off" ;; esac; }
 
@@ -26,6 +30,7 @@ get() {
   case "$1" in
     boot-start) systemctl is-enabled --quiet faheem-erp.service 2>/dev/null && echo on || echo off ;;
     counter-screen) [ -f "$AUTOSTART" ] && ! grep -q '^X-GNOME-Autostart-enabled=false' "$AUTOSTART" && echo on || echo off ;;
+    app-at-login) [ -n "$admin_home" ] && [ -f "$APP_AUTOSTART" ] && ! grep -q '^Hidden=true' "$APP_AUTOSTART" && echo on || echo off ;;
     auto-login)
       if [ -n "$(gdm_conf)" ]; then grep -q '^AutomaticLoginEnable=true' "$(gdm_conf)" && echo on || echo off
       elif [ -f /etc/lightdm/lightdm.conf.d/50-faheem-erp.conf ] || [ -f /etc/sddm.conf.d/50-faheem-erp.conf ]; then echo on
@@ -52,6 +57,11 @@ set_() {
       sed -i '/^X-GNOME-Autostart-enabled=/d; /^Hidden=/d' "$AUTOSTART"
       if [ "$(onoff "$val")" = on ]; then echo "X-GNOME-Autostart-enabled=true" >> "$AUTOSTART"
       else printf 'X-GNOME-Autostart-enabled=false\nHidden=true\n' >> "$AUTOSTART"; fi ;;
+    app-at-login)
+      [ -n "$admin_home" ] || die "no administrator account recorded (FAHEEM_ADMIN_USER)"
+      install -d -o "$admin" -g "$(id -gn "$admin")" "$admin_home/.config/autostart"
+      install -m 644 -o "$admin" -g "$(id -gn "$admin")" "$FAHEEM_HOME/current/kiosk/faheem-erp-app-autostart.desktop" "$APP_AUTOSTART"
+      [ "$(onoff "$val")" = on ] || printf 'X-GNOME-Autostart-enabled=false\nHidden=true\n' >> "$APP_AUTOSTART" ;;
     auto-login)
       local f; f="$(gdm_conf)"
       if [ -n "$f" ]; then
@@ -79,7 +89,7 @@ set_() {
   ok "$key: $(get "$key")"
 }
 
-KEYS=(boot-start counter-screen auto-login auto-update daily-reboot maintenance-time backup-days backup-keep)
+KEYS=(boot-start counter-screen app-at-login auto-login auto-update daily-reboot maintenance-time backup-days backup-keep)
 case "${1:-show}" in
   show) for k in "${KEYS[@]}"; do printf '%-18s %s\n' "$k" "$(get "$k")"; done
         printf '%-18s %s\n' "next maintenance" "$(systemctl show faheem-erp-maintenance.timer -p NextElapseUSecRealtime --value 2>/dev/null)" ;;

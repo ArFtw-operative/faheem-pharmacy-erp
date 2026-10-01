@@ -78,11 +78,11 @@ main() {
 
   step "Release"
   published="$(github_latest || true)" from_source=0
-  if [ "$build_source" = 1 ] || { [ -z "$version" ] && [ -z "$published" ] && [ ! -f "$ENV_FILE" ]; }; then
+  if [ "$build_source" = 1 ] || { [ -z "$version" ] && [ -z "$published" ]; }; then
     from_source=1
     version="$(source_version)" || die "could not read the version from github.com/$REPO (internet?)"
-    warn "No published release yet — version $version will be built on this PC from the prod branch (5–15 minutes).
-   Later updates come from published releases as usual."
+    warn "No published release yet — version $version is built on this PC from the prod branch (5–15 minutes).
+   Running the installer again rebuilds from prod; once releases are published, updates come from them."
   elif [ -n "$published" ]; then ok "Newest published release: $published"; fi
 
   step "Installing system packages"
@@ -184,8 +184,15 @@ EOF
     )
     ok "Secrets generated in $ENV_FILE (0600)"
   else
-    version="$(sed -n 's/^FAHEEM_VERSION=//p' "$ENV_FILE" | tail -1)"
-    ok "Existing configuration kept (version $version)"
+    installed="$(sed -n 's/^FAHEEM_VERSION=//p' "$ENV_FILE" | tail -1)"
+    if [ "$from_source" = 1 ] || [ -n "$version" ]; then
+      if [ "$version" != "$installed" ]; then          # moving to the version built / asked for
+        sed -i "s/^FAHEEM_PREVIOUS_VERSION=.*/FAHEEM_PREVIOUS_VERSION=$installed/; s/^FAHEEM_VERSION=.*/FAHEEM_VERSION=$version/" "$ENV_FILE"
+      fi
+    else
+      version="$installed"
+    fi
+    ok "Existing configuration kept (version $version${installed:+, was $installed})"
   fi
   chown root:root "$ENV_FILE"; chmod 600 "$ENV_FILE"
   echo "$port" > "$FAHEEM_HOME/port"; chmod 644 "$FAHEEM_HOME/port"
@@ -267,7 +274,18 @@ EOF
   echo "   Maintenance:    05:00 India time daily (backup, update$( [ "$reboot" = true ] && echo ", reboot"))"
   echo "   Control Center: desktop icon \"ERP Control Center\"  or  sudo faheem-erp menu"
   echo "   Command line:   sudo faheem-erp status | doctor | backup | update | settings | logs"
-  [ "$kiosk" = 1 ] && echo "   Restart the PC to start the counter screen."
+  [ "$kiosk" = 1 ] && echo "   The counter user 'faheem' gets the ERP full-screen after a restart."
+  open_app_now
+}
+
+open_app_now() {   # open the app in the installing administrator's desktop session, if there is one
+  local u="${FAHEEM_ADMIN_USER:-$(env_get FAHEEM_ADMIN_USER)}" uid
+  [ -n "$u" ] && id "$u" >/dev/null 2>&1 || return 0
+  uid="$(id -u "$u")"; [ -S "/run/user/$uid/bus" ] || return 0
+  runuser -u "$u" -- env XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+    DISPLAY="${DISPLAY:-:0}" WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}" \
+    setsid "$FAHEEM_HOME/current/bin/faheem-app" >/dev/null 2>&1 < /dev/null &
+  echo "   Opening Faheem Pharmacy ERP… (also: the 'Faheem Pharmacy ERP' icon, and at every login)"
 }
 
 # --- helpers --------------------------------------------------------------------------------------

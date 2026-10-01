@@ -1,5 +1,5 @@
 [Unit]
-Description=Faheem Pharmacy ERP update check after boot (only if the last check is over 24 hours old)
+Description=Faheem Pharmacy ERP catch-up after boot (missed backup / update check; never reboots)
 Requires=docker.service
 After=docker.service faheem-erp.service
 

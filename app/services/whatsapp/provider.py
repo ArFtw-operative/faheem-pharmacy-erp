@@ -72,6 +72,10 @@ def _private_host(host: str) -> bool:
     return bool(addrs) and all(a.is_loopback or a.is_private for a in addrs)
 
 
+class GatewayBusy(Exception):
+    """The gateway accepted the request but has not answered yet (starting its browser)."""
+
+
 class WPPConnect(Provider):
     """https://github.com/wppconnect-team/wppconnect-server (run locally in Docker).
 
@@ -117,7 +121,7 @@ class WPPConnect(Provider):
                 self._tokens[key] = data.get("full") or data.get("token") or ""
             return self._tokens[key]
 
-    def _call(self, method: str, path: str, json: dict | None = None):
+    def _call(self, method: str, path: str, json: dict | None = None, timeout: float | None = None):
         import httpx
 
         why = self.problem()
@@ -127,7 +131,10 @@ class WPPConnect(Provider):
             try:
                 with self._client() as c:
                     r = c.request(method, f"/api/{self.session}/{path}", json=json,
-                                  headers={"Authorization": f"Bearer {self._token(fresh=attempt == 1)}"})
+                                  headers={"Authorization": f"Bearer {self._token(fresh=attempt == 1)}"},
+                                  **({"timeout": timeout} if timeout else {}))
+            except httpx.TimeoutException as exc:
+                raise GatewayBusy(f"WhatsApp gateway is still working ({exc.__class__.__name__})") from exc
             except httpx.HTTPError as exc:
                 raise TemporaryError(f"WhatsApp gateway not reachable at {self.url} ({exc.__class__.__name__})") from exc
             if r.status_code == 401 and attempt == 0:
@@ -142,6 +149,8 @@ class WPPConnect(Provider):
             return Connection(NOT_CONFIGURED, why)
         try:
             r = self._call("GET", "status-session")
+        except GatewayBusy:
+            return Connection(STARTING, "Starting the WhatsApp session…")
         except TemporaryError as exc:
             return Connection(ERROR, str(exc))
         data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
@@ -159,7 +168,11 @@ class WPPConnect(Provider):
         if why:
             return Connection(NOT_CONFIGURED, why)
         try:
-            r = self._call("POST", "start-session", {"waitQrCode": True})
+            # do not hold the request until the QR exists: the first start launches a browser and loads
+            # WhatsApp Web (up to a minute); the Settings page polls status-session for the QR instead
+            r = self._call("POST", "start-session", {"waitQrCode": False}, timeout=60.0)
+        except GatewayBusy:
+            return Connection(STARTING, "Starting the WhatsApp session… the first start can take a minute")
         except TemporaryError as exc:
             return Connection(ERROR, str(exc))
         data = r.json() if r.content else {}

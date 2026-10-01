@@ -12,7 +12,7 @@ const STATE = {
 };
 
 export function create(ctx, params, root) {
-  let data = null, poll = null, previewTimer = null;
+  let data = null, poll = null, previewTimer = null, connectUntil = 0;
   ctx.setTitle("Settings");
   root.innerHTML = `<div class="settings">
     <nav class="set-nav"><h2>Settings</h2><button type="button" class="on" data-sec="whatsapp">${WA_ICON} WhatsApp Invoicing</button></nav>
@@ -92,7 +92,8 @@ export function create(ctx, params, root) {
           </tbody></table>` : '<p class="muted">Nothing sent yet.</p>'}
       </div>`;
     preview();
-    if (c.state === "QR_REQUIRED" || c.state === "STARTING") startPoll(); else stopPoll();
+    // after Connect, keep checking for a while even through "disconnected": the session is booting
+    if (c.state === "QR_REQUIRED" || c.state === "STARTING" || Date.now() < connectUntil) startPoll(); else stopPoll();
   }
 
   function startPoll() {
@@ -100,7 +101,7 @@ export function create(ctx, params, root) {
     poll = setInterval(async () => {
       try {
         const c = await api("/api/erp/settings/whatsapp/connection");
-        if (c.state !== data.connection.state || (c.qr && c.qr !== data.connection.qr)) {
+        if (c.state !== data.connection.state || (c.qr && c.qr !== data.connection.qr) || c.detail !== data.connection.detail) {
           data.connection = c; render();
           if (c.state === "CONNECTED") ctx.status("WhatsApp linked ✓ — invoices can be sent", "ok");
         }
@@ -124,7 +125,15 @@ export function create(ctx, params, root) {
   async function act(name) {
     try {
       if (name === "refresh") return load();
-      if (name === "connect") { ctx.status("Starting WhatsApp…"); data = await api("/api/erp/settings/whatsapp/connect", { method: "POST" }); render(); return; }
+      if (name === "connect") {
+        const btn = $('[data-act="connect"]', body);
+        if (btn) { btn.disabled = true; btn.textContent = "Starting… (up to a minute)"; }
+        ctx.status("Starting WhatsApp — the QR code appears here in a moment…");
+        connectUntil = Date.now() + 180000;
+        data = await api("/api/erp/settings/whatsapp/connect", { method: "POST" }); render();
+        if (data.connection.state === "ERROR") ctx.status(data.connection.detail || "WhatsApp gateway error", "error");
+        return;
+      }
       if (name === "logout") {
         if (!(await window.erpConfirm("Log out WhatsApp? Invoices cannot be sent until the phone is linked again with a new QR code."))) return;
         data = await api("/api/erp/settings/whatsapp/logout", { method: "POST" }); render(); ctx.status("WhatsApp logged out", "ok"); return;

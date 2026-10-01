@@ -153,6 +153,9 @@ else
   elif [ "$age_h" -gt 26 ]; then finding WARN "Newest backup is ${age_h} h old" "${last#* } — the 05:00 maintenance may not have run (PC off?)" backup
   else finding PASS "Newest backup ${last#* } (${age_h} h old)"; fi
 fi
+if [ -n "$(sget interrupted_operation)" ]; then
+  finding WARN "The PC stopped during: $(sget interrupted_operation)" "noticed at boot $(sget interrupted_at); check the ERP's data, or restore the backup taken before it (faheem-erp backups)"
+fi
 case "$(sget last_update_status)" in
   ""|ok) ;;
   *) finding WARN "Last update: $(sget last_update_status)" "at $(sget last_update_at); the previous version kept running — see: faheem-erp logs, $DEPLOY_LOG" ;;

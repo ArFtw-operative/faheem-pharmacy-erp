@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
-Name=Faheem Pharmacy ERP (counter screen)
-Exec=/opt/faheem-erp/current/bin/faheem-app --kiosk
+Name=Faheem Pharmacy ERP
+Exec=/opt/faheem-erp/current/bin/faheem-app
 Icon=/opt/faheem-erp/current/kiosk/icon.png
 X-GNOME-Autostart-enabled=true
 X-GNOME-Autostart-Delay=0

@@ -173,6 +173,27 @@ install_host_files() {
   install -d /usr/share/polkit-1/actions
   install -m 644 "$rel/polkit-com.faheem.erp.policy" /usr/share/polkit-1/actions/com.faheem.erp.policy
   for f in "$rel"/desktop/*.desktop; do install -m 644 "$f" /usr/share/applications/; done
+  # the app may start the stack without a password, for these users only, and only that command
+  local users="" sudoers=/etc/sudoers.d/faheem-erp tmp
+  for u in faheem ${FAHEEM_ADMIN_USER:-$(env_get FAHEEM_ADMIN_USER)}; do id "$u" >/dev/null 2>&1 && users+="${users:+, }$u"; done
+  if [ -n "$users" ]; then
+    tmp="$(mktemp)"
+    printf '# Faheem Pharmacy ERP: the desktop app starts the ERP if it is not running
+%s ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block faheem-erp.service
+' "$users" > "$tmp"
+    if visudo -cf "$tmp" >/dev/null 2>&1; then install -m 440 -o root -g root "$tmp" "$sudoers"; fi
+    rm -f "$tmp"
+  fi
+  # the app opens at login: windowed for the administrator (the counter user gets the kiosk)
+  for u in ${FAHEEM_ADMIN_USER:-$(env_get FAHEEM_ADMIN_USER)}; do
+    id "$u" >/dev/null 2>&1 || continue
+    d="$(getent passwd "$u" | cut -d: -f6 || true)/.config/autostart"
+    install -d -o "$u" -g "$(id -gn "$u")" "$d"
+    [ -f "$d/faheem-erp-app.desktop" ] || install -m 644 -o "$u" -g "$(id -gn "$u")" "$rel/kiosk/faheem-erp-app-autostart.desktop" "$d/faheem-erp-app.desktop"
+  done
+  # the counter user's kiosk autostart follows the release (keeps an "off" choice)
+  d="$(getent passwd faheem | cut -d: -f6 || true)/.config/autostart/faheem-erp-kiosk.desktop"
+  if [ -f "$d" ] && ! grep -q '^Hidden=true' "$d"; then install -m 644 -o faheem -g faheem "$rel/kiosk/faheem-erp-kiosk.desktop" "$d"; fi
   # shortcuts on the desktop of the counter user and of the administrator who installed
   for u in faheem ${FAHEEM_ADMIN_USER:-$(env_get FAHEEM_ADMIN_USER)}; do
     id "$u" >/dev/null 2>&1 || continue

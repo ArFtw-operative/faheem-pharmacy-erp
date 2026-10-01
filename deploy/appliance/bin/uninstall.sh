@@ -20,11 +20,11 @@ dc down --remove-orphans 2>/dev/null || true
 rm -f /etc/systemd/system/faheem-erp*.service /etc/systemd/system/faheem-erp*.timer
 systemctl daemon-reload
 rm -f /usr/local/bin/faheem-erp /etc/logrotate.d/faheem-erp /usr/share/applications/faheem-erp*.desktop \
-      /usr/share/polkit-1/actions/com.faheem.erp.policy
+      /usr/share/polkit-1/actions/com.faheem.erp.policy /etc/sudoers.d/faheem-erp
 rm -rf /etc/systemd/system/faheem-erp-maintenance.timer.d
 for u in faheem $(env_get FAHEEM_ADMIN_USER); do
   d="$(getent passwd "$u" | cut -d: -f6 || true)"; [ -n "$d" ] || continue
-  rm -f "$d"/.config/autostart/faheem-erp-kiosk.desktop "$d"/Desktop/faheem-erp*.desktop "$(runuser -u "$u" -- xdg-user-dir DESKTOP 2>/dev/null)"/faheem-erp*.desktop
+  rm -f "$d"/.config/autostart/faheem-erp-kiosk.desktop "$d"/.config/autostart/faheem-erp-app.desktop "$d"/Desktop/faheem-erp*.desktop "$(runuser -u "$u" -- xdg-user-dir DESKTOP 2>/dev/null)"/faheem-erp*.desktop
 done
 rm -rf "$FAHEEM_HOME"
 if [ "$purge" = 1 ]; then

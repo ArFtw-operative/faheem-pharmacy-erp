@@ -89,8 +89,10 @@ def settings_whatsapp(db: Session = Depends(get_db), user: User = Depends(requir
 
 @router.post("/api/erp/settings/whatsapp/connect")
 def settings_connect(db: Session = Depends(get_db), user: User = Depends(require_permission("settings.manage"))):
-    _run(db, wa.connect, user=user)
-    return _settings_view(db)
+    conn = _run(db, wa.connect, user=user)
+    view = _settings_view(db)
+    view["connection"] = conn                           # what start-session said (e.g. still starting)
+    return view
 
 
 @router.get("/api/erp/settings/whatsapp/connection")

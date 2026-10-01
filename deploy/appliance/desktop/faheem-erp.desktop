@@ -1,8 +1,11 @@
 [Desktop Entry]
 Type=Application
 Name=Faheem Pharmacy ERP
-Comment=Open the pharmacy ERP
-Exec=/opt/faheem-erp/current/bin/faheem-kiosk --window
+GenericName=Pharmacy ERP
+Comment=Open the pharmacy ERP (starts it if needed)
+Exec=/opt/faheem-erp/current/bin/faheem-app
 Icon=/opt/faheem-erp/current/kiosk/icon.png
+StartupWMClass=FaheemPharmacyERP
+StartupNotify=true
 Terminal=false
 Categories=Office;Finance;

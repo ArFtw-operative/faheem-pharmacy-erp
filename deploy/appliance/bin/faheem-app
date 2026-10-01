@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Faheem Pharmacy ERP — the desktop app.
+#   faheem-app            the ERP in its own window (own profile and dock icon, no browser bars)
+#   faheem-app --kiosk    full screen, nothing else on screen (the counter user's login)
+# If the ERP is not running it is started first (a sudoers rule allows exactly
+# "systemctl start faheem-erp.service" for the counter user and the installing administrator),
+# while a "Starting services…" page waits and then opens the ERP.
+set -u
+here="$(dirname "$(readlink -f "$0")")"
+port="$(cat /opt/faheem-erp/port 2>/dev/null || echo 8000)"
+url="http://127.0.0.1:$port"
+mode=(--start-maximized); [ "${1:-}" = --kiosk ] && mode=(--kiosk)
+
+for b in chromium chromium-browser google-chrome google-chrome-stable; do
+  command -v "$b" >/dev/null 2>&1 && { browser="$b"; break; }
+done
+if [ -z "${browser:-}" ]; then
+  notify-send "Faheem Pharmacy ERP" "Chromium is not installed — run the installer again" 2>/dev/null
+  exit 1
+fi
+
+# not answering yet → start it (no password; see the sudoers rule above)
+if ! curl -fsS -m 2 "$url/health/ready" >/dev/null 2>&1; then
+  sudo -n /usr/bin/systemctl start --no-block faheem-erp.service 2>/dev/null || true
+fi
+
+if [ "${1:-}" = --kiosk ]; then   # a counter screen never blanks or locks (best effort; GNOME)
+  gsettings set org.gnome.desktop.session idle-delay 0 2>/dev/null || true
+  gsettings set org.gnome.desktop.screensaver lock-enabled false 2>/dev/null || true
+  gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type nothing 2>/dev/null || true
+fi
+
+# the app's own profile: a separate instance with its own window class and dock icon. Snap Chromium may
+# only write inside ~/snap/chromium/common, so profile and the local loading page live there for it.
+case "$(readlink -f "$(command -v "$browser")")" in
+  /snap/*|/usr/bin/snap) base="$HOME/snap/chromium/common/faheem-erp" ;;
+  *) base="$HOME/.local/share/faheem-erp" ;;
+esac
+mkdir -p "$base/profile"
+sed "s/__PORT__/$port/g" "$here/../kiosk/loading.html" > "$base/loading.html"
+# a file:// page counts as local for the browser's local-network rules
+
+exec "$browser" "${mode[@]}" --app="file://$base/loading.html" \
+  --user-data-dir="$base/profile" --class=FaheemPharmacyERP --name=FaheemPharmacyERP \
+  --no-first-run --no-default-browser-check --noerrdialogs --disable-session-crashed-bubble --disable-infobars \
+  --disable-features=Translate,MediaRouter --password-store=basic --check-for-update-interval=31536000 \
+  --overscroll-history-navigation=0

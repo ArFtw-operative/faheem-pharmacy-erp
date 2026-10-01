@@ -1,5 +1,5 @@
 [Unit]
-Description=Faheem Pharmacy ERP update check 5 minutes after boot
+Description=Faheem Pharmacy ERP catch-up 5 minutes after boot
 
 [Timer]
 OnBootSec=5min

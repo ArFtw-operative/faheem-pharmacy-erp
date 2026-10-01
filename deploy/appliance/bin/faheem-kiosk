@@ -1,32 +1,3 @@
 #!/usr/bin/env bash
-# Opens the ERP full-screen for the desktop user (auto-started at login of "faheem").
-# Shows a local "Starting services…" page that switches to the ERP as soon as it is ready.
-#   faheem-kiosk            kiosk (full screen, no browser chrome)
-#   faheem-kiosk --window   an app window (desktop launcher)
-set -u
-here="$(dirname "$(readlink -f "$0")")"
-port="$(cat /opt/faheem-erp/port 2>/dev/null || echo 8000)"
-mode=(--kiosk); [ "${1:-}" = --window ] && mode=(--start-maximized)
-
-for b in chromium chromium-browser google-chrome google-chrome-stable; do
-  command -v "$b" >/dev/null 2>&1 && { browser="$b"; break; }
-done
-[ -n "${browser:-}" ] || { notify-send "Faheem Pharmacy ERP" "No Chromium browser installed" 2>/dev/null; exit 1; }
-
-# a counter screen never blanks or locks (best effort; GNOME)
-gsettings set org.gnome.desktop.session idle-delay 0 2>/dev/null || true
-gsettings set org.gnome.desktop.screensaver lock-enabled false 2>/dev/null || true
-gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type nothing 2>/dev/null || true
-
-# a file:// page counts as local for the browser's local-network rules (a data: page may not), and
-# snap Chromium can read only its own folder outside visible home directories
-case "$(readlink -f "$(command -v "$browser")")" in
-  /snap/*|/usr/bin/snap) dir="$HOME/snap/chromium/common/faheem-erp" ;;
-  *) dir="$HOME/.cache/faheem-erp" ;;
-esac
-mkdir -p "$dir"
-sed "s/__PORT__/$port/g" "$here/../kiosk/loading.html" > "$dir/loading.html"
-exec "$browser" "${mode[@]}" --app="file://$dir/loading.html" \
-  --no-first-run --noerrdialogs --disable-session-crashed-bubble --disable-infobars \
-  --disable-features=Translate,MediaRouter --password-store=basic --check-for-update-interval=31536000 \
-  --overscroll-history-navigation=0
+# kept for older shortcuts: the counter screen is the app in kiosk mode
+exec "$(dirname "$(readlink -f "$0")")/faheem-app" --kiosk "$@"

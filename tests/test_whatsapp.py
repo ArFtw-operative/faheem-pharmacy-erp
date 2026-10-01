@@ -244,3 +244,24 @@ def test_wppconnect_errors_and_private_network_only():
     assert "not a local or private" in public.problem() and public.connection().state == P.NOT_CONFIGURED
     assert P.WPPConnect(url="http://192.168.1.20:21465", secret="s").problem() == ""
     assert "SECRET" in P.WPPConnect(url="http://127.0.0.1:21465", secret="").problem()
+
+
+def test_connect_reports_starting_while_the_gateway_boots_instead_of_failing():
+    import httpx
+
+    from app.services.whatsapp import provider as P
+
+    def handler(request):
+        if request.url.path.endswith("/generate-token"):
+            return httpx.Response(201, json={"token": "t", "full": "s:t"})
+        if request.url.path.endswith("/start-session"):
+            raise httpx.ReadTimeout("still launching the browser", request=request)
+        if request.url.path.endswith("/status-session"):
+            return httpx.Response(200, json={"status": "QRCODE", "qrcode": "data:image/png;base64,AAAA"})
+        return httpx.Response(404)
+
+    gw = P.WPPConnect(url="http://127.0.0.1:21465", secret="k", session="s", transport=httpx.MockTransport(handler))
+    P.WPPConnect._tokens.clear()
+    assert gw.connect().state == P.STARTING                 # not an error: the page keeps polling
+    c = gw.connection()
+    assert c.state == P.QR_REQUIRED and c.qr.startswith("data:image/png")

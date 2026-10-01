@@ -3,6 +3,23 @@
 Release notes for Faheem Pharmacy. Versions follow semantic versioning; every release
 lists its database migrations. Upgrades keep all business history (see docs/UPGRADES.md).
 
+## 1.4.1 — 2026-10-01
+
+- **Desktop app:** "Faheem Pharmacy ERP" opens in its own app window (own profile and dock icon, no
+  browser bars) and starts the ERP first if it is not running — no password, the only command allowed.
+  It opens at login (full-screen for the counter user, windowed for the administrator; Settings →
+  `app-at-login`), and **Start ERP** / **Restart ERP** open it afterwards.
+- **WhatsApp → Connect** no longer appears to do nothing while the gateway starts its browser: the
+  session is started without waiting, the page shows "Starting…" and keeps checking until the QR code
+  appears; gateway errors show in the status bar.
+- **After a power cut:** the boot catch-up also takes the missed daily backup (never a reboot) and
+  records an interrupted update / restore for Status and the doctor; the app opens at login without delay.
+- Installer: builds the image on the PC from `prod` while no release is published (and again on every
+  re-run until then); normal system account for `faheem-erp`; image downloads shown before the first
+  start; clear message instead of a token prompt when nothing is published.
+
+**Migrations:** none (schema `f6b8d0e2a4c7`). **Fixtures:** `tests/fixtures/releases/1.4.1.db`.
+
 ## 1.4.0 — 2026-10-01
 
 **The appliance**
