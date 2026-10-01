@@ -138,7 +138,7 @@ def resolve(item: Item) -> UOM | None:
             unit = "AMPOULE" if form == "INJECTION" else _WHOLE_UNIT.get(form) or ("BOTTLE" if cunit in ("ML", "L") else "PACK")
             return UOM(unit, "BOX", info.outer_count, info.content_qty, cunit, form,
                        f"Pack “{raw}”: box of {info.outer_count} × {info.content_qty.normalize()} {cunit.lower()}")
-        unit = _WHOLE_UNIT.get(form) or ("BOTTLE" if cunit in ("ML", "L") else "TUBE" if cunit == "G" and form in ("", "CREAM", "GEL", "OINTMENT") else "PACK")
+        unit = info.unit_hint or _WHOLE_UNIT.get(form) or ("BOTTLE" if cunit in ("ML", "L") else "TUBE" if cunit == "G" and form in ("", "CREAM", "GEL", "OINTMENT") else "PACK")
         if unit in ("TABLET", "CAPSULE"):
             unit = "PACK"
         return UOM(unit, unit, 1, info.content_qty, cunit, form,

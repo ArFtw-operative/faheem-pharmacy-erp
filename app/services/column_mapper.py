@@ -307,12 +307,17 @@ def map_header(grid: list[list[object]], index: int, sample: int = 60, learned: 
             m.document[fld], m.reasons[fld] = c, why
             taken.add(c)
     groups = _column_values(body, m.document["invoice_no"]) if "invoice_no" in m.document else None
+    # Invoice numbers are only unique within a supplier, including in bulk exports.
+    supplier_cols = [m.document[f] for f in ("supplier_gstin", "supplier_name") if f in m.document]
+    if supplier_cols:
+        identities = [_column_values(body, c) for c in supplier_cols]
+        groups = list(zip(*identities, groups or [""] * len(body)))
     # a candidate invoice-level column that varies within an invoice is really a line column
     learned_cols = {c for c, h in enumerate(headers) if (learned or {}).get(header_key(h)) or (hints or {}).get(h)}
     single_line = bool(body) and len(body) <= len({str(g) for g in groups}) if groups else len(body) <= 1
     for fld in list(m.document):
         c = m.document[fld]
-        if fld not in ("invoice_no",) and c not in learned_cols and _constant_share(_column_values(body, c), groups) < 0.9:
+        if fld not in ("invoice_no", "supplier_name", "supplier_gstin") and c not in learned_cols and _constant_share(_column_values(body, c), groups) < 0.9:
             taken.discard(m.document.pop(fld))
             m.reasons.pop(fld, None)
         elif fld == "printed_gst" and single_line and "sum" not in toks[c] and c not in learned_cols:
@@ -364,6 +369,12 @@ def map_header(grid: list[list[object]], index: int, sample: int = 60, learned: 
             m.warnings.append(f"MRP (“{headers[m.columns['mrp']]}”) is below Rate (“{headers[m.columns['rate']]}”) on most "
                               "lines — check whether the two columns are the other way round")
     m.ignored = [h for c, h in enumerate(headers) if h and c not in taken]
+    for c, h in enumerate(headers):
+        if h in m.ignored and "hsn" in toks[c]:
+            bad = [str(v).strip() for v in _column_values(body, c) if str(v or "").strip()
+                   and not re.fullmatch(r"\d{4}|\d{6}|\d{8}", str(v).strip())]
+            if bad:
+                m.warnings.append(f"Ignored HSN-like column {h!r} contains invalid codes (e.g. {bad[0]!r}); verify extraction. Original values remain in source evidence.")
     if "manufacturer" in m.columns:   # a second maker column (ComName + MfgName) fills blanks
         alt = next((c for c in range(len(headers)) if c not in taken and _rule_score(toks[c], _LINE_RULES["manufacturer"])[0] >= 60), None)
         if alt is not None:

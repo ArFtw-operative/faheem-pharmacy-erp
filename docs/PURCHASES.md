@@ -70,3 +70,7 @@ Batch, expiry, purchase rate, MRP and category may be blank, including for gener
 cost stays unresolved. Unclassified new goods default to General; an absent pack means one stock
 unit per purchase unit. Enter known values when available; malformed dates, damaged batch numbers,
 invalid quantities and ambiguous pack conversions still need correction or confirmation.
+# Receipt interpretation
+
+See [Local purchase decisions](PURCHASE-DECISIONS.md) for invoice-unit verification,
+fractional schemes, supplier conversion memory and medicine reference ingestion.

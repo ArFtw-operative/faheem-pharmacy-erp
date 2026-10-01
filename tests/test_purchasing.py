@@ -379,7 +379,7 @@ def test_ai_reader_is_off_by_default(db):
     assert invoice_agent.advisor(db) is None
 
 
-def test_ai_reader_proposals_are_checked_against_the_values(db, monkeypatch):
+def test_legacy_advisor_proposals_are_checked_without_purchase_network_calls(db, monkeypatch):
     from app.services import invoice_agent, settings_service
 
     settings_service.set_setting(db, "invoice_ai_enabled", "1")
@@ -393,13 +393,16 @@ def test_ai_reader_proposals_are_checked_against_the_values(db, monkeypatch):
 
     monkeypatch.setattr(invoice_agent, "propose", fake)
     body = b"K1,K2,K3,K4,K5,K6\nDOLO 650MG TAB,DB1,05/28,10,33.6,05/28\nCROCIN TAB,CR1,11/27,5,30,11/27\n"
-    p = purchasing.create_from_file(db, "k.csv", body, supplier_id=supplier(db).id, invoice_no="K-1")
+    from app.services import purchase_import
+    p = purchase_import.parse("k.csv", body, advisor=fake)
     fields = {c["field"]: c["column"] for c in p.column_map}
     assert fields["name"] == "K1" and fields["quantity"] == "K4" and fields["expiry"] == "K6"
     assert "rate" not in fields                                   # contradicted by the values → not used
-    assert len(sent["rows"]) <= invoice_agent.SAMPLE_ROWS         # only a sample leaves the server
-    assert "AI invoice reader" in p.extraction_meta
-    assert "rate_missing" in {i["code"] for i in p.items[0].issues}
+    assert len(sent["rows"]) <= invoice_agent.SAMPLE_ROWS
+    sent.clear()
+    with pytest.raises(purchasing.PurchaseError):
+        purchasing.create_from_file(db, "k.csv", body, supplier_id=supplier(db).id, invoice_no="K-1")
+    assert not sent  # ERP importing stays local even when legacy AI settings are enabled
 
 
 def test_api_columns_window_remaps_and_learns(client, db):
