@@ -2,7 +2,7 @@
 Type=Application
 Name=Faheem Pharmacy ERP
 GenericName=Pharmacy ERP
-Comment=Open the pharmacy ERP (starts it if needed)
+Comment=Open the pharmacy ERP full screen (starts it if needed)
 Exec=/opt/faheem-erp/current/bin/faheem-app
 Icon=/opt/faheem-erp/current/kiosk/icon.png
 StartupWMClass=FaheemPharmacyERP

@@ -5,10 +5,15 @@ lists its database migrations. Upgrades keep all business history (see docs/UPGR
 
 ## 1.4.1 — 2026-10-01
 
-- **Desktop app:** "Faheem Pharmacy ERP" opens in its own app window (own profile and dock icon, no
-  browser bars) and starts the ERP first if it is not running — no password, the only command allowed.
+- **Desktop app:** "Faheem Pharmacy ERP" opens full screen like dedicated software (kiosk: no address
+  bar, tabs, menus or top-edge exit button; Super / Alt+Tab / Alt+F4 still work), with its own profile,
+  and starts the ERP first if it is not running — no password, the only command allowed.
   It opens at login (full-screen for the counter user, windowed for the administrator; Settings →
   `app-at-login`), and **Start ERP** / **Restart ERP** open it afterwards.
+- **WhatsApp:** the gateway's access token is sent the way WPPConnect 2.10 expects (the bare token —
+  before, every call was refused and no QR appeared); a refusal now shows as an error.
+- **Network moves:** the ERP follows a new network address by itself (NetworkManager hook), so moving
+  the PC to the store's Wi-Fi keeps shop-network access working; `network static` warns for wired profiles.
 - **WhatsApp → Connect** no longer appears to do nothing while the gateway starts its browser: the
   session is started without waiting, the page shows "Starting…" and keeps checking until the QR code
   appears; gateway errors show in the status bar.

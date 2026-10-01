@@ -216,7 +216,7 @@ def test_wppconnect_requests_match_its_api():
     assert gw.send_file("919876543210", "Invoice-1.pdf", b"%PDF-1.4", "application/pdf", "Thanks") == "true_91987@c.us_X"
     method, path, auth, body = seen[-1]
     sent = json.loads(body)
-    assert (method, path, auth) == ("POST", "/api/shop/send-file-base64", "Bearer shop:t")
+    assert (method, path, auth) == ("POST", "/api/shop/send-file-base64", "Bearer t")     # the bare token
     assert sent["phone"] == "919876543210" and sent["base64"].startswith("data:application/pdf;base64,") and sent["caption"] == "Thanks"
 
 
@@ -234,7 +234,7 @@ def test_wppconnect_errors_and_private_network_only():
         if "generate-token" in req.url.path:
             tokens.append(1)
             return httpx.Response(201, json={"full": f"shop:t{len(tokens)}"})
-        if req.headers["authorization"] == "Bearer shop:t1":
+        if req.headers["authorization"] == "Bearer t1":
             return httpx.Response(401, json={})
         return httpx.Response(201, json={"status": "success", "response": []})
 
@@ -265,3 +265,32 @@ def test_connect_reports_starting_while_the_gateway_boots_instead_of_failing():
     assert gw.connect().state == P.STARTING                 # not an error: the page keeps polling
     c = gw.connection()
     assert c.state == P.QR_REQUIRED and c.qr.startswith("data:image/png")
+
+
+def test_wppconnect_auth_as_the_real_gateway_checks_it_and_shows_a_refusal():
+    import httpx
+
+    from app.services.whatsapp import provider as P
+
+    def gateway(req):     # wppconnect-server 2.10: Authorization "Bearer <token>"; "session:token" is refused
+        if req.url.path.endswith("/generate-token"):
+            return httpx.Response(201, json={"status": "success", "session": "s", "token": "HASH", "full": "s:HASH"})
+        if req.headers.get("authorization") != "Bearer HASH":
+            return httpx.Response(401, json={"error": "Check that the Session and Token are correct"})
+        if req.url.path.endswith("/status-session"):
+            return httpx.Response(200, json={"status": "QRCODE", "qrcode": "data:image/png;base64,QQ"})
+        return httpx.Response(200, json={"status": "INITIALIZING"})
+
+    P.WPPConnect._tokens.clear()
+    gw = P.WPPConnect(url="http://127.0.0.1:21465", secret="k", session="s", transport=httpx.MockTransport(gateway))
+    assert gw.connection().state == P.QR_REQUIRED
+
+    def refusing(req):
+        if req.url.path.endswith("/generate-token"):
+            return httpx.Response(201, json={"token": "WRONG"})
+        return httpx.Response(401, json={"error": "Check that the Session and Token are correct"})
+
+    P.WPPConnect._tokens.clear()
+    bad = P.WPPConnect(url="http://127.0.0.1:21465", secret="k", session="s", transport=httpx.MockTransport(refusing))
+    c = bad.connection()
+    assert c.state == P.ERROR and "refused" in c.detail                  # shown, not a silent "Disconnected"

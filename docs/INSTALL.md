@@ -120,6 +120,14 @@ store's network with a VPN and open `https://<this PC's address>` as in the shop
 
 Turn it off any time: `sudo faheem-erp lan disable`.
 
+**Moving the PC to another network (e.g. from a test setup to the store).** The counter screen is not
+affected — it always uses the PC itself. A fixed address set with `network static` belongs to that one
+Wi-Fi network: on the store's Wi-Fi the PC gets an automatic address, and the ERP follows it by itself
+(the HTTPS address and certificate are refreshed when the network changes). At the store, then:
+reserve the PC's new address on the store router (or `sudo faheem-erp network static` there), and
+install the certificate on the store's devices. A *wired* profile pinned with `network static` is
+used on every cable network — return it to automatic first (`sudo faheem-erp network dhcp`).
+
 ## 6. Re-running and removing
 
 Running the installer again repairs an installation (tooling, services, shortcuts, permissions)

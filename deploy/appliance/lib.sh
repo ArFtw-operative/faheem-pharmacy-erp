@@ -173,6 +173,8 @@ install_host_files() {
   install -d /usr/share/polkit-1/actions
   install -m 644 "$rel/polkit-com.faheem.erp.policy" /usr/share/polkit-1/actions/com.faheem.erp.policy
   for f in "$rel"/desktop/*.desktop; do install -m 644 "$f" /usr/share/applications/; done
+  # follow a new network address (the PC moved to another Wi-Fi / network)
+  [ -d /etc/NetworkManager/dispatcher.d ] && install -m 755 -o root -g root "$rel/networkmanager/90-faheem-erp" /etc/NetworkManager/dispatcher.d/90-faheem-erp
   # the app may start the stack without a password, for these users only, and only that command
   local users="" sudoers=/etc/sudoers.d/faheem-erp tmp
   for u in faheem ${FAHEEM_ADMIN_USER:-$(env_get FAHEEM_ADMIN_USER)}; do id "$u" >/dev/null 2>&1 && users+="${users:+, }$u"; done

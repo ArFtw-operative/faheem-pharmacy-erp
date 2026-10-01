@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# faheem-erp lan status|enable|disable|ca
+# faheem-erp lan status|enable|disable|ca|refresh   (refresh: follow a new address — run by NetworkManager)
 # faheem-erp network static [auto|ADDRESS/PREFIX] [--yes]   pin this PC's IPv4 address (NetworkManager)
 # faheem-erp network dhcp [--yes]                            back to an automatic address
 #
@@ -70,6 +70,15 @@ case "$area:$cmd" in
     [ "$(nmcli -g ipv4.method connection show "$(nm_conn "$(default_dev)")" 2>/dev/null)" = manual ] \
       || warn "this PC's address is automatic (DHCP) and may change: reserve $ip for it on the router, or run: sudo faheem-erp network static"
     ;;
+  lan:refresh)          # the PC joined another network (e.g. moved to the store): follow its new address
+    flag LAN_ACCESS || exit 0
+    ip="$(lan_ip)"; [ -n "$ip" ] && [ "$ip" != "$(env_get FAHEEM_LAN_IP)" ] || exit 0
+    take_lock lan 120
+    log "Network address changed $(env_get FAHEEM_LAN_IP) → $ip; refreshing the HTTPS address"
+    env_set FAHEEM_LAN_IP "$ip"
+    dc up -d --force-recreate proxy >/dev/null 2>&1 || warn "the HTTPS proxy did not restart"
+    publish_ca
+    ;;
   lan:disable)
     take_lock lan
     dc stop proxy >/dev/null 2>&1 || true; dc rm -f proxy >/dev/null 2>&1 || true
@@ -88,6 +97,9 @@ case "$area:$cmd" in
     [[ "$want" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$ ]] || die "give the address as ADDRESS/PREFIX, e.g. 192.168.1.50/24"
     gw="$(gateway)"; dns="$(nmcli -g IP4.DNS device show "$d" 2>/dev/null | tr '|' ' ' | xargs)"; dns="${dns:-$gw}"
     echo "Pin '$conn' ($d): address $want, gateway $gw, DNS $dns"
+    [ "$(nmcli -g connection.type connection show "$conn" 2>/dev/null)" = 802-3-ethernet ] \
+      && warn "'$conn' is a wired profile: it is used on ANY cable network this PC is plugged into. Prefer a reservation on the router."
+    echo "(Wi-Fi: this applies only to network '$conn'; another Wi-Fi network gets its own automatic address.)"
     confirm "Apply this fixed address?"
     nmcli connection modify "$conn" ipv4.method manual ipv4.addresses "$want" ipv4.gateway "$gw" ipv4.dns "$dns"
     nmcli connection up "$conn" >/dev/null

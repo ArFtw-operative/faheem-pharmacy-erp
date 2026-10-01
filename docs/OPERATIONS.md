@@ -8,7 +8,7 @@ has no administrator rights, so the owner or support types theirs (polkit).
 
 | Shortcut | Does |
 |---|---|
-| Faheem Pharmacy ERP | the ERP app in its own window; starts the ERP first if it is not running (no password) |
+| Faheem Pharmacy ERP | the ERP full screen, like dedicated software (no browser bars, no exit button at the top; leave with Super, Alt+Tab or Alt+F4); starts the ERP first if it is not running (no password) |
 | ERP Control Center | the menu below |
 | ERP Doctor | diagnoses the appliance and offers the fixes it found |
 | Update ERP | installs the newest release (backup, rehearsal and automatic rollback included) |

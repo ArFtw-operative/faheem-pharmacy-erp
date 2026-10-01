@@ -118,7 +118,8 @@ class WPPConnect(Provider):
                 if r.status_code >= 400:
                     raise TemporaryError(f"WhatsApp gateway refused the secret key (HTTP {r.status_code})")
                 data = r.json()
-                self._tokens[key] = data.get("full") or data.get("token") or ""
+                # the Authorization header takes the bare token; "full" is "<session>:<token>" for URL use
+                self._tokens[key] = data.get("token") or str(data.get("full") or "").split(":", 1)[-1]
             return self._tokens[key]
 
     def _call(self, method: str, path: str, json: dict | None = None, timeout: float | None = None):
@@ -153,6 +154,10 @@ class WPPConnect(Provider):
             return Connection(STARTING, "Starting the WhatsApp session…")
         except TemporaryError as exc:
             return Connection(ERROR, str(exc))
+        if r.status_code in (401, 403):
+            return Connection(ERROR, f"WhatsApp gateway refused the ERP's access (HTTP {r.status_code}) — check PHARMACY_WPP_SECRET")
+        if r.status_code >= 500:
+            return Connection(ERROR, f"WhatsApp gateway error (HTTP {r.status_code})")
         data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
         status = str(data.get("status") or "").upper()
         if status in ("CONNECTED", "INCHAT", "ISLOGGED", "MAIN"):
@@ -175,6 +180,8 @@ class WPPConnect(Provider):
             return Connection(STARTING, "Starting the WhatsApp session… the first start can take a minute")
         except TemporaryError as exc:
             return Connection(ERROR, str(exc))
+        if r.status_code in (401, 403):
+            return Connection(ERROR, f"WhatsApp gateway refused the ERP's access (HTTP {r.status_code}) — check PHARMACY_WPP_SECRET")
         data = r.json() if r.content else {}
         status = str(data.get("status") or "").upper()
         if status == "CONNECTED":
