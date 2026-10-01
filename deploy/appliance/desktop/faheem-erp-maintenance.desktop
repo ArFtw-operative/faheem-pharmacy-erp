@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=ERP Maintenance
+Comment=Optimise the database, free disk space, clear caches
+Exec=/opt/faheem-erp/current/bin/faheem-admin optimize all
+Icon=/opt/faheem-erp/current/kiosk/icon.png
+Terminal=false
+Categories=Office;Finance;

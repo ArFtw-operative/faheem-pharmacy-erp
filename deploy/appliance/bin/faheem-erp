@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+# faheem-erp — operate the Faheem Pharmacy ERP appliance.
+SCRIPT_NAME=faheem-erp
+# shellcheck source=../lib.sh
+. "$(dirname "$(readlink -f "$0")")/../lib.sh"
+here="$(dirname "$(readlink -f "$0")")"
+
+usage() {
+  cat <<EOF
+Faheem Pharmacy ERP — appliance control
+
+  faheem-erp menu                   Control Center (keyboard menu for everything below)
+  faheem-erp status                 services, version, last backup / update
+  faheem-erp start | stop | restart   (stop = shut down the ERP; the PC stays on)
+  faheem-erp settings [set KEY VALUE]  boot start, counter screen, auto-login, auto-update, daily reboot, times
+  faheem-erp optimize WHAT          database | cleanup | app-cache | browser-cache | browser-cookies | all | usage
+  faheem-erp power reboot|poweroff  restart / turn off the PC (stops the ERP cleanly first)
+  faheem-erp update [VERSION]       transactional update (newest release by default)
+  faheem-erp update --check         only say whether an update is available
+  faheem-erp rollback [VERSION]     back to the previous version
+  faheem-erp backup [--note TEXT]   verified snapshot now
+  faheem-erp backups                list snapshots
+  faheem-erp restore ID|--latest    put a snapshot back (asks for confirmation)
+  faheem-erp drill [ID]             prove a snapshot restores (scratch database; live data untouched)
+  faheem-erp doctor [--fix [ID…]]   diagnose from live state and propose fixes; --fix applies them
+  faheem-erp logs [SERVICE] [-f]    web, worker, migrate, postgres, whatsapp
+  faheem-erp version
+  faheem-erp whatsapp-status
+  faheem-erp whatsapp enable|disable
+  faheem-erp lan status|enable|disable|ca   use the ERP from other PCs / phones (shop network, store VPN)
+  faheem-erp network static [auto|IP/PREFIX] | dhcp   fix this PC's address (or reserve it on the router)
+  faheem-erp import-sqlite FILE     move an existing pharmacy.db into this (empty) installation
+  faheem-erp user …                 accounts: list, add, passwd, disable, enable, reset-2fa, unlock
+  faheem-erp manage …               any scripts/manage.py command (settings, roles, version, deployments)
+  faheem-erp maintenance            run the 05:00 maintenance now (may reboot when DAILY_HOST_REBOOT=true)
+  faheem-erp uninstall              remove the appliance (keeps data and backups unless --purge)
+
+Most commands need root:  sudo faheem-erp …
+EOF
+}
+
+start() {
+  require_root
+  docker info >/dev/null 2>&1 || die "Docker is not running"
+  write_state operation "starting" operation_at "$(now_iso)"
+  dc up -d --remove-orphans $(services_up) || { write_state operation "" last_start_status failed; die "the stack did not start — run: sudo faheem-erp doctor"; }
+  if wait_ready 300; then
+    write_state operation "" version "$(current_version)" started_at "$(now_iso)" last_start_status ok
+    ok "Faheem Pharmacy ERP $(current_version) is ready on $(ready_url | sed 's#/health/ready##')"
+  else
+    write_state operation "" last_start_status "not ready"
+    die "started, but not ready within 5 minutes — run: sudo faheem-erp doctor"
+  fi
+}
+
+cmd="${1:-help}"; [ $# -gt 0 ] && shift
+case "$cmd" in
+  status)
+    require_root
+    echo "Version:   $(current_version)   (previous: $(env_get FAHEEM_PREVIOUS_VERSION))"
+    echo "Address:   $(ready_url | sed 's#/health/ready##') (this PC)"
+    flag LAN_ACCESS && echo "Network:   https://$(env_get FAHEEM_LAN_IP)  https://$(env_get FAHEEM_HOSTNAME).local"
+    dc ps -a --format 'table {{.Service}}\t{{.State}}\t{{.Health}}\t{{.Status}}'
+    [ -f "$STATE_DIR/status.json" ] && { echo; python3 -c 'import json,sys; [print(f"{k:24} {v}") for k,v in sorted(json.load(open(sys.argv[1])).items()) if v]' "$STATE_DIR/status.json"; }
+    ;;
+  start) start ;;
+  stop) require_root; dc stop; write_state operation "stopped" operation_at "$(now_iso)"; ok "Stopped" ;;
+  restart) require_root; dc stop web worker; start ;;
+  update) exec "$here/update.sh" "$@" ;;
+  rollback) exec "$here/rollback.sh" "$@" ;;
+  backup) exec "$here/backup.sh" --reason manual "$@" ;;
+  backups) require_root; dc run --rm --no-TTY tools python -m app.snapshot list ;;
+  restore) exec "$here/restore.sh" "$@" ;;
+  drill) require_root; dc run --rm --no-TTY tools python -m app.snapshot drill "$@" ;;
+  doctor) exec "$here/doctor.sh" "$@" ;;
+  maintenance) exec "$here/maintenance.sh" "$@" ;;
+  logs)
+    require_root
+    follow=(); svc=()
+    for a in "$@"; do [ "$a" = -f ] && follow=(-f) || svc+=("$a"); done
+    dc logs --tail 200 "${follow[@]}" "${svc[@]}"
+    ;;
+  version)
+    echo "Faheem Pharmacy ERP $(current_version)"
+    docker image inspect "$(image):$(current_version)" --format \
+      'commit {{index .Config.Labels "org.opencontainers.image.revision"}} · built {{index .Config.Labels "org.opencontainers.image.created"}}' 2>/dev/null || true
+    ;;
+  whatsapp-status)
+    require_root
+    if ! flag WHATSAPP_ENABLED; then echo "WhatsApp invoicing is disabled (enable: sudo faheem-erp whatsapp enable)"; exit 0; fi
+    dc ps --format 'table {{.Service}}\t{{.State}}\t{{.Health}}' whatsapp
+    echo "Pairing and session state: ERP → Settings → WhatsApp"
+    ;;
+  whatsapp)
+    require_root; take_lock whatsapp
+    case "${1:-}" in
+      enable) env_set WHATSAPP_ENABLED true; mkdir -p "$FAHEEM_DATA/whatsapp/tokens" "$FAHEEM_DATA/whatsapp/userdata"
+              dc up -d whatsapp && ok "WhatsApp gateway started — pair the phone in ERP → Settings → WhatsApp" ;;
+      disable) dc stop whatsapp >/dev/null 2>&1 || true; env_set WHATSAPP_ENABLED false; ok "WhatsApp gateway stopped (pairing kept)" ;;
+      *) die "usage: faheem-erp whatsapp enable|disable" ;;
+    esac
+    ;;
+  import-sqlite)
+    require_root; take_lock import
+    src="$(readlink -f "${1:?usage: faheem-erp import-sqlite /path/to/pharmacy.db}")"
+    [ -f "$src" ] || die "no file at $1"
+    # only into an installation that holds no business data yet (just the owner account)
+    held="$(dc run --rm --no-TTY tools python -c "
+from app import snapshot
+from app.config import DATABASE_URL
+f = snapshot.fingerprint(snapshot.database(DATABASE_URL))
+print(sum(int(f.get('count:' + t, 0)) for t in ('sales', 'items', 'purchases', 'customers', 'suppliers')))" | tail -1)"
+    [ "$held" = 0 ] || die "this installation already holds business data ($held records) — import only into a new installation"
+    pre="$("$here/backup.sh" --reason pre-restore --note "before importing $(basename "$src")" --no-prune --locked | tail -1)" \
+      || die "safety backup failed — nothing was changed"
+    log "Importing $src (safety snapshot $pre)"
+    dc stop web worker >/dev/null 2>&1 || true
+    dc run --rm --no-TTY tools python -c "
+from app import snapshot
+from app.config import DATABASE_URL
+db = snapshot.database(DATABASE_URL)
+db.execute('DROP SCHEMA public CASCADE'); db.execute('CREATE SCHEMA public')" >/dev/null
+    if ! FAHEEM_IMPORT="$src" dc run --rm --no-TTY tools python -m app.import_sqlite /import/pharmacy.db; then
+      dc run --rm --no-TTY tools python -m app.snapshot restore "$pre" --yes >/dev/null || warn "could not put back $pre"
+      dc up -d $(services_up) >/dev/null 2>&1 || true
+      die "import refused or failed — the installation is as it was"
+    fi
+    start
+    ;;
+  user)
+    require_root
+    dc run --rm --no-TTY tools python scripts/manage.py user "$@"
+    ;;
+  manage)
+    require_root
+    dc run --rm --no-TTY tools python scripts/manage.py "$@"
+    ;;
+  menu) exec "$here/control.sh" ;;
+  settings) exec "$here/settings.sh" "$@" ;;
+  optimize) exec "$here/optimize.sh" "$@" ;;
+  shutdown) exec "$0" stop ;;
+  power)
+    require_root
+    case "${1:-}" in
+      reboot) dc stop >/dev/null 2>&1 || true; systemctl reboot ;;
+      poweroff) dc stop >/dev/null 2>&1 || true; systemctl poweroff ;;
+      *) die "usage: faheem-erp power reboot|poweroff" ;;
+    esac ;;
+  lan) exec "$here/network.sh" lan "$@" ;;
+  network) exec "$here/network.sh" network "$@" ;;
+  uninstall) exec "$here/uninstall.sh" "$@" ;;
+  help|-h|--help) usage ;;
+  *) usage; exit 2 ;;
+esac

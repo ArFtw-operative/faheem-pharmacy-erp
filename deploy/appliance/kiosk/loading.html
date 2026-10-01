@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Faheem Pharmacy ERP</title>
+<style>
+  :root { --bar:#1f2a30; --bar-text:#dfe7ea; --bg:#eef1f2; --line:#d5dcdf; --head:#f4f6f7; --text:#1b2327; --muted:#5f6d73; --accent:#1f6f4a; --bad:#b3261e;
+          font:13px/1.35 "Segoe UI", system-ui, Roboto, Arial, sans-serif; color:var(--text) }
+  html, body { height:100%; margin:0 }
+  body { display:grid; grid-template-rows:40px 1fr 26px; background:var(--bg) }
+  header { display:flex; align-items:center; background:var(--bar); color:var(--bar-text); padding:0 12px; font-weight:700; letter-spacing:.08em; font-size:12.5px }
+  main { display:flex; align-items:center; justify-content:center }
+  .panel { width:min(420px, 92vw); background:#fff; border:1px solid #9fb0b6; box-shadow:0 8px 24px rgba(0,0,0,.12) }
+  .panel h1 { margin:0; padding:8px 12px; font-size:14px; background:var(--head); border-bottom:1px solid var(--line) }
+  .body { padding:16px; display:flex; gap:12px; align-items:center }
+  .spin { width:22px; height:22px; border:3px solid var(--line); border-top-color:var(--accent); border-radius:50%; animation:s 0.9s linear infinite; flex:none }
+  @keyframes s { to { transform:rotate(360deg) } }
+  .muted { color:var(--muted); font-size:12px; margin-top:4px }
+  .bad .spin { border-top-color:var(--bad) }
+  footer { display:flex; align-items:center; padding:0 10px; background:#e4e9eb; border-top:1px solid #c9d1d4; font-size:12px; color:var(--muted) }
+</style>
+</head>
+<body>
+<header>FAHEEM PHARMACY</header>
+<main>
+  <section class="panel" id="panel">
+    <h1>Faheem Pharmacy ERP</h1>
+    <div class="body"><div class="spin"></div>
+      <div><div id="msg">Starting services…</div><div class="muted" id="sub">The ERP opens by itself when it is ready.</div></div></div>
+  </section>
+</main>
+<footer id="st">Waiting for the ERP on this computer</footer>
+<script>
+  const base = "http://127.0.0.1:__PORT__", started = Date.now();
+  async function probe() {
+    try {
+      const r = await fetch(base + "/health/ready", { cache: "no-store" });
+      if (r.ok) { location.replace(base + "/app"); return; }
+    } catch (e) { /* not listening yet */ }
+    const s = Math.round((Date.now() - started) / 1000);
+    document.getElementById("st").textContent = `Waiting for the ERP on this computer · ${s}s`;
+    if (s > 180) {
+      document.getElementById("panel").classList.add("bad");
+      document.getElementById("msg").textContent = "Still starting…";
+      document.getElementById("sub").textContent = "If this continues, restart the computer or ask support to run: sudo faheem-erp doctor";
+    }
+    setTimeout(probe, 2000);
+  }
+  probe();
+</script>
+</body>
+</html>

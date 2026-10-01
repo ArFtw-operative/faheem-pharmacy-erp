@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""Stand-in for curl: GHCR token / tag list, and /health/ready answered by the fake stack."""
+import os
+import sys
+from pathlib import Path
+
+S = Path(os.environ["FAKE_STATE"])
+url = next((a for a in sys.argv[1:] if a.startswith("http")), "")
+sys.stdin.read() if "-K" in sys.argv else None
+if "ghcr.io/token" in url:
+    print('{"token":"bearer-x"}')
+elif "/tags/list" in url:
+    tags = (S / "tags").read_text().split() if (S / "tags").exists() else []
+    print('{"name":"x","tags":[%s]}' % ",".join(f'"{t}"' for t in tags))
+elif url.endswith("/health/ready"):
+    running = (S / "running").read_text().strip() if (S / "running").exists() else ""
+    sys.exit(0 if running and not (S / f"unhealthy_{running}").exists() else 7)
+sys.exit(0)

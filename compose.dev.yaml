@@ -1,0 +1,19 @@
+# A developer's machine: the image is built from this checkout and data stays under ./.appliance.
+#   cp deploy/appliance/dev.env .appliance.env   (once; edit nothing — dev-only secrets)
+#   docker compose --env-file .appliance.env -f compose.yaml -f compose.dev.yaml up --build
+services:
+  migrate:
+    build:
+      context: .
+      args: { APP_VERSION: dev, GIT_COMMIT: local, BUILD_DATE: local }
+    image: faheem-pharmacy-erp:dev
+    environment:
+      PHARMACY_PRODUCTION: "0"
+  web:
+    image: faheem-pharmacy-erp:dev
+    environment:
+      PHARMACY_PRODUCTION: "0"
+  worker:
+    image: faheem-pharmacy-erp:dev
+  tools:
+    image: faheem-pharmacy-erp:dev

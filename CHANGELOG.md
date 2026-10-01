@@ -1,0 +1,141 @@
+# Changelog
+
+Release notes for Faheem Pharmacy. Versions follow semantic versioning; every release
+lists its database migrations. Upgrades keep all business history (see docs/UPGRADES.md).
+
+## 1.4.0 — 2026-10-01
+
+**The appliance**
+- Installs on a native Ubuntu / Debian PC with one command (`deploy/appliance/install.sh`):
+  Docker Compose stack (PostgreSQL 17, migration job, web, worker, optional WhatsApp gateway and HTTPS
+  proxy), systemd units, generated secrets in `/etc/faheem-erp/faheem.env` (0600), owner account typed
+  at install (only a hash stored), counter user with auto-login and a full-screen ERP behind a
+  "Starting services…" page.
+- `faheem-erp` command and the **ERP Control Center** (keyboard menu): start / restart / shut down,
+  updates and rollback, backups and restore, doctor, maintenance and performance (database, disk,
+  caches, counter browser cache and cookies), settings (boot start, counter screen, auto-login,
+  auto-update, daily reboot, maintenance time, backup retention), network access, logs, power.
+  Desktop shortcuts for each, behind an administrator password (polkit).
+- **Doctor** diagnoses from live state and recent logs and proposes the matching fix; `--fix` applies them.
+- **Transactional updates** from GHCR (pinned `x.y.z` images): rehearsal on a scratch copy, verified
+  snapshot, health + smoke test, automatic rollback with snapshot restore. Manual rollback.
+- **Daily maintenance** at 05:00 India time: backup with retention, update, cleanup, weekly VACUUM,
+  optional reboot; no catch-up after a PC was off — only an update check after boot.
+- **Network access** for office PCs, phones and the store VPN: HTTPS through a local Caddy proxy with
+  its own certificate authority, firewall limited to private / VPN ranges, fixed address helper,
+  `Secure` cookies, and the authenticator code at every network sign-in.
+- Health endpoints `/health/live`, `/health/ready`; `/api/v1/system/version`; separate WhatsApp worker.
+- `python -m app.import_sqlite` moves an existing SQLite database into PostgreSQL, verified (row
+  counts, history fingerprint, every relationship); two-step secrets sealed with another
+  installation's key are reset for re-enrolment.
+- CI: tests on SQLite and PostgreSQL, shellcheck, fresh install of the real stack; releases from `prod`.
+
+**Migrations:** none (schema `f6b8d0e2a4c7`).
+
+**Fixtures:** `tests/fixtures/releases/1.4.0.db` (schema `f6b8d0e2a4c7`).
+
+## 1.3.0 — 2026-10-01
+
+**Login and two-step sign-in**
+- New login page in the ERP's own design (app bar, dialog panel, status bar): User ID + password,
+  no sign-up — accounts come from the administrator.
+- First login: scan a QR with an authenticator app (Google / Microsoft Authenticator…), confirm a
+  6-digit code, receive 10 one-time recovery codes, then continue. Later logins: user ID + password
+  (`mfa_at_login=true` also asks for a code every time).
+- Forgot password: user ID + authenticator code (or a recovery code) + new password; every other
+  session is logged out. 5 wrong tries lock the account for 15 minutes.
+- TOTP per RFC 6238 (verified against its test vectors), secret encrypted at rest, replay guard,
+  recovery codes stored as hashes. Ended sessions are rejected server-side.
+- `manage.py user add … --keep-password`, `user reset-2fa`, `user unlock`.
+
+**PostgreSQL**
+- The application runs on PostgreSQL as well as SQLite (search, triggers, portable SQL); the test
+  suite runs on both.
+
+**Migrations**
+- `f6b8d0e2a4c7` adds two-factor and lock-out columns to `users` (additive).
+
+**Fixtures:** `tests/fixtures/releases/1.3.0.db` (schema `f6b8d0e2a4c7`).
+
+## 1.2.0 — 2026-10-01
+
+**WhatsApp invoices** (docs/WHATSAPP.md)
+- POS, after Complete sale: **Print invoice (P)** or **WhatsApp invoice (W)** (or N). WhatsApp is queued
+  and delivered in the background; the next bill starts at once and a sale never depends on WhatsApp.
+- Sales History: **WhatsApp / Resend WhatsApp (F9)**, the bill's delivery log and Retry. A resend sends
+  the same stored invoice PDF — never a new sale or invoice.
+- New **Settings** tab (administrators only) → **WhatsApp Invoicing**: Connected / Disconnected / QR
+  required, QR pairing, Reconnect, Log out, invoice message with placeholders and preview, an image
+  sent with invoices (replaceable), test send, delivery activity.
+- Database queue with retries (30 s, 2 min) and permanent-failure detection; reconnects a paired
+  session after a reboot. Provider interface (WPPConnect now; the official Business API can replace it).
+- Gateway kit: `deploy/whatsapp/` (Docker Compose bound to 127.0.0.1, setup script, `faheemctl.sh whatsapp`).
+- Permissions: `whatsapp.send` (billing roles), `settings.manage` (Administrator only).
+- POS customer box is clickable; Purchases: Amount incl. GST column.
+
+**Migrations**
+- `e5a7c9d1f3b6` adds the `whatsapp_messages` table (additive).
+
+**Fixtures:** `tests/fixtures/releases/1.2.0.db` (schema `e5a7c9d1f3b6`).
+
+## 1.1.0 — 2026-10-01
+
+**GST on purchases**
+- Every purchase line carries its GST: taxable value after item discount, scheme and bill discount,
+  GST at the line's rate, CGST + SGST (intra-state) or IGST (inter-state, from the supplier's and the
+  pharmacy's GSTIN), value incl. GST and **rate per pack incl. GST** (new grid column; side panel shows
+  invoice rate → taxable → GST → rate incl. GST).
+- Stock received from now on is costed at the rate **including** GST paid to the supplier
+  (`purchase_cost_includes_gst`, default on; switch off if the shop claims input-tax credit).
+  Batches record their basis; stock received earlier is never re-costed.
+- GST checks with the exact fix in each message: missing GST % (never silently 0), GST % worked out from
+  a GST-amount column, withdrawn slabs after the 22-Sep-2025 rate change (12% / 28%), rate changed since
+  the product's last purchase, one HSN at two rates, line GST amount vs %, invoice GST total (e.g.
+  Marg SumGst) vs the lines, pharmacy / supplier GSTIN check digit. Slabs and the change date are
+  settings (`gst_rates`, `gst_rates_before`, `gst_rates_changed_on`).
+- GST panel on the purchase document (F10): per-slab table, CGST / SGST / IGST and why, what to fix.
+- New report **Purchase GST** (Purchase Reports): by line, invoice, product, GST rate, HSN, supplier or
+  month; returns to suppliers reverse their GST.
+- Fractional scheme quantities (2.5 + 0.5) received exactly; `manage.py purchases revalidate`.
+- Purchase status chips filter lines; right-click tab menu.
+
+**Migrations**
+- `d4f6b8c0e2a5` adds the GST snapshot columns to purchase lines, `supply_type` to purchases and
+  `rate_basis` to batches (additive).
+
+**Fixtures:** `tests/fixtures/releases/1.1.0.db` (schema `d4f6b8c0e2a5`).
+
+## 1.0.0 — 2026-09-30
+
+First versioned release of the keyboard-first ERP at `/app`.
+
+**Features**
+- POS: loose-tablet billing, FEFO batches, discounts, split payment, hold/resume, manual
+  bills, bill edit in its original POS tab. Complete sale shows the sale summary, then
+  asks "Generate invoice? Y/N".
+- Invoice studio inside the POS / Sales tab (A4, A5, Letter, 80 mm, 58 mm, ERP text;
+  PDF / Excel / CSV).
+- Purchases: supplier invoice import from any layout (CSV, Excel, digital PDF), review,
+  partial posting, purchase returns.
+- Inventory ledger in base units, stock history, adjustment documents.
+- Sales history with returns, exchanges and voids.
+- Customers: directory, record, follow-ups (Inbox / Calendar).
+- Reports in ERP document format, including Item-wise Sales (Inventory), movement,
+  customer and profit reports, with live customer and item search.
+
+**Upgrades and data safety**
+- Guarded upgrades: snapshot → migrate → reconcile the business history → automatic
+  restore on failure. No silent `create_all` fallback.
+- Whole-ERP snapshots (database, uploads, config) in an isolated store with a verified
+  mirror on the Windows drive, a daily restore drill and a standalone restore tool.
+- Release layout (`releases/<version>`, `current`, `shared/`), rehearsed installs with
+  automatic rollback, `faheemctl.sh rollback`, and a deployment log.
+- Linux (WSL) only: the Windows build, desktop launcher and Windows printing backend
+  were removed.
+
+**Migrations**
+- `c3e5a7b9d1f3` adds the `deployment_log` table (additive).
+- Earlier revisions up to `b2d4f6a8c0e1` are the pre-1.0 schema history.
+
+**Fixtures:** `tests/fixtures/releases/0.9-pre-release.db` (schema `b2d4f6a8c0e1`) and
+`tests/fixtures/releases/1.0.0.db` (schema `c3e5a7b9d1f3`).

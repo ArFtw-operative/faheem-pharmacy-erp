@@ -1,0 +1,14 @@
+[Unit]
+Description=Faheem Pharmacy ERP network firewall (private / VPN ranges only)
+After=docker.service
+PartOf=docker.service
+Before=faheem-erp.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/faheem-erp/current/bin/firewall.sh
+ExecStop=/opt/faheem-erp/current/bin/firewall.sh stop
+
+[Install]
+WantedBy=docker.service multi-user.target

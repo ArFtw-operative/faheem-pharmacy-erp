@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ sale.invoice_no }}</title>
+<style>
+  html, body { margin: 0; background: #e9edef; }
+  pre { margin: 16px auto; width: max-content; background: #fff; padding: 18px 22px; box-shadow: 0 1px 8px #1d2c331a;
+        font: 12.5px/1.45 "Cascadia Mono", Consolas, "Courier New", monospace; color: #111; }
+  @media print { html, body { background: #fff; } pre { margin: 0; box-shadow: none; padding: 0; } @page { margin: 10mm; } }
+</style>
+</head>
+<body>
+<pre>{{ text }}</pre>
+<script>
+window.studio = { setSize() {}, setMono() {}, setExpiry() {}, state: () => ({}), print() { window.focus(); window.print(); } };
+try { parent.postMessage({ source: "invoice-studio", type: "rendered", pages: 1, label: "ERP document" }, location.origin); } catch (e) {}
+document.addEventListener("keydown", (e) => {
+  if (parent === window) return;
+  try { const f = new parent.KeyboardEvent("keydown", { key: e.key, code: e.code, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey, metaKey: e.metaKey, bubbles: true, cancelable: true });
+        parent.document.dispatchEvent(f); if (f.defaultPrevented) e.preventDefault(); } catch (err) {}
+}, true);
+{% if autoprint %}setTimeout(() => window.print(), 250);{% endif %}
+</script>
+</body>
+</html>

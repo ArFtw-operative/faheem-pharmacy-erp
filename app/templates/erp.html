@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Faheem Pharmacy ERP</title>
+  <link rel="icon" href="/static/brand/png/app-tile-teal-32.png">
+  <link rel="stylesheet" href="{{ static_url('erp/erp.css') }}">
+  <script type="importmap">
+    {"imports": {
+      "erp/core": "{{ static_url('erp/core.js') }}",
+      "erp/keys": "{{ static_url('erp/keys.js') }}",
+      "erp/shortcuts": "{{ static_url('erp/shortcuts.js') }}",
+      "erp/grid": "{{ static_url('erp/grid.js') }}",
+      "erp/pos": "{{ static_url('erp/pos.js') }}",
+      "erp/inventory": "{{ static_url('erp/inventory.js') }}",
+      "erp/ledger": "{{ static_url('erp/ledger.js') }}",
+      "erp/reports": "{{ static_url('erp/reports.js') }}",
+      "erp/masters": "{{ static_url('erp/masters.js') }}",
+      "erp/studio": "{{ static_url('erp/studio.js') }}",
+      "erp/customers": "{{ static_url('erp/customers.js') }}",
+      "erp/followup": "{{ static_url('erp/followup.js') }}",
+      "erp/sales": "{{ static_url('erp/sales.js') }}",
+      "erp/adjustments": "{{ static_url('erp/adjustments.js') }}",
+      "erp/history": "{{ static_url('erp/history.js') }}",
+      "erp/purchases": "{{ static_url('erp/purchases.js') }}",
+      "erp/purchase": "{{ static_url('erp/purchase.js') }}",
+      "erp/whatsapp": "{{ static_url('erp/whatsapp.js') }}",
+      "erp/settings": "{{ static_url('erp/settings.js') }}"
+    }}
+  </script>
+</head>
+<body>
+  <header class="appbar">
+    <span class="brand">FAHEEM PHARMACY</span>
+    <nav class="modules" id="modules" aria-label="Modules"></nav>
+    <div class="appbar-right">
+      <span id="operator-label" class="meta"></span>
+      <span id="clock" class="meta mono"></span>
+      <form method="post" action="/logout" class="inline"><button class="meta link" type="submit">Logout</button></form>
+    </div>
+  </header>
+  <nav class="wtabs" id="wtabs" aria-label="Open workspaces" role="tablist"></nav>
+  <main id="workspace" class="workspace"></main>
+  <footer class="statusbar">
+    <span id="st-msg" class="st-msg" role="status" aria-live="polite">Ready</span>
+    <span id="st-keys" class="st-keys"></span>
+    <button type="button" id="st-shortcuts" class="btn">Keyboard shortcuts</button>
+    <span id="st-right" class="st-right"></span>
+  </footer>
+  <div id="palette" class="palette" hidden>
+    <input id="palette-input" autocomplete="off" placeholder="Type a command…  (Esc closes)" aria-label="Command">
+    <div id="palette-list" class="palette-list" role="listbox"></div>
+  </div>
+  <script>window.ERP_BOOT = {{ boot | tojson }};</script>
+  <script type="module" src="{{ static_url('erp/shell.js') }}"></script>
+</body>
+</html>

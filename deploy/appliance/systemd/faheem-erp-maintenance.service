@@ -1,0 +1,9 @@
+[Unit]
+Description=Faheem Pharmacy ERP daily maintenance (backup, update, optional reboot)
+Requires=docker.service
+After=docker.service faheem-erp.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/faheem-erp/current/bin/maintenance.sh
+TimeoutStartSec=3600

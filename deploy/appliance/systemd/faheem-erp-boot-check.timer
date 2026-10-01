@@ -1,0 +1,9 @@
+[Unit]
+Description=Faheem Pharmacy ERP update check 5 minutes after boot
+
+[Timer]
+OnBootSec=5min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

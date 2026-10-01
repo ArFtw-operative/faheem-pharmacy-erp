@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Faheem Pharmacy ERP (kiosk)
+Exec=/opt/faheem-erp/current/bin/faheem-kiosk
+Icon=/opt/faheem-erp/current/kiosk/icon.png
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=3
+NoDisplay=true

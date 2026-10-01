@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+"""A stand-in for `docker` / `docker compose` that models the parts the host scripts rely on.
+
+State lives in $FAKE_STATE:
+  db_schema       the release whose migrations the database carries
+  running         the version of the running web process ("" when stopped)
+  calls.log       every invocation
+Behaviour switches (files in $FAKE_STATE): fail_rehearsal, fail_up_<version>, unhealthy_<version>,
+fail_smoke_<version>, fail_snapshot.
+"""
+import os
+import shutil
+import sys
+import time
+from pathlib import Path
+
+S = Path(os.environ["FAKE_STATE"])
+REPO = Path(os.environ["FAKE_REPO"])
+args = sys.argv[1:]
+with open(S / "calls.log", "a") as f:
+    f.write(" ".join(args) + "\n")
+
+
+def get(name, default=""):
+    p = S / name
+    return p.read_text().strip() if p.exists() else default
+
+
+def put(name, value):
+    (S / name).write_text(value)
+
+
+def flag(name):
+    return (S / name).exists()
+
+
+if not args or args[0] in ("info", "pull", "rm", "login"):
+    sys.exit(0)
+if args[0] == "version":
+    print("27.3.1"); sys.exit(0)
+if args[0] == "image":
+    if args[1] == "ls":
+        print("\n".join(get("images", "").split()))
+    sys.exit(0)
+if args[0] == "create":
+    print("cid-" + args[1].rsplit(":", 1)[1]); sys.exit(0)
+if args[0] == "cp":
+    src, dest = args[1].split(":", 1)[1], Path(args[2])
+    if src.endswith("/deploy/appliance/."):
+        shutil.copytree(REPO / "deploy/appliance", dest, dirs_exist_ok=True)
+    else:
+        shutil.copy(REPO / Path(src).name, dest)
+    sys.exit(0)
+if args[0] != "compose":
+    sys.exit(0)
+
+# docker compose --project-name … --project-directory … --env-file F -f … -f … <cmd> …
+i, env_file = 1, None
+while i < len(args) and args[i].startswith("-"):
+    if args[i] == "--env-file":
+        env_file = args[i + 1]
+    i += 2
+cmd, rest = args[i], args[i + 1:]
+version = os.environ.get("FAHEEM_VERSION")
+if not version:
+    for line in Path(env_file).read_text().splitlines():
+        if line.startswith("FAHEEM_VERSION="):
+            version = line.split("=", 1)[1]
+
+if cmd == "up":
+    if flag(f"fail_up_{version}"):
+        put("db_schema", version)        # migrated, then a service failed
+        put("running", "")
+        sys.exit(1)
+    put("db_schema", version)
+    put("running", version)
+    sys.exit(0)
+if cmd == "stop":
+    if not rest or "web" in rest:
+        put("running", "")
+    sys.exit(0)
+if cmd in ("rm", "logs", "down"):
+    sys.exit(0)
+if cmd == "ps":
+    sys.exit(0)
+if cmd == "run":
+    line = " ".join(rest)
+    if "upgrade --check" in line:
+        sys.exit(1 if flag("fail_rehearsal") else 0)
+    if "app.production schema" in line:
+        print('{"state": "%s", "current": ["%s"], "target": ["%s"]}'
+              % ("current" if get("db_schema") == version else "pending", get("db_schema"), version))
+        sys.exit(0)
+    if "app.production smoke" in line:
+        sys.exit(1 if flag(f"fail_smoke_{version}") else 0)
+    if "app.snapshot create" in line:
+        if flag("fail_snapshot"):
+            sys.exit(2)
+        reason = rest[rest.index("--reason") + 1]
+        n = int(get("snap_counter", "0")) + 1
+        put("snap_counter", str(n))
+        sid = time.strftime("%Y%m%d-") + f"{n:06d}-{reason}"
+        d = Path(os.environ["FAHEEM_BACKUPS"]) / "snapshots" / sid
+        d.mkdir(parents=True)
+        (d / "schema").write_text(get("db_schema"))
+        print(f"Snapshot {sid} written and verified · schema x · 1 bills, 1 products")
+        sys.exit(0)
+    if "app.snapshot restore" in line:
+        sid = rest[rest.index("restore") + 1]
+        d = Path(os.environ["FAHEEM_BACKUPS"]) / "snapshots" / sid
+        put("db_schema", (d / "schema").read_text())
+        put("restored", sid)
+        sys.exit(0)
+    sys.exit(0)
+sys.exit(0)

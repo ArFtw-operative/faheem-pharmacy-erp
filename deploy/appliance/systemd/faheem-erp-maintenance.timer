@@ -1,0 +1,12 @@
+[Unit]
+Description=Faheem Pharmacy ERP maintenance at 05:00 India time
+
+[Timer]
+OnCalendar=*-*-* 05:00:00 Asia/Kolkata
+# a PC that was off at 05:00 does NOT catch up (no surprise backup/update/reboot during business);
+# faheem-erp-boot-check.timer only checks for an update when the last check is over 24 hours old
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

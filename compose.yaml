@@ -1,0 +1,170 @@
+# Faheem Pharmacy ERP — the appliance stack.
+# Always used together with compose.prod.yaml (installed PC) or compose.dev.yaml (a developer's machine);
+# the host tools (faheem-erp) pass --env-file /etc/faheem-erp/faheem.env.
+#
+#   postgres   the database — no published port, reachable only on the stack's private network
+#   migrate    runs once on every start, before web and worker: migrations + verification
+#   web        the ERP, published on ${FAHEEM_BIND}:${FAHEEM_PORT} (127.0.0.1 by default)
+#   worker     the WhatsApp invoice queue
+#   whatsapp   WPPConnect gateway (profile "whatsapp"), no published port
+#   proxy      HTTPS for other PCs / phones on the shop network or store VPN (profile "lan"); the only
+#              service listening on the network — the host firewall admits private/VPN ranges only
+#   tools      one-off jobs: snapshots, restore, import (profile "tools")
+name: faheem-erp
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "5" }
+
+x-app-env: &app-env
+  TZ: ${FAHEEM_TIMEZONE:-Asia/Kolkata}
+  PHARMACY_TIMEZONE: ${FAHEEM_TIMEZONE:-Asia/Kolkata}
+  PHARMACY_DATABASE_URL: postgresql+psycopg://faheem:${POSTGRES_PASSWORD:?set in faheem.env}@postgres:5432/faheem
+  PHARMACY_SECRET_KEY: ${PHARMACY_SECRET_KEY:?set in faheem.env}
+  PHARMACY_PRODUCTION: "1"
+  PHARMACY_EXTERNAL_MIGRATIONS: "1"
+  PHARMACY_EXTERNAL_WORKER: "1"
+  PHARMACY_BACKUPS: "0"                       # backups belong to the host (faheem-erp backup / 05:00 maintenance)
+  PHARMACY_DATA_DIR: /var/lib/faheem-erp/application-data
+  PHARMACY_UPLOAD_DIR: /var/lib/faheem-erp/uploads
+  PHARMACY_LOG_DIR: /var/log/faheem-erp/app
+  PHARMACY_SNAPSHOT_DIR: /var/backups/faheem-erp/snapshots
+  PHARMACY_APPLIANCE_STATE: /var/lib/faheem-erp/state/status.json
+  PHARMACY_WPP_URL: http://whatsapp:21465
+  PHARMACY_WPP_SECRET: ${PHARMACY_WPP_SECRET:?set in faheem.env}
+  FORWARDED_ALLOW_IPS: "*"                    # web is reached only via 127.0.0.1 and the proxy on the stack network
+
+x-app: &app
+  image: ${FAHEEM_IMAGE:-ghcr.io/arftw-operative/faheem-pharmacy-erp}:${FAHEEM_VERSION:?set in faheem.env}
+  user: "${FAHEEM_UID:-10001}:${FAHEEM_GID:-10001}"
+  init: true
+  logging: *logging
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+  environment: *app-env
+  volumes:
+    - ${FAHEEM_DATA:-/var/lib/faheem-erp}/application-data:/var/lib/faheem-erp/application-data
+    - ${FAHEEM_DATA:-/var/lib/faheem-erp}/uploads:/var/lib/faheem-erp/uploads
+    - ${FAHEEM_DATA:-/var/lib/faheem-erp}/state:/var/lib/faheem-erp/state:ro
+    - ${FAHEEM_LOGS:-/var/log/faheem-erp}/app:/var/log/faheem-erp/app
+
+services:
+  postgres:
+    image: postgres:17.11-trixie
+    restart: unless-stopped
+    logging: *logging
+    shm_size: 256mb
+    environment:
+      POSTGRES_USER: faheem
+      POSTGRES_DB: faheem
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in faheem.env}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --data-checksums"
+    volumes:
+      - ${FAHEEM_DATA:-/var/lib/faheem-erp}/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U faheem -d faheem"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  migrate:
+    <<: *app
+    command: ["python", "-m", "app.production", "migrate"]
+    restart: "no"
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  web:
+    <<: *app
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    ports:
+      - "${FAHEEM_BIND:-127.0.0.1}:${FAHEEM_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=4).status == 200 else 1)"]
+      interval: 10s
+      timeout: 6s
+      retries: 6
+      start_period: 40s
+
+  worker:
+    <<: *app
+    command: ["python", "-m", "app.worker"]
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,sys,time; p='/var/lib/faheem-erp/application-data/worker-heartbeat'; sys.exit(0 if os.path.exists(p) and time.time() - os.path.getmtime(p) < 60 else 1)"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  whatsapp:
+    image: wppconnect/wppconnect-server:2.10.27
+    profiles: ["whatsapp"]
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      PORT: "21465"
+      HOST: "http://whatsapp"
+      SECRET_KEY: ${PHARMACY_WPP_SECRET:?set in faheem.env}
+      TOKEN_STORE_TYPE: file                  # the linked phone survives restarts (no new QR)
+      CUSTOM_USER_DATA_DIR: /usr/src/wpp-server/userDataDir/
+      MANAGER_ENABLED: "false"                # pairing happens in ERP → Settings → WhatsApp
+      WEBHOOK_URL: ""
+    volumes:
+      - ${FAHEEM_DATA:-/var/lib/faheem-erp}/whatsapp/tokens:/usr/src/wpp-server/tokens
+      - ${FAHEEM_DATA:-/var/lib/faheem-erp}/whatsapp/userdata:/usr/src/wpp-server/userDataDir
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:21465/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  proxy:
+    image: caddy:2.11.4-alpine
+    profiles: ["lan"]
+    restart: unless-stopped
+    logging: *logging
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      web: { condition: service_healthy }
+    environment:
+      FAHEEM_HOSTNAME: ${FAHEEM_HOSTNAME:-faheem-erp}
+      FAHEEM_LAN_IP: ${FAHEEM_LAN_IP:-127.0.0.1}
+    ports:
+      - "${FAHEEM_LAN_BIND:-0.0.0.0}:443:443"
+      - "${FAHEEM_LAN_BIND:-0.0.0.0}:80:80"
+    volumes:
+      - ${FAHEEM_PROXY_DIR:-./proxy}/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${FAHEEM_DATA:-/var/lib/faheem-erp}/proxy/data:/data
+      - ${FAHEEM_DATA:-/var/lib/faheem-erp}/proxy/config:/config
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/faheem-erp-ca.crt || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  tools:
+    <<: *app
+    profiles: ["tools"]
+    restart: "no"
+    command: ["python", "-m", "app.production", "schema"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    volumes:
+      - ${FAHEEM_DATA:-/var/lib/faheem-erp}/application-data:/var/lib/faheem-erp/application-data
+      - ${FAHEEM_DATA:-/var/lib/faheem-erp}/uploads:/var/lib/faheem-erp/uploads
+      - ${FAHEEM_DATA:-/var/lib/faheem-erp}/state:/var/lib/faheem-erp/state:ro
+      - ${FAHEEM_LOGS:-/var/log/faheem-erp}/app:/var/log/faheem-erp/app
+      - ${FAHEEM_BACKUPS:-/var/backups/faheem-erp}/snapshots:/var/backups/faheem-erp/snapshots
+      - ${FAHEEM_IMPORT:-/dev/null}:/import/pharmacy.db:ro

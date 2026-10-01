@@ -1,0 +1,38 @@
+# HTTPS for the shop network and the store VPN. The certificate comes from this PC's own local
+# authority ("Faheem Pharmacy ERP"); each office PC / phone trusts it once — download it from
+# http://<this PC>/faheem-erp-ca.crt (docs/INSTALL.md → "Using the ERP from another PC").
+{
+	admin off
+	auto_https disable_redirects
+	skip_install_trust
+	default_sni {$FAHEEM_LAN_IP}
+	pki {
+		ca local {
+			name "Faheem Pharmacy ERP"
+		}
+	}
+}
+
+https://{$FAHEEM_HOSTNAME}.local, https://{$FAHEEM_LAN_IP} {
+	tls internal
+	encode gzip
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy same-origin
+		X-Frame-Options SAMEORIGIN
+		-Server
+	}
+	reverse_proxy web:8000
+}
+
+http:// {
+	handle /faheem-erp-ca.crt {
+		root * /data/caddy/pki/authorities/local
+		rewrite * /root.crt
+		header Content-Type application/x-x509-ca-cert
+		file_server
+	}
+	handle {
+		redir https://{host}{uri} 308
+	}
+}

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Shut down ERP
+Comment=Stop the ERP (the PC stays on)
+Exec=/opt/faheem-erp/current/bin/faheem-admin stop
+Icon=/opt/faheem-erp/current/kiosk/icon.png
+Terminal=false
+Categories=Office;Finance;

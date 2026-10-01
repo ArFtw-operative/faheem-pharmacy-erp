@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>{% if mode == "setup" %}Set up two-step sign-in{% elif mode == "reset" %}Reset password{% else %}User Login{% endif %} · {{ profile.pharmacy_name or app_name }}</title>
+<link rel="icon" type="image/png" sizes="32x32" href="/static/brand/png/app-tile-teal-32.png">
+<style>
+  /* the ERP workspace's own tokens and chrome (app/static/erp/erp.css) */
+  :root {
+    --bar:#1f2a30; --bar-text:#dfe7ea; --bar-muted:#93a4ab; --bg:#eef1f2; --surface:#fff; --line:#d5dcdf; --head:#f4f6f7;
+    --text:#1b2327; --muted:#5f6d73; --accent:#1f6f4a; --bad:#b3261e; --bad-bg:#fdecea; --ok:#1f6f4a; --r:3px;
+    --mono: ui-monospace, "Cascadia Mono", Consolas, "Roboto Mono", monospace;
+    font:13px/1.35 "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif; color:var(--text);
+  }
+  * { box-sizing:border-box }
+  html, body { height:100%; margin:0 }
+  body { display:grid; grid-template-rows:40px 1fr 26px; background:var(--bg) }
+  button, input { font:inherit; color:inherit }
+  .appbar { display:flex; align-items:center; gap:14px; background:var(--bar); color:var(--bar-text); padding:0 12px }
+  .brand { font-weight:700; letter-spacing:.08em; font-size:12.5px }
+  .appbar .meta { margin-left:auto; color:var(--bar-muted); font-size:12px; font-family:var(--mono) }
+  main { display:flex; align-items:center; justify-content:center; padding:20px 12px; overflow:auto }
+  .panel { width:min(440px, 96vw); background:var(--surface); border:1px solid #9fb0b6; box-shadow:0 8px 24px rgba(0,0,0,.12) }
+  .panel > header { display:flex; justify-content:space-between; align-items:baseline; padding:8px 12px; background:var(--head); border-bottom:1px solid var(--line) }
+  .panel > header h1 { margin:0; font-size:14px; font-weight:700 }
+  .panel > header span { color:var(--muted); font-size:12px }
+  .body { padding:14px 16px 6px }
+  .logo { display:block; width:210px; height:auto; margin:2px auto 12px }
+  .lbl { display:block; font-size:11.5px; font-weight:700; color:var(--muted); letter-spacing:.03em; text-transform:uppercase; margin:10px 0 4px }
+  input.f { width:100%; height:30px; padding:0 8px; border:1px solid #b9c3c7; border-radius:var(--r); background:#fff }
+  input.f:focus { outline:2px solid #2f7ae5; outline-offset:-1px; border-color:#2f7ae5 }
+  input.code { font:600 17px var(--mono); letter-spacing:6px; text-align:center; height:34px }
+  .panel footer { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:8px 12px; border-top:1px solid var(--line); background:var(--head); margin-top:12px }
+  .btn { height:30px; padding:0 12px; border:1px solid #b9c3c7; border-radius:var(--r); background:#f7f9f9; cursor:pointer; text-decoration:none; color:var(--text); display:inline-flex; align-items:center; gap:4px }
+  .btn:hover { background:#eef2f3 }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600 }
+  .btn.primary:hover { background:#195c3d }
+  kbd { font:600 10.5px/1 var(--mono); padding:2px 4px; border:1px solid #c9d1d4; border-bottom-width:2px; border-radius:3px; background:#f7f9f9; color:#3b474c; margin-left:4px }
+  .btn.primary kbd { background:rgba(255,255,255,.15); color:#fff; border-color:rgba(255,255,255,.35) }
+  .link { color:#1d5fa8; text-decoration:none; font-size:12.5px } .link:hover { text-decoration:underline }
+  .muted { color:var(--muted) } .small { font-size:12px }
+  .msg { margin:0 0 8px; padding:6px 9px; border-radius:var(--r); font-size:12.5px }
+  .msg.error { background:var(--bad-bg); color:var(--bad); border:1px solid #f0c4bf }
+  .msg.notice { background:#e3f1e8; color:var(--ok); border:1px solid #b9dcc8 }
+  ol { margin:4px 0 8px; padding-left:18px } ol li { margin:2px 0 }
+  .qr { display:grid; grid-template-columns:150px 1fr; gap:12px; align-items:center; margin:8px 0 }
+  .qr img { width:150px; height:150px; border:1px solid var(--line); image-rendering:pixelated }
+  .secret { font:600 12.5px/1.6 var(--mono); word-break:break-all; background:var(--head); border:1px solid var(--line); padding:4px 7px; border-radius:var(--r) }
+  .codes { display:grid; grid-template-columns:1fr 1fr; gap:6px 12px; margin:8px 0; padding:10px; background:var(--head); border:1px solid var(--line) }
+  .codes code { font:600 14px var(--mono); letter-spacing:1px }
+  .statusbar { display:flex; align-items:center; gap:16px; padding:0 10px; background:#e4e9eb; border-top:1px solid #c9d1d4; font-size:12px; white-space:nowrap; overflow:hidden }
+  .statusbar .st { font-weight:600 } .statusbar .st.error { color:var(--bad) } .statusbar .right { margin-left:auto; color:var(--muted) }
+  @media print { .appbar, .statusbar, .panel footer, .no-print { display:none } body { display:block; background:#fff } .panel { border:0; box-shadow:none } }
+</style>
+</head>
+<body>
+<header class="appbar">
+  <span class="brand">{{ (profile.pharmacy_name or app_name)|upper }}</span>
+  <span class="meta" id="clock"></span>
+</header>
+<main>
+  <section class="panel" aria-labelledby="title">
+  {% if mode == "login" %}
+    <header><h1 id="title">User Login</h1><span>Pharmacy Management System</span></header>
+    <form method="post" action="/login" autocomplete="on">
+      <div class="body">
+        <img class="logo" src="/static/brand/svg/horizontal-color.svg" alt="{{ profile.pharmacy_name or app_name }}">
+        {% if error %}<p class="msg error" role="alert">{{ error }}</p>{% endif %}
+        {% if notice %}<p class="msg notice" role="status">{{ notice }}</p>{% endif %}
+        <input type="hidden" name="next" value="{{ next }}">
+        <label class="lbl" for="username">User ID</label>
+        <input class="f" type="text" id="username" name="username" placeholder="Enter user ID" autocomplete="username" required autofocus>
+        <label class="lbl" for="password">Password</label>
+        <input class="f" type="password" id="password" name="password" placeholder="Enter password" autocomplete="current-password" required>
+        <p class="small muted" style="margin:10px 0 0">For access assistance, contact your administrator.</p>
+      </div>
+      <footer><a class="link" href="/login/reset">Forgot password?</a><button class="btn primary" type="submit">Login <kbd>Enter</kbd></button></footer>
+    </form>
+
+  {% elif mode == "setup" %}
+    <header><h1 id="title">Set up two-step sign-in</h1><span>{{ user_name }}</span></header>
+    <form method="post" action="/login/2fa/setup" autocomplete="off">
+      <div class="body">
+        {% if error %}<p class="msg error" role="alert">{{ error }}</p>{% endif %}
+        <p style="margin:0 0 4px">Protect this account with an authenticator app before continuing:</p>
+        <ol>
+          <li>Install <b>Google Authenticator</b>, <b>Microsoft Authenticator</b> or a similar app on your phone.</li>
+          <li>In the app, add an account and scan this code.</li>
+          <li>Type the 6-digit code the app shows.</li>
+        </ol>
+        <div class="qr"><img src="{{ qr }}" alt="QR code for the authenticator app">
+          <div><span class="small muted">Can't scan? Enter this key in the app:</span><p class="secret">{{ secret_grouped }}</p></div></div>
+        <label class="lbl" for="code">6-digit code</label>
+        <input class="f code" id="code" name="code" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" required autofocus autocomplete="one-time-code">
+      </div>
+      <footer><a class="link" href="/login">Cancel</a><button class="btn primary" type="submit">Verify and continue <kbd>Enter</kbd></button></footer>
+    </form>
+
+  {% elif mode == "recovery" %}
+    <header><h1 id="title">Recovery codes</h1><span>{{ user_name }}</span></header>
+    <form method="post" action="/login/2fa/done">
+      <div class="body">
+        <p class="msg notice" role="status">Two-step sign-in is on.</p>
+        <p style="margin:0">If the phone is lost, each code can be used once instead of the app — for example to reset the password.</p>
+        <div class="codes">{% for c in codes %}<code>{{ c }}</code>{% endfor %}</div>
+        <p class="small muted" style="margin:0">Print them or write them down and keep them safe. They are shown only now.</p>
+      </div>
+      <footer><button class="btn no-print" type="button" onclick="window.print()">Print codes</button><button class="btn primary" type="submit" autofocus>Continue to ERP <kbd>Enter</kbd></button></footer>
+    </form>
+
+  {% elif mode == "code" %}
+    <header><h1 id="title">Two-step verification</h1><span>{{ user_name }}</span></header>
+    <form method="post" action="/login/2fa" autocomplete="off">
+      <div class="body">
+        {% if error %}<p class="msg error" role="alert">{{ error }}</p>{% endif %}
+        <label class="lbl" for="code">Code from the authenticator app</label>
+        <input class="f code" id="code" name="code" inputmode="numeric" maxlength="12" required autofocus autocomplete="one-time-code">
+        <p class="small muted" style="margin:8px 0 0">No phone? A recovery code works too.</p>
+      </div>
+      <footer><a class="link" href="/login">Back to login</a><button class="btn primary" type="submit">Verify <kbd>Enter</kbd></button></footer>
+    </form>
+
+  {% elif mode == "reset" %}
+    <header><h1 id="title">Reset password</h1><span>with the authenticator code</span></header>
+    <form method="post" action="/login/reset" autocomplete="off">
+      <div class="body">
+        {% if error %}<p class="msg error" role="alert">{{ error }}</p>{% endif %}
+        <label class="lbl" for="username">User ID</label>
+        <input class="f" type="text" id="username" name="username" placeholder="Enter user ID" value="{{ username or '' }}" autocomplete="username" required {% if not username %}autofocus{% endif %}>
+        <label class="lbl" for="code">Authenticator code (or a recovery code)</label>
+        <input class="f code" id="code" name="code" inputmode="numeric" maxlength="12" required {% if username %}autofocus{% endif %} autocomplete="one-time-code">
+        <label class="lbl" for="password">New password</label>
+        <input class="f" type="password" id="password" name="password" placeholder="At least 8 characters, letters and numbers" autocomplete="new-password" required minlength="8">
+        <label class="lbl" for="confirm">Confirm new password</label>
+        <input class="f" type="password" id="confirm" name="confirm" autocomplete="new-password" required minlength="8">
+        <p class="small muted" style="margin:8px 0 0">Every other signed-in session will be logged out.</p>
+      </div>
+      <footer><a class="link" href="/login">Back to login</a><button class="btn primary" type="submit">Reset password <kbd>Enter</kbd></button></footer>
+    </form>
+  {% endif %}
+  </section>
+</main>
+<footer class="statusbar">
+  <span class="st{% if error %} error{% endif %}">{% if error %}{{ error }}{% elif notice %}{{ notice }}{% else %}Ready{% endif %}</span>
+  <span class="right">{{ profile.pharmacy_name or app_name }} • ERP</span>
+</footer>
+<script>
+  (function tick() {
+    const d = new Date(), p = (n) => String(n).padStart(2, "0"), M = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    document.getElementById("clock").textContent = `${p(d.getDate())}-${M[d.getMonth()]}-${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+    setTimeout(tick, 1000);
+  })();
+</script>
+</body>
+</html>

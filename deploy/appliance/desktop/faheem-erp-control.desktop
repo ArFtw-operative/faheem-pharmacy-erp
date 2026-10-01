@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=ERP Control Center
+Comment=Start, stop, update, back up, maintain and configure the ERP
+Exec=/opt/faheem-erp/current/bin/faheem-admin menu
+Icon=/opt/faheem-erp/current/kiosk/icon.png
+Terminal=false
+Categories=Office;Finance;

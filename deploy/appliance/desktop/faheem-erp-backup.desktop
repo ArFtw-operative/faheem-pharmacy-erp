@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Back up ERP
+Comment=Take a verified backup now
+Exec=/opt/faheem-erp/current/bin/faheem-admin backup
+Icon=/opt/faheem-erp/current/kiosk/icon.png
+Terminal=false
+Categories=Office;Finance;

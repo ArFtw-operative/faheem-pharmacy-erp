@@ -1,0 +1,17 @@
+# The installed pharmacy PC: images come only from GHCR, pinned to the version in faheem.env.
+# Updates are pulled explicitly by `faheem-erp update` (never :latest, never Watchtower).
+services:
+  migrate:
+    pull_policy: never
+  web:
+    pull_policy: never
+  worker:
+    pull_policy: never
+  tools:
+    pull_policy: never
+  postgres:
+    pull_policy: missing
+  whatsapp:
+    pull_policy: missing
+  proxy:
+    pull_policy: missing

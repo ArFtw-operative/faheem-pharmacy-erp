@@ -1,0 +1,21 @@
+/var/log/faheem-erp/*.log {
+    weekly
+    rotate 12
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su root root
+}
+
+/var/log/faheem-erp/app/*.log {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su faheem-erp faheem-erp
+}

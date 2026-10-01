@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Restart ERP
+Comment=Restart the ERP
+Exec=/opt/faheem-erp/current/bin/faheem-admin restart
+Icon=/opt/faheem-erp/current/kiosk/icon.png
+Terminal=false
+Categories=Office;Finance;

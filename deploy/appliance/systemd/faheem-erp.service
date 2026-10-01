@@ -1,0 +1,17 @@
+[Unit]
+Description=Faheem Pharmacy ERP (Docker Compose stack)
+Documentation=file:///opt/faheem-erp/current/docs
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/faheem-erp/current/bin/faheem-erp start
+ExecStop=/opt/faheem-erp/current/bin/faheem-erp stop
+TimeoutStartSec=900
+TimeoutStopSec=180
+
+[Install]
+WantedBy=multi-user.target

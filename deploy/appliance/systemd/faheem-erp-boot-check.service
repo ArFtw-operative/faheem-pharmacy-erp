@@ -1,0 +1,9 @@
+[Unit]
+Description=Faheem Pharmacy ERP update check after boot (only if the last check is over 24 hours old)
+Requires=docker.service
+After=docker.service faheem-erp.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/faheem-erp/current/bin/boot-check.sh
+TimeoutStartSec=3600

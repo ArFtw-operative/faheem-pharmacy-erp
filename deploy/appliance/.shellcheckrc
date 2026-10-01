@@ -1,0 +1,2 @@
+# lib.sh is sourced through a computed path; services_up is split on purpose
+disable=SC1091,SC2034,SC2154,SC2046

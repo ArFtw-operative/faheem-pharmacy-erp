@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ sale.invoice_no }}</title>
+<link rel="stylesheet" href="{{ static_url('invoice-kit-v2/invoice.css') }}">
+<style>
+  html, body { margin: 0; background: #e9edef; }
+  #invoice-pages { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 16px 0 24px; }
+  @media print { html, body { background: #fff; } #invoice-pages { padding: 0; gap: 0; } .invoice-sheet { box-shadow: none !important; } }
+</style>
+<style id="print-rules"></style>
+</head>
+<body>
+<div id="invoice-pages"></div>
+<script>
+window.INVOICE_KIT = { assets: "/static/invoice-kit-v2/assets/" };
+window.INVOICE_KIT_ASSETS = window.INVOICE_KIT.assets;
+window.INVOICE_DATA = {{ invoice_data | tojson }};
+window.INVOICE_OPTIONS = {{ options | tojson }};
+</script>
+<script src="{{ static_url('invoice-kit-v2/invoice-engine.js') }}"></script>
+<script src="{{ static_url('invoice-kit-v2/invoice-settings.js') }}"></script>
+<script src="{{ static_url('invoice-kit-v2/invoice-frame.js') }}"></script>
+</body>
+</html>

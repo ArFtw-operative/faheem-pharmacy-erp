@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Desktop shortcut runner: opens a terminal, asks for an administrator's password (polkit) and runs
+#   faheem-erp <command…>
+# The counter user "faheem" has no administrator rights; the owner / support types an admin password.
+set -u
+if [ "${1:-}" != --in-terminal ]; then
+  for t in gnome-terminal kgx ptyxis xfce4-terminal konsole mate-terminal x-terminal-emulator xterm; do
+    command -v "$t" >/dev/null 2>&1 && break
+  done
+  case "$t" in
+    gnome-terminal) exec gnome-terminal --title "Faheem Pharmacy ERP" --geometry 110x34 -- "$0" --in-terminal "$@" ;;
+    kgx|ptyxis) exec "$t" -- "$0" --in-terminal "$@" ;;
+    *) exec "$t" -e "$0" --in-terminal "$@" ;;
+  esac
+fi
+shift
+printf '\e]0;Faheem Pharmacy ERP\a'
+pkexec /usr/local/bin/faheem-erp "$@"
+rc=$?
+if [ "${1:-}" != menu ]; then
+  echo; [ $rc -eq 126 ] && echo "Not authorised (an administrator password is needed)."
+  read -rp "Press Enter to close… " _
+fi

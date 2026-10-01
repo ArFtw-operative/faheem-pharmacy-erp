@@ -1,0 +1,52 @@
+# Python / tooling
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Runtime data (never publish pharmacy/customer data)
+data/
+uploads/
+logs/
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+
+# Env / secrets
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+
+# Large local inputs / machine-specific binaries (not source)
+tools/tesseract/
+Extensive_A_Z_medicines_dataset_of_India.xlsx
+Mohammadia_Gen_Store_Receipt_Scanned.pdf
+
+# Node tooling (Playwright screenshot capture only)
+node_modules/
+package-lock.json
+
+# Demo runtime database
+demo/db/
+
+# Built install packages
+dist/
+
+# Windows build
+deploy/windows/.cache/
+dist/windows/
+backups/
+
+# Appliance development stack (compose.dev.yaml)
+.appliance/
+.appliance.env
