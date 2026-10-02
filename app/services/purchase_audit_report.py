@@ -1,5 +1,6 @@
 """Supplier invoice audit from stored purchase evidence, not current stock balances."""
 import json
+from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload, selectinload
 from app.models import Purchase, PurchaseItem
@@ -60,22 +61,25 @@ def rows(db, p, start, end, tz, day_of, matches, error):
                     tax = gst.line_breakdown(line,gst.bill_discount_factor(doc),doc.supply_type or 'INTRA',purchasing._received_packs(line))
             item = line.item
             packaging = (line.corrections or {}).get('_physical_adjustment',{}).get('definition',{})
+            units=packaging.get('units_per_pack') or line.units_per_pack
+            if posted and decision.get('resolved') and Decimal(decision.get('master_pack_equivalent') or '0'):
+                units=Decimal(decision['received_base_units'])/Decimal(decision['master_pack_equivalent'])
             row = dict(date=day_of(doc.purchase_date,tz).isoformat(),reference=doc.reference_no or '',invoice=doc.invoice_no,
                        invoice_date=str(doc.invoice_date or ''),supplier=doc.supplier.name if doc.supplier else '',
                        gstin=doc.supplier.gst_number or '' if doc.supplier else '',status=doc.status,line=line.line_no,
                        item=v.get('name') or line.product_name,code=item.article_id if item else '',supplier_code=line.supplier_code,
                        category=line.category or (item.category if item else ''),manufacturer=v.get('manufacturer') or '',
-                       form=packaging.get('dosage_form') or line.dosage_form or '',pack=v.get('pack') or line.pack_size or '',
+                       form=packaging.get('dosage_form') or line.dosage_form or (item.dosage_form if item else ''),pack=v.get('pack') or line.pack_size or '',
                        base_unit=decision.get('base_unit') or packaging.get('base_unit') or line.base_unit or '',
-                       pack_unit=packaging.get('pack_unit') or line.pack_unit or '',
-                       units_per_pack=packaging.get('units_per_pack') or line.units_per_pack,
+                       pack_unit=packaging.get('pack_unit') or line.pack_unit or (item.pack_unit if item else ''),
+                       units_per_pack=units,
                        batch=line.batch_no,expiry=str(line.expiry_date or ''),hsn=line.hsn_code,line_status=line.status,
                        paid=paid,free=free,quantity_raw=str(v.get('quantity',line.quantity_raw or line.quantity)),
                        received=decision.get('received_base_units') if posted else None,
                        equivalent=purchasing._received_packs(line) if posted else None,gst_rate=line.gst_rate,discount=line.discount,
                        rate=line.rate,mrp=line.mrp,amount=line.line_total,invoice_total=doc.total,supplier_total=doc.supplier_total,
                        difference=doc.total-doc.supplier_total if doc.supplier_total is not None else None,
-                       charges=json.dumps(doc.charges or {},ensure_ascii=False),source=doc.source_file,source_hash=doc.source_sha256,
+                       charges=json.dumps({k:v for k,v in (doc.charges or {}).items() if not k.startswith('_')},ensure_ascii=False),source=doc.source_file,source_hash=doc.source_sha256,
                        evidence=json.dumps(decision,ensure_ascii=False),corrections=json.dumps(line.corrections or {},ensure_ascii=False),
                        raw=json.dumps(line.raw or {},ensure_ascii=False),issues=json.dumps(line.issues or [],ensure_ascii=False),
                        _drill=dict(url=f'/purchases/{doc.id}'))
