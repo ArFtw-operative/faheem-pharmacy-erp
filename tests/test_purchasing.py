@@ -288,6 +288,30 @@ def test_api_manual_purchase_and_permissions(client, db):
     assert client.get("/api/erp/purchase-products?q=dolo").json()["items"][0]["id"] == item.id
 
 
+def test_api_manual_line_without_product(client, db):
+    """A line typed in full by hand (no product chosen) waits for a match, or posts as a new product."""
+    login(client)
+    sup = supplier(db)
+    db.commit()
+    pid = client.post("/api/erp/purchases", json={"supplier_id": sup.id, "invoice_no": "M-2"}).json()["purchase"]["id"]
+    r = client.post(f"/api/erp/purchases/{pid}/lines", json={"name": "ZYXOMAB 500 TAB", "pack": "10S", "batch": "Z1",
+                                                            "expiry": "Dec-2028", "quantity": "2", "rate": "40", "mrp": "56"})
+    assert r.status_code == 200, r.text
+    line = next(l for l in r.json()["lines"] if l["id"] == r.json()["line_id"])
+    assert line["name"] == "ZYXOMAB 500 TAB" and line["item"] is None and line["status"] == "PRODUCT_MATCH_REQUIRED"
+    r = client.put(f"/api/erp/purchases/{pid}/lines/{line['id']}", json={"new_product": True, "units_per_pack": "10",
+                                                                        "base_unit": "TABLET", "pack_unit": "STRIP"})
+    assert r.status_code == 200, r.text
+    line = r.json()["lines"][0]
+    if line["status"] == "NEEDS_REVIEW":
+        codes = [i["code"] for i in line["issues"] if i["level"] == "warn" and not i["accepted"]]
+        line = client.put(f"/api/erp/purchases/{pid}/lines/{line['id']}", json={"accept": codes}).json()["lines"][0]
+    assert line["status"] in ("READY", "CORRECTED"), line
+    r = client.post(f"/api/erp/purchases/{pid}/post", json={})
+    assert r.status_code == 200, r.text
+    assert db.query(Item).filter(Item.name == "ZYXOMAB 500 TAB").count() == 1
+
+
 def test_suggestions_respect_strength_and_ignore_form_words(db):
     inv.create_item(db, name="DAPANORM 10 TABS", pack_size="10s")
     inv.create_item(db, name="DAPANORM 5 TABS", pack_size="10S")

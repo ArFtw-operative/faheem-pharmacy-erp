@@ -32,19 +32,25 @@ const t = (s) => (s ? s.charAt(0) + s.slice(1).toLowerCase() : "");
 /** Make ``el`` the field the modal focuses when it opens. */
 const focusField = (form, el) => { if (!el) return; form.querySelectorAll("[autofocus]").forEach((x) => x.removeAttribute("autofocus")); el.setAttribute("autofocus", ""); };
 
-/** Product chooser (search + ranked suggestions). Resolves with {id, name, …} or null. */
-export function pickProduct({ title = "Choose product", initial = "", suggestionsUrl = "", searchUrl = "/api/erp/purchase-products" } = {}) {
+/** Product chooser (search + ranked suggestions). Resolves with {id, name, …} or null.
+ *  With ``allowManual`` the last row is always "enter manually", resolving with {manual: true, name}. */
+export function pickProduct({ title = "Choose product", initial = "", suggestionsUrl = "", searchUrl = "/api/erp/purchase-products", allowManual = false } = {}) {
   let rows = [], at = 0, ctrl = null;
   const body = h(`<div class="picker">
     <input name="q" autocomplete="off" spellcheck="false" placeholder="Type product name, code or barcode" value="${esc(initial)}" autofocus>
     <div class="picker-list" role="listbox"></div>
-    <p class="hint">↑↓ choose · Enter selects · suggestions are ranked by similarity and are never applied without you</p></div>`);
+    <p class="hint">↑↓ choose · Enter selects · suggestions are ranked by similarity and are never applied without you${allowManual ? " · not in the list? choose “Enter manually”" : ""}</p></div>`);
   const list = body.querySelector(".picker-list");
+  const input = body.querySelector("input");
+  const count = () => rows.length + (allowManual ? 1 : 0);
   const render = () => {
-    list.innerHTML = rows.length ? rows.map((r, i) => `<div class="pick${i === at ? " on" : ""}" data-i="${i}" role="option" aria-selected="${i === at}">
+    const typed = input.value.trim();
+    list.innerHTML = (rows.length ? rows.map((r, i) => `<div class="pick${i === at ? " on" : ""}" data-i="${i}" role="option" aria-selected="${i === at}">
       <b>${esc(r.name)}</b> <span class="muted">${esc(r.pack || "")}${r.manufacturer ? " · " + esc(r.manufacturer) : ""}</span>
       ${r.score != null ? `<span class="score">${r.score}%${r.note ? " · " + esc(r.note) : ""}</span>` : ""}</div>`).join("")
-      : '<div class="muted pick-empty">No products — type to search</div>';
+      : allowManual ? "" : '<div class="muted pick-empty">No products — type to search</div>')
+      + (allowManual ? `<div class="pick pick-manual${at === rows.length ? " on" : ""}" data-i="${rows.length}" role="option" aria-selected="${at === rows.length}">
+      ✎ <b>Enter manually</b>${typed ? ` — “${esc(typed)}”` : ""} <span class="muted">type every detail yourself; match or create the product later</span></div>` : "");
     const on = list.querySelector(".pick.on");
     if (on) on.scrollIntoView({ block: "nearest" });
   };
@@ -58,12 +64,11 @@ export function pickProduct({ title = "Choose product", initial = "", suggestion
       at = 0; render();
     } catch (err) { if (err.name !== "AbortError") list.innerHTML = `<div class="bad">${esc(err.message)}</div>`; }
   }, 120);
-  const input = body.querySelector("input");
-  input.addEventListener("input", () => search(input.value));
+  input.addEventListener("input", () => { if (allowManual) render(); search(input.value); });
   input.addEventListener("keydown", (e) => {
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
-      if (rows.length) { at = (at + (e.key === "ArrowDown" ? 1 : -1) + rows.length) % rows.length; render(); }
+      if (count()) { at = (at + (e.key === "ArrowDown" ? 1 : -1) + count()) % count(); render(); }
     }
   });
   list.addEventListener("mousedown", (e) => {
@@ -81,7 +86,11 @@ export function pickProduct({ title = "Choose product", initial = "", suggestion
   list.addEventListener("dblclick", () => body.closest("form")?.requestSubmit());
   suggestionsUrl && !initial ? search.flush("") : search.flush(initial);
   return modal({ title, body, wide: true, submitLabel: "Select",
-    onSubmit: () => { if (!rows[at]) throw new Error("Choose a product from the list"); return rows[at]; } });
+    onSubmit: () => {
+      if (rows[at]) return rows[at];
+      if (allowManual) return { manual: true, name: input.value.trim() };
+      throw new Error("Choose a product from the list");
+    } });
 }
 
 export function create(ctx, params, root) {
@@ -597,8 +606,9 @@ export function create(ctx, params, root) {
 
   async function addLine() {
     if (!guard()) return;
-    const item = await pickProduct({ title: "Add line — choose product" });
+    const item = await pickProduct({ title: "Add line — choose product or enter manually", allowManual: true });
     if (!item) return;
+    if (item.manual) return addManualLine(item.name);
     const out = await modal({
       title: `Add ${item.name}`, wide: true, submitLabel: "Add line",
       body: `<div class="form-grid three">${fieldInputs({ name: item.name, pack: item.pack || "", manufacturer: item.manufacturer || "" }, { blank: false })}</div>
@@ -611,6 +621,30 @@ export function create(ctx, params, root) {
       },
     });
     if (out) { render(out, { keep: false }); grid.select(out.lines.findIndex((l) => l.id === out.line_id)); ctx.status("Line added", "ok"); }
+    grid.focus();
+  }
+
+  /** A line typed in full by hand — no product chosen yet. It is matched (F4) or created as new (Shift+F4) before posting. */
+  async function addManualLine(name) {
+    const out = await modal({
+      title: "Add line — manual entry", wide: true, submitLabel: "Add line",
+      body: `<div class="form-grid three">${fieldInputs({ name }, { blank: false })}</div>
+        <label class="chk"><input type="checkbox" name="as_new" checked> Create as a new product when posted (untick to match an existing product later with ${esc(keys.keyFor("purchase.product") || "F4")})</label>
+        <p class="hint">Quantities are in purchase packs. Every value you type is kept on the line and can be corrected before posting.</p>`,
+      onOpen: (form) => focusField(form, form.elements.name.value ? form.elements.pack : form.elements.name),
+      onSubmit: (form) => {
+        if (!form.elements.name.value.trim()) { focusField(form, form.elements.name); throw new Error("Type the product description"); }
+        const body = {};
+        for (const [f] of FIELDS) if (form.elements[f].value.trim()) body[f] = form.elements[f].value.trim();
+        return api(`/api/erp/purchases/${id}/lines`, { method: "POST", body }).then((d) => ({ ...d, as_new: form.elements.as_new.checked }));
+      },
+    });
+    if (!out) { grid.focus(); return; }
+    render(out, { keep: false });
+    grid.select(out.lines.findIndex((l) => l.id === out.line_id));
+    const line = out.lines.find((l) => l.id === out.line_id);
+    if (out.as_new && line) return newProduct(line);
+    ctx.status(`Line ${line ? line.line_no : ""} added — ${keys.keyFor("purchase.product") || "F4"} matches it to a product`, "ok");
     grid.focus();
   }
 
