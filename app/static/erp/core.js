@@ -133,7 +133,7 @@ export const isModifierOnly = (e) => ["Control", "Alt", "Shift", "Meta", "AltGra
 export function modal({ title, body, onOpen, onSubmit, submitLabel = "Save", wide = false }) {
   return new Promise((resolve) => {
     const prev = document.activeElement;
-    const el = h(`<div class="modal-backdrop"><form class="modal${wide ? " wide" : ""}" novalidate>
+    const el = h(`<div class="modal-backdrop"><form class="modal${wide ? " wide" : ""}" role="dialog" aria-modal="true" aria-label="${esc(title)}" novalidate>
       <header><h2>${esc(title)}</h2><span class="hint">Enter saves · Esc cancels</span></header>
       <div class="modal-body"></div>
       <p class="modal-error" role="alert"></p>
@@ -143,7 +143,28 @@ export function modal({ title, body, onOpen, onSubmit, submitLabel = "Save", wid
     const bodyEl = el.querySelector(".modal-body");
     if (typeof body === "string") bodyEl.innerHTML = body; else bodyEl.append(body);
     const err = el.querySelector(".modal-error");
-    const close = (value) => { el.remove(); if (prev && prev.focus) prev.focus(); resolve(value); };
+    let closed = false;
+    const close = (value) => {
+      if (closed) return;
+      closed = true;
+      document.removeEventListener('keydown',dialogKeys,true);
+      el.remove(); if (prev && prev.isConnected && prev.focus) prev.focus(); resolve(value);
+    };
+    const dialogKeys = e => {
+      const dialogs = document.querySelectorAll('.modal-backdrop');
+      if (dialogs[dialogs.length - 1] !== el) return;
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(null); }
+      else if (e.key === 'Tab') {
+        const controls = Array.from(form.querySelectorAll('input,select,textarea,button,[tabindex]'))
+          .filter(control => !control.disabled && control.tabIndex >= 0 && control.getClientRects().length);
+        if (!controls.length) return;
+        const index = controls.indexOf(document.activeElement);
+        if (index < 0 || (e.shiftKey ? index === 0 : index === controls.length - 1)) {
+          e.preventDefault(); controls[e.shiftKey ? controls.length - 1 : 0].focus();
+        }
+      }
+    };
+    document.addEventListener('keydown',dialogKeys,true);
     el.addEventListener("keydown", (e) => {
       e.stopPropagation();
       if (e.key === "Escape") { e.preventDefault(); close(null); }

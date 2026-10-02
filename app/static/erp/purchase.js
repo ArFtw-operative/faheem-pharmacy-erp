@@ -41,7 +41,7 @@ export function pickProduct({ title = "Choose product", initial = "", suggestion
     <p class="hint">↑↓ choose · Enter selects · suggestions are ranked by similarity and are never applied without you</p></div>`);
   const list = body.querySelector(".picker-list");
   const render = () => {
-    list.innerHTML = rows.length ? rows.map((r, i) => `<div class="pick${i === at ? " on" : ""}" data-i="${i}" role="option">
+    list.innerHTML = rows.length ? rows.map((r, i) => `<div class="pick${i === at ? " on" : ""}" data-i="${i}" role="option" aria-selected="${i === at}">
       <b>${esc(r.name)}</b> <span class="muted">${esc(r.pack || "")}${r.manufacturer ? " · " + esc(r.manufacturer) : ""}</span>
       ${r.score != null ? `<span class="score">${r.score}%${r.note ? " · " + esc(r.note) : ""}</span>` : ""}</div>`).join("")
       : '<div class="muted pick-empty">No products — type to search</div>';
@@ -66,7 +66,18 @@ export function pickProduct({ title = "Choose product", initial = "", suggestion
       if (rows.length) { at = (at + (e.key === "ArrowDown" ? 1 : -1) + rows.length) % rows.length; render(); }
     }
   });
-  list.addEventListener("mousedown", (e) => { const p = e.target.closest(".pick"); if (p) { at = Number(p.dataset.i); render(); } });
+  list.addEventListener("mousedown", (e) => {
+    const p = e.target.closest('.pick');
+    if (!p) return;
+    e.preventDefault();
+    at = Number(p.dataset.i);
+    // Keep the clicked row intact so the second click can deliver dblclick.
+    list.querySelectorAll('.pick').forEach((row,i) => {
+      row.classList.toggle('on',i === at);
+      row.setAttribute('aria-selected',String(i === at));
+    });
+    input.focus({preventScroll:true});
+  });
   list.addEventListener("dblclick", () => body.closest("form")?.requestSubmit());
   suggestionsUrl && !initial ? search.flush("") : search.flush(initial);
   return modal({ title, body, wide: true, submitLabel: "Select",
