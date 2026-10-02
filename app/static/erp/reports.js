@@ -177,7 +177,7 @@ export function create(ctx,params,root) {
       document=generated;
       if(selected.id==='supplier-purchases'&&form.elements.supplier.value)textView=false;
       rowAt=0;renderDocument();$('.report-notice',root).textContent=`Report generated · ${document.rows.length} row${document.rows.length===1?'':'s'}`;
-      ctx.status(document.title+' generated','ok');$('.report-table-scroll',root)?.focus();
+      ctx.status(document.title+' generated','ok');if(selected.id!=='supplier-purchases')$('.report-table-scroll',root)?.focus();
     } catch(error){statusError(error);if(ownVersion===version)$('.report-notice',root).textContent='Report could not be generated. Check the parameters and try again.';}
     finally{if(ownVersion===version){button.disabled=false;request=null;}}
   }
