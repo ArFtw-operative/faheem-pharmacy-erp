@@ -7,8 +7,8 @@ import * as keys from "erp/keys";
 // Qty is always the product's base unit (tablets for a loose strip); "1s" = one
 // strip, "2s+3" = two strips and three tablets. Stock is allocated FEFO across
 // unexpired batches and each batch is charged its own MRP — exactly what the
-// server does, so the amount shown is the amount billed. "#" in the item box
-// searches customers; an unknown customer is created inline without leaving.
+// server does, so the amount shown is the amount billed. The Customer field has its
+// own search; an unknown customer is created inline without leaving.
 import { createStudio } from "erp/studio";
 import { followUpPopover } from "erp/followup";
 import { WA_ICON, askPhone, normalizePhone, prettyPhone, sendInvoice, waStatus } from "erp/whatsapp";
@@ -61,7 +61,13 @@ export function create(ctx, params, root, saved) {
   <div class="pos">
     <div class="pos-head">
       <span class="lbl">Bill</span><b class="bill-no"></b>
-      <span class="lbl">Customer</span><button type="button" class="cust-chip" title="Click (or the Customer shortcut) to choose a customer"></button>
+      <label class="lbl" for="cq-${billNo}">Customer</label>
+      <div class="cust-field">
+        <button type="button" class="cust-chip" title="Click (or the Customer shortcut) to change the customer" hidden></button>
+        <input id="cq-${billNo}" class="cq" autocomplete="off" spellcheck="false" placeholder="Walk-in — search name, mobile or customer ID">
+        <kbd class="cc-key" data-shortcut="pos.customer">${esc(keys.keyFor("pos.customer"))}</kbd>
+        <div class="drop cdrop" hidden></div>
+      </div>
       <div class="sale-types" role="group" aria-label="Sale type">
         <span class="lbl">Sale type</span>
         <button type="button" class="btn" data-sale-type="WALK_IN" aria-pressed="false">Walk-in</button>
@@ -131,7 +137,9 @@ export function create(ctx, params, root, saved) {
     <div class="pos-detail"></div>
   </div>`;
 
-  const q = $(".q", root), drop = $(".drop", root), tbody = $("tbody", root), wrap = $(".bill-wrap", root);
+  const q = $(".q", root), drop = $(".pos-search .drop", root), tbody = $("tbody", root), wrap = $(".bill-wrap", root);
+  const chip = $(".cust-chip", root), cq = $(".cq", root), cdrop = $(".cdrop", root);
+  let custEditing = false;    // the customer field is open over a chosen customer
   // the invoice studio lives inside this POS tab: other tabs stay usable while it is open
   const studio = createStudio({ ctx, closeLabel: "New bill", onClose: () => closeStudio() });
   const studioBox = h('<div class="pos-studio" hidden></div>');
@@ -292,10 +300,11 @@ export function create(ctx, params, root, saved) {
     $(".bill-empty", root).hidden = S.lines.length > 0;
     $(".bill-no", root).textContent = S.parked ? S.parked.ref : `NEW-${String(billNo).padStart(2, "0")}`;
     const c = S.customer;
-    const hint = `<kbd class="cc-key" data-shortcut="pos.customer">${esc(keys.keyFor("pos.customer"))}</kbd>`;
-    $(".cust-chip", root).innerHTML = c
-      ? `${hint}<b>${esc(c.name)}</b> <span>${esc(c.mobile || "")}</span> <span class="muted">${esc(c.customer_id || "")}</span><span class="cc-clear" role="button" title="Back to walk-in (${esc(keys.keyFor("pos.walkin"))})">×</span>`
-      : `${hint}<span class="cc-empty">Walk-in — click to choose a customer</span>`;
+    chip.innerHTML = c
+      ? `<b>${esc(c.name)}</b> <span>${esc(c.mobile || "")}</span> <span class="muted">${esc(c.customer_id || "")}</span><span class="cc-clear" role="button" title="Back to walk-in (${esc(keys.keyFor("pos.walkin"))})">×</span>`
+      : "";
+    chip.hidden = !c || custEditing;
+    cq.hidden = !chip.hidden;
     renderTotals();
     renderDetail();
     if (metaEditing !== null) {
@@ -502,7 +511,7 @@ export function create(ctx, params, root, saved) {
   async function followUp() {
     const saved = studioOpen && studio.sale && studio.sale.customer_id ? studio.sale : null;
     const cust = saved ? { id: saved.customer_id, name: saved.customer, mobile: saved.mobile } : S.customer;
-    if (!cust || !cust.id) { ctx.status("Select a customer first (# in the item box or " + keys.keyFor("pos.customer") + ")", "warn"); return; }
+    if (!cust || !cust.id) { ctx.status("Select a customer first (Customer field or " + keys.keyFor("pos.customer") + ")", "warn"); return; }
     if (!ctx.boot.can || !ctx.boot.can["followups.manage"]) { ctx.status("Follow-ups need the follow-up right", "warn"); return; }
     const sale = saved ? { id: saved.id, invoice_no: saved.invoice_no } : (lastBill && lastBill.customer_id === cust.id ? { id: lastBill.id, invoice_no: lastBill.no } : null);
     await followUpPopover({ anchor: studioOpen ? studio.el.querySelector(".studio-head") : $(".cust-chip", root), customer: cust, sale, ctx });
@@ -615,8 +624,8 @@ export function create(ctx, params, root, saved) {
       : `${l.name}: sold per ${unitName(l.base_unit, 1)}${l.content ? " (" + l.content + ")" : ""} · ₹${money(b.pack_mrp)}`);
   }
 
-  // ---------------------------------------------------------------- search box: products / #customers / parked
-  let mode = null;            // "items" | "customers" | "newcust" | "parked" | "batch"
+  // ---------------------------------------------------------------- search box: products / parked / batch
+  let mode = null;            // "items" | "parked" | "batch"
   let results = [], at = 0, ctrl = null, lastTerm = "";
   const cache = new Map();
 
@@ -637,41 +646,46 @@ export function create(ctx, params, root, saved) {
           <td>${esc(p.rack || "")}</td></tr>`;
       }).join("")}${S.manual ? typedRow(results.length) : ""}</tbody></table><div class="drop-foot">${S.manual
         ? "Manual bill · ↑↓ choose · Enter add (stock is not checked or changed) · last row adds the typed name · Esc close"
-        : "↑↓ choose · Enter add · Esc close · # customer"}</div>`
+        : "↑↓ choose · Enter add · Esc close"}</div>`
       : S.manual ? `<table class="res"><tbody>${typedRow(0)}</tbody></table><div class="drop-foot">Not in inventory · Enter adds it as a typed item</div>`
       : `<div class="drop-empty">No product matches “${esc(lastTerm)}”.</div>`;
   }
 
   const typedRow = (i) => `<tr data-i="${i}" class="new${i === at ? " on" : ""}"><td colspan="7">＋ Add “${esc(lastTerm)}” as a typed item (not in inventory)</td></tr>`;
 
+  // ---------------------------------------------------------------- customer field: its own search, never the item box
+  let cResults = [], cAt = 0, cCtrl = null, cNew = false;
+  function closeCust() { cdrop.hidden = true; cdrop.innerHTML = ""; cResults = []; cNew = false; }
+
   function renderCustomers() {
-    drop.hidden = false;
-    const term = q.value.replace(/^#/, "").trim();
-    const rows = results.map((c, i) => `<tr data-i="${i}" class="${i === at ? "on" : ""}"><td class="mono">${esc(c.customer_id)}</td><td><b>${esc(c.name)}</b></td><td class="mono">${esc(c.mobile)}</td><td>${esc(c.doctor || "")}</td></tr>`);
-    const newIdx = results.length;
-    rows.push(`<tr data-i="${newIdx}" class="new${at === newIdx ? " on" : ""}"><td colspan="4">＋ New customer${term ? ` “${esc(term)}”` : ""} — create here without leaving the bill</td></tr>`);
-    drop.innerHTML = `<table class="res"><thead><tr><th>ID</th><th>Customer</th><th>Mobile</th><th>Doctor</th></tr></thead><tbody>${rows.join("")}</tbody></table>
-      <div class="drop-foot">↑↓ choose · Enter select · Esc walk-in</div>`;
+    cdrop.hidden = false;
+    const term = cq.value.trim();
+    const rows = cResults.map((c, i) => `<tr data-i="${i}" class="${i === cAt ? "on" : ""}"><td class="mono">${esc(c.customer_id)}</td><td><b>${esc(c.name)}</b></td><td class="mono">${esc(c.mobile)}</td><td>${esc(c.doctor || "")}</td></tr>`);
+    const newIdx = cResults.length;
+    rows.push(`<tr data-i="${newIdx}" class="new${cAt === newIdx ? " on" : ""}"><td colspan="4">＋ New customer${term ? ` “${esc(term)}”` : ""} — create here without leaving the bill</td></tr>`);
+    cdrop.innerHTML = `${term ? "" : '<div class="drop-hint">Type a name, mobile or customer ID — or click a result</div>'}
+      <table class="res"><thead><tr><th>ID</th><th>Customer</th><th>Mobile</th><th>Doctor</th></tr></thead><tbody>${rows.join("")}</tbody></table>
+      <div class="drop-foot">↑↓ choose · Enter select · Esc back to the item box</div>`;
   }
 
   function renderNewCustomer(term) {
-    mode = "newcust";
-    drop.hidden = false;
+    cNew = true;
+    cdrop.hidden = false;
     const digits = term.replace(/\D/g, "");
     const isPhone = digits.length >= 5 && digits.length === term.replace(/[\s+-]/g, "").length;
-    drop.innerHTML = `<form class="newcust" autocomplete="off">
+    cdrop.innerHTML = `<form class="newcust" autocomplete="off">
       <b>New customer</b>
       <label>Mobile<input name="mobile" inputmode="tel" maxlength="15" value="${esc(isPhone ? digits : "")}" required></label>
       <label>Name<input name="name" maxlength="150" value="${esc(isPhone ? "" : term)}" required></label>
       <label>Doctor<input name="doctor_name" maxlength="150" placeholder="optional"></label>
       <span class="nc-err" role="alert"></span>
       <span class="hint">Enter = next / save · Esc = cancel</span></form>`;
-    const form = $("form", drop);
+    const form = $("form", cdrop);
     const inputs = $$("input", form);
     (isPhone ? inputs[1] : inputs[0]).focus();
     form.addEventListener("keydown", async (e) => {
       e.stopPropagation();
-      if (e.key === "Escape") { e.preventDefault(); closeDrop(); q.value = ""; q.focus(); return; }
+      if (e.key === "Escape") { e.preventDefault(); closeCust(); cq.focus(); return; }
       if (e.key !== "Enter") return;
       e.preventDefault();
       const mobile = form.mobile.value.trim(), name = form.name.value.trim();
@@ -691,22 +705,77 @@ export function create(ctx, params, root, saved) {
     });
   }
 
-  // the same picker for the shortcut and the mouse: customer search in the item box, results clickable
-  function chooseCustomer() {
-    q.value = "#"; q.focus();
-    mode = "customers"; results = []; at = 0; renderCustomers();
-    drop.insertAdjacentHTML("afterbegin", '<div class="drop-hint">Type a name, mobile or customer ID — or click a result</div>');
+  async function runCustSearch() {
+    const term = cq.value.trim();
+    if (cCtrl) cCtrl.abort();
+    cCtrl = new AbortController();
+    try {
+      cResults = term ? (await api("/api/erp/customers?q=" + encodeURIComponent(term), { signal: cCtrl.signal })).customers : [];
+      if (cq.value.trim() !== term) return;   // a newer keystroke is in flight
+      cAt = 0; cNew = false; renderCustomers();
+    } catch (err) { if (err.name !== "AbortError") ctx.status(err.message, "error"); }
   }
-  $(".cust-chip", root).addEventListener("mousedown", (e) => e.preventDefault());      // keep an open qty edit
-  $(".cust-chip", root).addEventListener("click", (e) => {
+  const custSearch = debounce(runCustSearch, 120);
+
+  // the shortcut and a click on the chip both open the customer field
+  function chooseCustomer(prefill = "") {
+    closeDrop();
+    custEditing = true; chip.hidden = true; cq.hidden = false;
+    cq.value = prefill; cq.focus(); cq.select();
+    cResults = []; cAt = 0; renderCustomers();
+    if (prefill) custSearch.flush();
+  }
+  function leaveCustomerField() {
+    custSearch.cancel(); if (cCtrl) cCtrl.abort();
+    closeCust(); custEditing = false; cq.value = ""; render();
+  }
+  chip.addEventListener("mousedown", (e) => e.preventDefault());      // keep an open qty edit
+  chip.addEventListener("click", (e) => {
     if (e.target.closest(".cc-clear")) { if (S.customer) { S.customer = null; render(); ctx.status("Walk-in customer"); q.focus(); } return; }
     chooseCustomer();
   });
+  cq.addEventListener("focus", () => { if (cdrop.hidden) { custEditing = true; cAt = 0; if (cq.value.trim()) custSearch.flush(); else { cResults = []; renderCustomers(); } } });
+  cq.addEventListener("input", () => custSearch());
+  cq.addEventListener("keydown", async (e) => {
+    const n = cResults.length + 1;
+    if (["ArrowDown", "ArrowUp", "Enter", "Escape"].includes(e.key)) e.stopPropagation();   // other keys (F-keys) still reach the POS
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (cNew) return;
+      cAt = (cAt + (e.key === "ArrowDown" ? 1 : -1) + n) % n; renderCustomers();
+      const on = $("tr.on", cdrop); if (on) on.scrollIntoView({ block: "nearest" });
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (cq.value.trim()) { custSearch.cancel(); await runCustSearch(); }
+      chooseCust();
+    } else if (e.key === "Escape" || e.key === "Tab") {
+      if (e.key === "Escape") e.preventDefault();
+      leaveCustomerField();
+      if (e.key === "Escape") q.focus();
+    }
+  });
+  // leaving the field (click elsewhere) closes its list
+  $(".cust-field", root).addEventListener("focusout", (e) => {
+    if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget)) setTimeout(() => {
+      if (!$(".cust-field", root).contains(document.activeElement) && custEditing) leaveCustomerField();
+    }, 0);
+  });
+  cdrop.addEventListener("mousedown", (e) => {
+    const tr = e.target.closest("tr[data-i]");
+    if (!tr) return;
+    e.preventDefault();
+    cAt = Number(tr.dataset.i);
+    chooseCust();
+  });
+  function chooseCust() {
+    if (cAt < cResults.length) { const c = cResults[cAt]; setCustomer(c); ctx.status(`Customer: ${c.name}`, "ok"); }
+    else renderNewCustomer(cq.value.trim());
+  }
 
   function setCustomer(c) {
     S.customer = c ? { id: c.id, name: c.name, mobile: c.mobile, customer_id: c.customer_id, customer_type: saleType(c.customer_type ?? c.type) } : null;
     if (!S.saleTypeExplicit) S.saleType = saleType(c?.customer_type ?? c?.type);
-    closeDrop(); q.value = ""; render(); q.focus();
+    closeCust(); custEditing = false; cq.value = ""; render(); q.focus();
   }
 
   async function runSearch() {
@@ -717,13 +786,6 @@ export function create(ctx, params, root, saved) {
     ctrl = new AbortController();
     const key = term.toLowerCase();
     try {
-      if (term.startsWith("#")) {
-        mode = "customers";
-        const t = term.slice(1).trim();
-        results = t ? (await api("/api/erp/customers?q=" + encodeURIComponent(t), { signal: ctrl.signal })).customers : [];
-        at = 0; renderCustomers();
-        return;
-      }
       mode = "items";
       lastTerm = term;
       const hit = cache.get(key);
@@ -747,10 +809,10 @@ export function create(ctx, params, root, saved) {
   const search = debounce(runSearch, 70);
 
   function moveDrop(d) {
-    const n = mode === "customers" || (mode === "items" && S.manual) ? results.length + 1 : results.length;
+    const n = mode === "items" && S.manual ? results.length + 1 : results.length;
     if (!n) return;
     at = (at + d + n) % n;
-    if (mode === "customers") renderCustomers(); else if (mode === "items") renderItems(); else if (mode === "parked") renderParked(); else if (mode === "batch") renderBatch();
+    if (mode === "items") renderItems(); else if (mode === "parked") renderParked(); else if (mode === "batch") renderBatch();
     const on = $("tr.on", drop);
     if (on) on.scrollIntoView({ block: "nearest" });
   }
@@ -760,20 +822,19 @@ export function create(ctx, params, root, saved) {
       const p = results[at];
       if (S.manual) { if (p) addManualProduct(p); else addManual(q.value.trim()); return; }
       if (p) addProduct(p);
-    } else if (mode === "customers") {
-      if (at < results.length) { const c = results[at]; setCustomer(c); ctx.status(`Customer: ${c.name}`, "ok"); }
-      else renderNewCustomer(q.value.replace(/^#/, "").trim());
     } else if (mode === "parked") resumeParked(results[at]);
     else if (mode === "batch") chooseBatch();
   }
 
   q.addEventListener("input", () => {
-    if (q.value.trim().startsWith("#")) search.flush(); else search();
+    // old habit: "#" in the item box moves to the customer field
+    if (q.value.trim().startsWith("#")) { const t = q.value.trim().slice(1); q.value = ""; closeDrop(); chooseCustomer(t); return; }
+    search();
   });
   q.addEventListener("keydown", async (e) => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      if (!drop.hidden && results.length + (mode === "customers" ? 1 : 0)) moveDrop(1);
+      if (!drop.hidden && results.length) moveDrop(1);
       else if (S.lines.length) { wrap.focus(); select(sel < 0 ? 0 : sel); }
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
@@ -784,10 +845,9 @@ export function create(ctx, params, root, saved) {
       if (!drop.hidden && (mode === "parked" || mode === "batch")) { await chooseDrop(); return; }
       const term = q.value.trim();
       if (!term) { if (S.lines.length) { $(".p-recv", root).focus(); } return; }
-      if (S.manual && !term.startsWith("#")) { search.cancel(); await runSearch(); await chooseDrop(); return; }
+      if (S.manual) { search.cancel(); await runSearch(); await chooseDrop(); return; }
       // scanner / fast typist: search now, then add an exact single match
-      if (mode !== "customers" && mode !== "parked") { search.cancel(); await runSearch(); }
-      if (mode === "customers" && !results.length) { renderNewCustomer(term.slice(1).trim()); return; }
+      if (mode !== "parked") { search.cancel(); await runSearch(); }
       if (mode === "items" && results.length === 1 && results[0].batches.length) { addProduct(results[0]); return; }
       await chooseDrop();
     } else if (e.key === "Escape") {

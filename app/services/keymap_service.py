@@ -149,7 +149,7 @@ FIXED = [
     ("↑ ↓", "Move in lists and grids"), ("PgUp PgDn Home End", "Page / first / last row"),
     ("Tab", "Next field (Qty → Disc % in the bill)"), ("Alt+1 … Alt+9", "Switch to tab 1–9"),
     ("Delete", "Remove the selected bill line (asks first)"), ("+ / −", "Change quantity of the selected line"),
-    ("1s · 2s+3", "Qty shorthand: one strip · two strips and three units"), ("#", "Customer search in the item box"),
+    ("1s · 2s+3", "Qty shorthand: one strip · two strips and three units"), ("#", "In the item box: jumps to the Customer field"),
     ("Space", "Select a row (Masters)"), ("Shift+F10 / Menu key", "Row context menu"),
 ]
 

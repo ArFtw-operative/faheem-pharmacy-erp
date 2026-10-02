@@ -98,7 +98,7 @@ function directoryPanel(el, S) {
   ];
   const chosen = () => { const s = store.get(colKey, null); return ALL.filter((c) => (Array.isArray(s) ? s.includes(c.key) : c.def)); };
   const grid = new Grid({
-    label: "Customers", storageKey: "customers", empty: "No customers match. Customers are created at the POS (# in the item box or Alt+C).",
+    label: "Customers", storageKey: "customers", empty: "No customers match. Customers are created at the POS (Customer field or Alt+C).",
     columns: chosen(), onSelect: (r) => loadRecord(r), onActivate: () => focusRecord(), onNearEnd: () => more(),
     contextMenu: () => [
       { label: "New sale", key: keys.keyFor("cust.newSale"), action: () => newSale() },

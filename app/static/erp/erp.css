@@ -122,8 +122,10 @@ b.in { color: var(--ok); } b.out { color: var(--bad); }
 .bill-no { font: 700 14px var(--mono); min-width: 90px; }
 .cust-chip { display: inline-flex; align-items: center; gap: 6px; min-width: 260px; padding: 3px 8px; border: 1px solid var(--line); border-radius: var(--r); background: #fff; font: inherit; text-align: left; cursor: pointer; }
 .cust-chip:hover { border-color: var(--accent); }
-.cust-chip .cc-key { margin: 0; opacity: .55; }                           /* shortcut hint, greyed, on the left */
-.cust-chip .cc-empty { color: var(--muted); }
+.cust-field { position: relative; display: inline-flex; align-items: center; gap: 6px; }
+.cust-field .cq { width: 300px; height: 28px; }
+.cust-field .cc-key { margin: 0; opacity: .55; }                           /* shortcut hint, greyed */
+.cust-field .cdrop { left: 0; right: auto; min-width: 560px; }
 .cust-chip .cc-clear { margin-left: auto; padding: 0 4px; color: var(--muted); font-size: 15px; line-height: 1; }
 .cust-chip .cc-clear:hover { color: var(--bad); }
 .drop-hint { padding: 6px 10px; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--line-2); }
