@@ -53,6 +53,20 @@ and readiness for automatic posting. Coverage is **not an accuracy measurement**
 * Confirmed supplier mappings are reused. Changed product descriptions under an
   existing supplier code are held. Repeat batches of one new product create one
   product master.
+* Existing catalogue products undergo physical evidence checks too. A counted
+  pack stored as one generic unit, solid-dose content weight without a count,
+  or a tube inferred from weight without a corroborating form/container label
+  cannot silently pass. Explicit reviewed whole-pack conventions remain usable.
+* Redundant catalogue candidates with identical name/pack, compatible maker
+  and the same physical definition reuse a stable existing product. Conflicting
+  definitions require selection instead of automatically creating another item.
+  Catalogue records and historical stock are not merged or rewritten.
+* Independently printed net amounts within ₹0.02 of calculated net values are
+  retained with the rounding difference recorded. Gross-before-discount and
+  tax-inclusive alternatives are excluded before treating a value as net.
+* Mixed printed rates under one HSN are grouped reference observations. Rate,
+  tax arithmetic and invoice total checks still apply. Repeated product/batch
+  exceptions are grouped in the intake view, while every row retains its checks.
 * Cross-format duplicate identification requires the same invoice number, total
   and every line's name, batch, expiry, quantity, rate and MRP. It never relies on
   similar supplier names. A corroborated duplicate can supply missing seller

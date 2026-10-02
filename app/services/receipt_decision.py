@@ -80,7 +80,32 @@ def mapping(db, purchase, line):
         SupplierProductMap.item_id == line.item.id))
 
 
-def decide(line, confirmation=None):
+def master_problems(line):
+    """Independent physical evidence must corroborate an existing master too."""
+    from app.models import Item
+    from app.services import packaging_service
+    item = line.item
+    if item is None:
+        return []
+    pack = units.parse_pack(effective(line).get('pack'))
+    form = packaging_service.detect_form(Item(name=line.product_name, generic_name='', dosage_form=''))
+    base, master = item.base_unit, item.units_per_pack or 1
+    problems = []
+    def add(code, field, message):
+        problems.append(dict(code=code, field=field, level='review', message=message))
+    if pack.kind == 'CONTENT' and form in {'TABLET','CAPSULE'}:
+        add('strength_not_pack', 'pack', 'The printed weight/volume does not establish the count of solid doses, even though the catalogue repeats it. Verify the physical pack.')
+    if pack.kind in {'COUNT','NESTED'} and base in {'PACK','UNIT'} and master == 1 and (pack.units_per_pack or 1) > 1:
+        add('master_unit_unverified', 'units_per_pack', f"Printed pack {pack.raw!r} contains a count, but the catalogue records one generic {base.lower()}. Establish the sale unit and retail count once.")
+    if form in {'TABLET','CAPSULE'} and base not in {form, 'UNIT'}:
+        add('master_form_conflict', 'base_unit', f'The description identifies {form.lower()}s, but the catalogue counts {base.lower()}s. Verify the product definition.')
+    tube_label = re.search(r'\bTUBES?\b', line.product_name, re.I)
+    if pack.kind == 'CONTENT' and base == 'TUBE' and form in {'','POWDER','SACHET'} and not tube_label:
+        add('master_container_unverified', 'base_unit', 'Weight alone does not establish a tube; the description and catalogue do not corroborate this container definition.')
+    return problems
+
+
+def decide(line, confirmation=None, *, validate_master=False):
     v = effective(line)
     issues, evidence = [], []
     out = {"version": VERSION, "resolved": False, "issues": issues, "evidence": evidence,
@@ -105,6 +130,11 @@ def decide(line, confirmation=None):
     item = line.item
     master = item.units_per_pack if item else line.units_per_pack
     pack = units.parse_pack(v.get("pack"))
+    if validate_master and not (confirmation and confirmation.get('source') in {'CONFIRMED','SUPPLIER_MEMORY'}):
+        problems = master_problems(line)
+        if problems:
+            issues.extend(problems)
+            return out
     if item and pack.kind == "CONTENT":
         master_info = units.parse_pack(item.pack_size)
         scales = {"ML": ("ML", 1), "L": ("ML", 1000), "G": ("G", 1), "KG": ("G", 1000)}
@@ -197,7 +227,8 @@ def resolve(db, purchase, line):
         from app.services import purchase_automation
         if purchase_automation.enabled(db):
             confirmed = purchase_automation.receipt_evidence(db, purchase, line)
-    result = decide(line, confirmed)
+    from app.services import purchase_automation
+    result = decide(line, confirmed, validate_master=purchase_automation.active(db, purchase))
     if confirmed and confirmed.get("history_line_ids"):
         result["history_line_ids"] = confirmed["history_line_ids"]
     if not line.pack_size:

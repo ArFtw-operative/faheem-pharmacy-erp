@@ -446,6 +446,17 @@ def _normalise(db: Session, purchase: Purchase, line: PurchaseItem) -> list[dict
         # their figure is the value billed, the gap is the discount they gave
         line.discount = money(gross - money(amount))
         taxable = money(amount)
+    # Preserve an independently printed net amount within cent rounding, without
+    # mistaking a gross-before-discount or tax-inclusive amount for the net value.
+    with_tax = money(taxable * (1 + (line.gst_rate or Decimal(0)) / 100))
+    if amount is not None and rate is not None and money(amount) != taxable and abs(money(amount)-taxable) <= Decimal('0.02'):
+        alternatives = {gross, with_tax} - {taxable}
+        if not any(abs(money(amount)-other) <= Decimal('0.02') for other in alternatives):
+            before = taxable
+            taxable = money(amount)
+            issues.append(dict(code='source_rounding', field='amount', level='info',
+                               message=f'Supplier rounded the net line value from ₹{before} to ₹{taxable}; printed amount retained.',
+                               evidence=dict(calculated=str(before), printed=str(taxable), difference=str(taxable-before))))
     line.line_total = taxable if rate is not None else (money(amount) if amount is not None else Decimal("0"))
     if scheme_split and rate is not None and received > 0 and not issues_has(issues, "qty_fraction"):
         # the value billed covers everything received: the cost per pack is spread over all of it

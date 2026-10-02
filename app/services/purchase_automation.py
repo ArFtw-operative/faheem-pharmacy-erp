@@ -22,7 +22,7 @@ from app.models import Item, Purchase, PurchaseItem, SupplierProductMap
 from app.services import medicine_reference as reference, packaging_service, receipt_decision as rd, settings_service, units
 from app.utils import money
 
-VERSION = 1
+VERSION = 2
 UOM_FIELDS = {"base_unit", "pack_unit", "units_per_pack", "dosage_form"}
 
 
@@ -42,6 +42,33 @@ def layout(purchase):
 
 def _pack_key(raw):
     return re.sub(r"\s+", "", str(raw).upper()).replace("×", "X").replace("*", "X").rstrip(".")
+
+
+def catalogue_candidates(db, line):
+    """Canonical identity, compatible maker and identical printed packaging."""
+    key = reference.normalize_name(line.product_name)
+    return [i for i in db.scalars(select(Item).where(Item.deleted_at.is_(None), Item.is_active.is_(True)))
+            if reference.normalize_name(i.name) == key
+            and _pack_key(i.pack_size) == _pack_key(line.pack_size)
+            and (not line.manufacturer or reference.normalize_name(line.manufacturer) == reference.normalize_name(i.manufacturer)
+                 or reference.maker_compatible(line.manufacturer, i.manufacturer))]
+
+
+def equivalent_candidate(found):
+    """Reuse redundant identities only when all physical definitions agree.
+
+    Catalogue records remain intact. Different strengths, makers, counts and
+    forms are never collapsed; existing supplier mappings take precedence.
+    """
+    if not found:
+        return None
+    first = found[0]
+    physical = lambda i: (i.base_unit, i.pack_unit, i.units_per_pack, i.dosage_form or '', bool(i.loose_sale))
+    if any(physical(i) != physical(first) or not (i.manufacturer.casefold() == first.manufacturer.casefold()
+           or reference.maker_compatible(i.manufacturer, first.manufacturer))
+           for i in found[1:]):
+        return None
+    return min(found, key=lambda i:i.id)
 
 
 def invoice_fingerprint(purchase):
@@ -237,15 +264,19 @@ def prepare_line(db, purchase, line):
         return
     # Reuse exact names with canonical typography only when manufacturer/form/
     # pack independently agree. Never ignore release markers or choose fuzzy hits.
-    key = reference.normalize_name(line.product_name)
-    found = [i for i in db.scalars(select(Item).where(Item.deleted_at.is_(None)))
-             if reference.normalize_name(i.name) == key
-             and _pack_key(i.pack_size) == _pack_key(line.pack_size)
-             and (not line.manufacturer or reference.maker_compatible(line.manufacturer, i.manufacturer))]
-    if len(found) == 1:
-        line.item, line.match_method, line.new_product = found[0], "CANONICAL_NAME_PACK", False
-        line.corrections = {**c, "_automation": {"version": VERSION, "action": "match", "item_id": found[0].id}}
+    found = catalogue_candidates(db, line)
+    selected = equivalent_candidate(found)
+    if selected:
+        line.item, line.match_method, line.new_product = selected, "CANONICAL_NAME_PACK", False
+        line.corrections = {**c, "_automation": {"version": VERSION, "action": "match", "item_id": selected.id,
+                                               "equivalent_candidate_ids": [i.id for i in found]}}
         return
+    if found:
+        line.item, line.new_product = None, False
+        line.units_per_pack = None
+        c.pop('_automation', None)
+        line.corrections = c
+        return  # Conflicting existing candidates must not create another product.
     pack = units.parse_pack(line.pack_size)
     ref = reference.packaging_evidence(line.product_name, line.manufacturer, line.pack_size)
     probe = Item(name=line.product_name, pack_size=line.pack_size or (ref["pack"] if ref else ""),
@@ -289,6 +320,12 @@ def review_issues(db, purchase, line, issues):
     if not active(db, purchase):
         return issues
     c = line.corrections or {}
+    if not line.item and not UOM_FIELDS.intersection(c):
+        found = catalogue_candidates(db, line)
+        if found and equivalent_candidate(found) is None:
+            issues.append(dict(code='catalogue_conflict', field='item_id', level='match',
+                               message='Existing catalogue candidates disagree on physical packaging. Select the verified product definition once.',
+                               candidate_ids=[i.id for i in found]))
     if purchase.supplier_id and line.supplier_code and line.match_method != "MANUAL":
         remembered = db.scalar(select(SupplierProductMap).where(
             SupplierProductMap.supplier_id == purchase.supplier_id,
@@ -311,9 +348,9 @@ def review_issues(db, purchase, line, issues):
         issues = [i for i in issues if i["code"] != "units_suggested"]
     # Broad four-digit tariff headings are not product-level tax identity.
     for i in issues:
-        if i["code"] == "gst_hsn_mixed" and len(line.hsn_code) == 4 and line.gst_source == "FILE":
+        if i["code"] == "gst_hsn_mixed" and line.gst_source == "FILE":
             i["level"] = "info"
-            i["message"] = f"Broad HSN heading {line.hsn_code} contains different printed GST rates; individual rates and invoice tax totals are still checked."
+            i["message"] = f"HSN {line.hsn_code} has differing printed rates. Recorded as a classification observation; line arithmetic, GST slabs and invoice tax totals are checked separately."
         if i["code"] == "expiry_soon" and line.expiry_date:
             expiry = line.expiry_date
             last_day = expiry.replace(day=calendar.monthrange(expiry.year, expiry.month)[1])
@@ -395,11 +432,31 @@ def assessment(db, purchase):
         if codes:
             exceptions.append({"line": l.line_no, "name": l.product_name, "codes": sorted(set(codes))})
     n = len(purchase.items)
+    groups = {}
+    by_no = {l.line_no:l for l in purchase.items}
+    for e in exceptions:
+        l = by_no[e['line']]
+        key = (reference.normalize_name(l.product_name), _pack_key(l.pack_size), l.manufacturer.casefold())
+        group = groups.setdefault(key, dict(name=l.product_name, pack=l.pack_size, lines=[], codes=[]))
+        group['lines'].append(l.line_no)
+        group['codes'] = sorted(set(group['codes']) | set(e['codes']))
+    observations = {}
+    rounding = []
+    for l in purchase.items:
+        for i in l.issues or []:
+            if i['code'] == 'gst_hsn_mixed' and i['level'] == 'info':
+                group = observations.setdefault(l.hsn_code, dict(code='gst_hsn_mixed', hsn=l.hsn_code, lines=[], rates=[]))
+                group['lines'].append(l.line_no)
+                group['rates'] = sorted(set(group['rates']) | {str(l.gst_rate)})
+            if i['code'] == 'source_rounding':
+                rounding.append(dict(line=l.line_no, **i['evidence']))
     return {"version": VERSION, "mode": settings_service.get_setting(db, "purchase_automation", "off"),
             "ready_for_unattended_post": bool(n and not exceptions and not blockers and purchase.status == "DRAFT"),
             "resolved_rows": n-len(exceptions), "total_rows": n,
             "coverage_percent": round(100*(n-len(exceptions))/n, 2) if n else 0,
             "exceptions": exceptions, "document_blockers": blockers,
+            "exception_groups": list(groups.values()), "observations": list(observations.values()),
+            "rounding": rounding,
             "exception_counts": dict(Counter(c for e in exceptions for c in e["codes"]))}
 
 

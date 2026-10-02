@@ -229,7 +229,9 @@ export function create(ctx, params, root) {
       const out = await modal({ title: "Automatic intake", wide: true, submitLabel: "Recheck evidence",
         body: `<p>${a.resolved_rows} of ${a.total_rows} rows have resolved checks. This measures readiness, not independently verified accuracy.</p>
           ${a.document_blockers.length ? `<p><b>Invoice checks</b></p><ul>${a.document_blockers.map(b => `<li>${esc(b.message)}</li>`).join("")}</ul>` : ""}
-          ${a.exceptions.length ? `<p><b>Rows requiring information</b></p><ul>${a.exceptions.map(e => `<li>Line ${e.line}: ${esc(e.name)} — ${esc(e.codes.join(", ").replaceAll("_", " "))}</li>`).join("")}</ul>` : "<p>No row exceptions.</p>"}`,
+          ${a.observations?.length ? `<p class="muted">${a.observations.length} HSN classifications have differing printed rates, retained for reference. Financial checks remain separate.</p>` : ""}
+          ${a.rounding?.length ? `<p class="muted">Supplier cent rounding retained on ${a.rounding.length} lines.</p>` : ""}
+          ${a.exceptions.length ? `<p><b>Products requiring information</b></p><ul>${(a.exception_groups || a.exceptions.map(e => ({ ...e, lines: [e.line] }))).map(e => `<li>Lines ${esc(e.lines.join(", "))}: ${esc(e.name)} — ${esc(e.codes.join(", ").replaceAll("_", " "))}</li>`).join("")}</ul>` : "<p>No row exceptions.</p>"}`,
         onSubmit: () => api(`/api/erp/purchases/${p.id}/prepare`, { method: "POST" }) });
       if (out) await load();
     };
