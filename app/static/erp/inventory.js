@@ -252,10 +252,25 @@ export function create(ctx, params, root) {
     const d = detail, el = $(".inv-detail", root);
     if (!d) { el.innerHTML = '<span class="muted">Select a product · see the shortcut bar for product actions</span>'; return; }
     const p = d.packaging;
-    el.innerHTML = `<div><b>${esc(d.name)}</b> <span class="mono muted">${esc(d.code)}</span>${d.category_name ? " · <b>" + esc(d.category_name) + "</b>" : ""} · ${esc(d.manufacturer || "—")} · ${esc(title(d.form) || "—")}${d.strength ? " · " + esc(d.strength) : ""}${d.generic ? " · " + esc(d.generic) : ""}</div>
-      <div>Base <b>${esc(title(p.base_unit))}</b> · Purchase <b>${esc(title(p.pack_unit))}</b> · Pack <b>${esc(p.pack_label)}</b>${p.pack_raw ? ` (${esc(p.pack_raw)})` : ""} · Loose sale <b>${p.loose_sale ? "Yes" : "No"}</b>${p.content ? ` · Content <b>${esc(p.content)}</b>` : ""} · UOM <b>${p.source === "MANUAL" ? "corrected" : "auto"}</b> · FEFO <b>Yes</b>
-      · Stock <b>${d.stock} ${esc(unitName(p.base_unit, d.stock))}</b>${p.units_per_pack > 1 ? ` · <b>${esc(d.equivalent)}</b>` : ""}${d.sellable !== d.stock ? ` · sellable <b>${d.sellable}</b>` : ""}
-      · Reorder <b>${d.reorder || "—"}</b> · Rack <b>${esc(d.rack || "—")}</b></div>`;
+    const price = value => value === undefined || value === null || value === '' ? '—' : `₹${money(value)}`;
+    const fact = (label,value) => `<div><span class="muted">${esc(label)}</span><br><b>${esc(value)}</b></div>`;
+    const allBatches = d.batches || [];
+    const batchRows = allBatches.map(b => `<tr${b.id === batches.selected?.id ? ' class="inv-report-selected"' : ''}>
+      <td class="mono">${esc(b.batch_no || '—')}</td><td>${esc(b.expiry ? fmtExp(b.expiry) : 'Not recorded')}</td>
+      <td>${b.stock} ${esc(unitName(p.base_unit,b.stock))}</td><td>${esc(b.equivalent || '—')}</td>
+      <td>${esc(price(b.pack_mrp))}</td>${CAN['purchase.view'] ? `<td>${esc(price(b.purchase_rate))}</td>` : ''}
+      <td>${esc(b.supplier || 'Not recorded')}</td><td>${esc(b.invoice || b.purchase_ref || '—')}</td>
+      <td>${esc(b.received ? fmtDateTime(b.received) : '—')}</td><td>${esc(b.status || '—')}</td></tr>`).join('');
+    el.innerHTML = `<div class="inv-report-title"><b>${esc(d.name)}</b><span class="mono muted">${esc(d.code)}</span>
+      <span class="muted">${esc([d.category_name,title(d.form),d.manufacturer,d.strength].filter(Boolean).join(' · '))}</span></div>
+      <div class="inv-report-facts">${fact('Current stock',`${d.stock} ${unitName(p.base_unit,d.stock)}`)}
+      ${fact('Equivalent',d.equivalent || '—')}${fact('Available for sale',`${d.sellable} ${unitName(p.base_unit,d.sellable)}`)}
+      ${fact('Packaging',p.pack_label || 'Not confirmed')}${p.content ? fact('Content',p.content) : ''}
+      ${fact('Rack',d.rack || '—')}${fact('Batches',`${allBatches.length} total · ${allBatches.filter(b => b.stock > 0).length} with stock`)}</div>
+      ${d.generic ? `<p class="hint">${esc(d.generic)}</p>` : ''}
+      <div class="inv-report-batches"><table aria-label="Item batch report"><thead><tr>
+      <th>Batch</th><th>Expiry</th><th>Stock</th><th>Equivalent</th><th>MRP / pack</th>${CAN['purchase.view'] ? '<th>Rate / pack</th>' : ''}
+      <th>Supplier</th><th>Invoice</th><th>Received</th><th>Status</th></tr></thead><tbody>${batchRows || `<tr><td colspan="${CAN['purchase.view'] ? 10 : 9}" class="muted">No batches recorded.</td></tr>`}</tbody></table></div>`;
   }
   async function refresh(id) {
     details.delete(id);

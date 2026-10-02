@@ -191,7 +191,14 @@ td.warn { color: var(--warn); background: var(--warn-bg); }
 .last-bill { font-size: 12px; padding: 6px; background: var(--accent-2); border: 1px solid #b6dcc6; border-radius: var(--r); }
 .last-bill .change { color: var(--accent); font-size: 14px; }
 .pos-detail, .inv-detail { display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 6px 10px; border-top: 1px solid var(--line); background: var(--head); font-size: 12.5px; min-height: 32px; }
-.inv-detail { flex-direction: column; gap: 2px; }
+.inv-detail { display: block; max-height: 38vh; overflow: auto; }
+.inv-report-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; padding-bottom: 7px; }
+.inv-report-facts { display: flex; flex-wrap: wrap; gap: 6px 28px; padding-bottom: 8px; }
+.inv-report-batches { overflow: auto; }
+.inv-report-batches table { border-collapse: collapse; width: 100%; white-space: nowrap; font-size: 12px; }
+.inv-report-batches th, .inv-report-batches td { padding: 5px 9px; border-bottom: 1px solid var(--line); text-align: left; }
+.inv-report-batches th { background: var(--head); font-weight: 600; }
+.inv-report-selected { background: var(--accent-2); }
 
 /* ---------------------------------------------------------------- inventory */
 .inv, .ledger { display: grid; grid-template-rows: auto 1fr auto; height: 100%; min-height: 0; }
