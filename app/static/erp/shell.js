@@ -28,6 +28,25 @@ let active = null;
 let seq = 0;
 const workspace = $("#workspace");
 const tabBar = $("#wtabs");
+const tabList = $('#tabs-list');
+function tabOverflow() {
+  $('#tabs-prev').disabled=tabBar.scrollLeft<=1;
+  $('#tabs-next').disabled=tabBar.scrollLeft+tabBar.clientWidth>=tabBar.scrollWidth-1;
+}
+function revealActiveTab() {
+  const button=tabBar.querySelector('.wtab.on');
+  if(button) {
+    const bounds=tabBar.getBoundingClientRect(),rect=button.getBoundingClientRect();
+    if(rect.left<bounds.left)tabBar.scrollLeft-=bounds.left-rect.left;
+    else if(rect.right>bounds.right)tabBar.scrollLeft+=rect.right-bounds.right;
+  }
+  tabOverflow();
+}
+$('#tabs-prev').onclick=()=>tabBar.scrollBy({left:-Math.max(160,tabBar.clientWidth*.7),behavior:'smooth'});
+$('#tabs-next').onclick=()=>tabBar.scrollBy({left:Math.max(160,tabBar.clientWidth*.7),behavior:'smooth'});
+tabBar.addEventListener('scroll',tabOverflow,{passive:true});
+new ResizeObserver(revealActiveTab).observe(tabBar);
+tabList.onchange=()=>{const tab=tabs.find(t=>t.id===tabList.value);if(tab)activate(tab);tabList.value='';};
 
 // ------------------------------------------------------------------ status bar
 let stTimer;
@@ -113,6 +132,8 @@ function renderTabs() {
     aria-selected="${t === active}" title="${esc(t.title)}${i < 9 ? " (Alt+" + (i + 1) + ")" : ""}">
     <span>${esc(t.title)}</span>${t.dirty ? '<b class="dot" title="Unsaved">•</b>' : ""}<i data-close="${t.id}" title="Close (${esc(keys.keyFor("app.closeTab"))})">×</i></button>`).join("");
   $("#modules").querySelectorAll("[data-module]").forEach((b) => b.classList.toggle("on", !!active && active.module === b.dataset.module));
+  tabList.innerHTML=`<option value="">All tabs (${tabs.length})</option>`+tabs.map(t=>`<option value="${esc(t.id)}">${t===active?'● ':''}${esc(t.title)}${t.dirty?' •':''}</option>`).join('');
+  requestAnimationFrame(revealActiveTab);
 }
 
 function paramsKey(p) { return JSON.stringify(p || {}); }

@@ -41,7 +41,12 @@
       <form method="post" action="/logout" class="inline"><button class="meta link" type="submit">Logout</button></form>
     </div>
   </header>
-  <nav class="wtabs" id="wtabs" aria-label="Open workspaces" role="tablist"></nav>
+  <div class="workspace-navigation" aria-label="Workspace navigation">
+    <button type="button" class="tab-scroll" id="tabs-prev" aria-label="Scroll tabs left" title="Scroll tabs left">‹</button>
+    <nav class="wtabs" id="wtabs" aria-label="Open workspaces" role="tablist"></nav>
+    <button type="button" class="tab-scroll" id="tabs-next" aria-label="Scroll tabs right" title="Scroll tabs right">›</button>
+    <select id="tabs-list" aria-label="Switch workspace" title="All open workspaces"></select>
+  </div>
   <main id="workspace" class="workspace"></main>
   <footer class="statusbar">
     <span id="st-msg" class="st-msg" role="status" aria-live="polite">Ready</span>
