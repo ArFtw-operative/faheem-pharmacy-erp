@@ -70,7 +70,7 @@ def cmd_user(args) -> None:
         if args.action == "list":
             for u in db.scalars(select(User).order_by(User.id)):
                 print(f"{u.employee_id:10} {u.username:20} {u.full_name:28} {(u.role.name if u.role else '-'):16} "
-                      f"{'active' if u.is_active else 'disabled'}")
+                      f"{'active' if u.is_active else 'disabled':9} {'2FA on' if u.mfa_enabled else '2FA not set up'}")
             return
         if args.action == "add":
             role = db.scalar(select(Role).where(Role.name == args.role))
@@ -104,6 +104,7 @@ def cmd_user(args) -> None:
         elif args.action == "reset-2fa":            # lost phone and recovery codes: enrol again at next login
             u = _user(db, args.username)
             u.mfa_enabled, u.mfa_secret, u.mfa_recovery, u.mfa_last_step = False, "", None, None
+            u.failed_logins, u.locked_until = 0, None
             from app import audit
             audit.record(db, action=audit.A_UPDATE, entity_type="user", entity_id=u.id, details="Two-factor reset by administrator (CLI)")
             db.commit()

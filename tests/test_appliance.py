@@ -246,3 +246,14 @@ def test_reset_test_data_keeps_customers(db):
     assert db.query(Item).count() == 0 and db.query(Customer).count() == 1
     nxt = customer_service.create_customer(db, name="Ravi", mobile="9876500000")
     assert nxt.customer_id != cust.customer_id                                        # the customer series continues
+
+
+def test_erp_maintenance_desktop_app_opens_users_with_2fa_reset():
+    desktop = (REPO / "deploy/appliance/desktop/faheem-erp-maintenance.desktop").read_text()
+    assert "Exec=/opt/faheem-erp/current/bin/faheem-admin menu maintenance" in desktop
+    control = (REPO / "deploy/appliance/bin/control.sh").read_text()
+    maintenance = control[control.index("maintenance_menu() {"):control.index("settings_menu() {")]
+    assert 'users) users_menu' in maintenance
+    users = control[control.index("users_menu() {"):control.index("reset_data() {")]
+    assert "manage.py user reset-2fa" in users and "user disable" in users and "user unlock" in users
+    assert '[ "${1:-}" = maintenance ]' in control

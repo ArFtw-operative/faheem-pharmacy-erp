@@ -77,7 +77,9 @@ backup_menu() {
 }
 
 maintenance_menu() {
-  local c; c="$(W --menu "Maintenance and performance" 19 78 9 \
+  local c
+  while c="$(W --menu "ERP Maintenance — choose with ↑ ↓ and Enter (Esc to go back):" 21 78 11 \
+      users "Users — reset 2FA (two-step sign-in), password, unlock, enable / disable…" \
       full "Run the daily maintenance now (backup, update if on, cleanup) — no reboot" \
       database "Optimise the database (VACUUM ANALYZE)" \
       cleanup "Free disk space (old images, journal, caches)" \
@@ -85,12 +87,14 @@ maintenance_menu() {
       browser-cache "Clear the counter browser's cache" \
       browser-cookies "Clear the counter browser's cache AND cookies (sign in again)" \
       all "All of the above except cookies" \
-      usage "Disk usage")" || return
-  case "$c" in
-    full) run "Maintenance" env FAHEEM_NO_REBOOT=1 "$here/maintenance.sh" ;;
-    browser-cookies) confirm "Clear cookies? The counter must sign in again." && run "Browser cache and cookies" "$here/optimize.sh" browser-cookies ;;
-    *) run "Optimise: $c" "$here/optimize.sh" "$c" ;;
-  esac
+      usage "Disk usage")"; do
+    case "$c" in
+      users) users_menu ;;
+      full) run "Maintenance" env FAHEEM_NO_REBOOT=1 "$here/maintenance.sh" ;;
+      browser-cookies) confirm "Clear cookies? The counter must sign in again." && run "Browser cache and cookies" "$here/optimize.sh" browser-cookies ;;
+      *) run "Optimise: $c" "$here/optimize.sh" "$c" ;;
+    esac
+  done
 }
 
 settings_menu() {
@@ -128,28 +132,40 @@ network_menu() {
 }
 
 users_menu() {
-  local list users=() u
-  list="$(dc run --rm --no-TTY tools python scripts/manage.py user list 2>/dev/null)" || { W --msgbox "Could not read the users (is the ERP running?)" 8 60; return; }
-  while read -r emp name rest; do
-    [ -n "$name" ] && users+=("$name" "$(echo "$rest" | sed 's/  */ /g' | cut -c1-48)")
-  done <<<"$list"
-  [ ${#users[@]} -gt 0 ] || { W --msgbox "No users found." 8 40; return; }
-  u="$(W --menu "ERP users — choose one:" 20 76 10 "${users[@]}")" || return
-  case "$(W --menu "User $u" 15 64 5 password "Reset password" name "Change name" twostep "Reset two-step sign-in (new QR at next login)" unlock "Unlock (after 5 wrong passwords)")" in
-    password)
-      local p1 p2
-      p1="$(W --passwordbox "New password for $u (8+ characters, letters and numbers):" 10 64)" || return
-      p2="$(W --passwordbox "Type it again:" 9 64)" || return
-      [ "$p1" = "$p2" ] || { W --msgbox "The two passwords differ — nothing changed." 8 50; return; }
-      FAHEEM_NEW_PASSWORD="$p1" run "Reset password of $u" dc run --rm --no-TTY -e FAHEEM_NEW_PASSWORD tools python scripts/manage.py user passwd "$u"
-      unset p1 p2 ;;
-    name)
-      local n; n="$(W --inputbox "New full name for $u:" 9 64)" || return
-      [ -n "$n" ] && run "Change name of $u" dc run --rm --no-TTY tools python scripts/manage.py user rename "$u" --name "$n" ;;
-    twostep) confirm "Reset two-step sign-in for $u?\n\nUse this when the phone or authenticator app is lost. At the next login $u scans a new QR code." \
-               && run "Reset two-step sign-in of $u" dc run --rm --no-TTY tools python scripts/manage.py user reset-2fa "$u" ;;
-    unlock) run "Unlock $u" dc run --rm --no-TTY tools python scripts/manage.py user unlock "$u" ;;
-  esac
+  local list users=() u action active
+  while :; do
+    list="$(dc run --rm --no-TTY tools python scripts/manage.py user list 2>/dev/null)" || { W --msgbox "Could not read the users (is the ERP running?)" 8 60; return; }
+    users=()
+    while read -r emp name rest; do
+      [ -n "$name" ] && users+=("$name" "$(echo "$rest" | sed 's/  */ /g' | cut -c1-58)")
+    done <<<"$list"
+    [ ${#users[@]} -gt 0 ] || { W --msgbox "No users found." 8 40; return; }
+    u="$(W --menu "ERP users — choose one (Esc to go back):" 20 78 10 "${users[@]}")" || return
+    active=enable; grep -E "^\S+\s+$u\s" <<<"$list" | grep -q " active " && active=disable
+    action="$(W --menu "User $u" 17 70 6 \
+        twostep "Reset 2FA / two-step sign-in (lost phone — new QR at next login)" \
+        password "Reset password" \
+        unlock "Unlock (after 5 wrong passwords)" \
+        "$active" "$( [ "$active" = disable ] && echo "Disable this account (cannot sign in)" || echo "Enable this account again")" \
+        name "Change name")" || continue
+    case "$action" in
+      twostep) confirm "Reset 2FA (two-step sign-in) for $u?\n\nUse this when the phone or authenticator app is lost. At the next login $u scans a new QR code. The account is also unlocked." \
+                 && run "Reset 2FA of $u" dc run --rm --no-TTY tools python scripts/manage.py user reset-2fa "$u" ;;
+      password)
+        local p1 p2
+        p1="$(W --passwordbox "New password for $u (8+ characters, letters and numbers):" 10 64)" || continue
+        p2="$(W --passwordbox "Type it again:" 9 64)" || continue
+        [ "$p1" = "$p2" ] || { W --msgbox "The two passwords differ — nothing changed." 8 50; continue; }
+        FAHEEM_NEW_PASSWORD="$p1" run "Reset password of $u" dc run --rm --no-TTY -e FAHEEM_NEW_PASSWORD tools python scripts/manage.py user passwd "$u"
+        unset p1 p2 ;;
+      unlock) run "Unlock $u" dc run --rm --no-TTY tools python scripts/manage.py user unlock "$u" ;;
+      disable) confirm "Disable $u? They cannot sign in until enabled again." && run "Disable $u" dc run --rm --no-TTY tools python scripts/manage.py user disable "$u" ;;
+      enable) run "Enable $u" dc run --rm --no-TTY tools python scripts/manage.py user enable "$u" ;;
+      name)
+        local n; n="$(W --inputbox "New full name for $u:" 9 64)" || continue
+        [ -n "$n" ] && run "Change name of $u" dc run --rm --no-TTY tools python scripts/manage.py user rename "$u" --name "$n" ;;
+    esac
+  done
 }
 
 reset_data() {
@@ -172,6 +188,8 @@ power_menu() {
   esac
 }
 
+if [ "${1:-}" = maintenance ]; then maintenance_menu; clear; exit 0; fi
+
 while :; do
   choice="$(W --menu "Choose with ↑ ↓ and Enter (Esc to leave):" 24 74 15 \
       status "Status" \
@@ -187,7 +205,7 @@ while :; do
       network "Network access…" \
       logs "Logs…" \
       power "Power (restart / turn off the PC)…" \
-      users "User control (password, name, two-step sign-in)…" \
+      users "Users (reset 2FA, password, unlock, enable / disable)…" \
       reset "Reset business data (inventory, sales, purchases…)" \
       support "Write a support report")" || { clear; exit 0; }
   case "$choice" in

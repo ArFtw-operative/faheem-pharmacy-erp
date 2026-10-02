@@ -9,7 +9,7 @@ usage() {
   cat <<EOF
 Faheem Pharmacy ERP — appliance control
 
-  faheem-erp menu                   Control Center (keyboard menu for everything below)
+  faheem-erp menu [maintenance]     Control Center (keyboard menu for everything below); "maintenance" opens ERP Maintenance (users, 2FA reset…)
   faheem-erp status                 services, version, last backup / update
   faheem-erp start | stop | restart   (stop = shut down the ERP; the PC stays on)
   faheem-erp settings [set KEY VALUE]  boot start, counter screen, auto-login, auto-update, daily reboot, times
@@ -159,7 +159,7 @@ db.execute('DROP SCHEMA public CASCADE'); db.execute('CREATE SCHEMA public')" >/
     require_root
     dc run --rm --no-TTY tools python scripts/manage.py "$@"
     ;;
-  menu) exec "$here/control.sh" ;;
+  menu) exec "$here/control.sh" "$@" ;;
   settings) exec "$here/settings.sh" "$@" ;;
   optimize) exec "$here/optimize.sh" "$@" ;;
   shutdown) exec "$0" stop ;;
