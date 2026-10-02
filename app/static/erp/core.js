@@ -130,6 +130,22 @@ export function keyName(e) {
 export const isModifierOnly = (e) => ["Control", "Alt", "Shift", "Meta", "AltGraph", "CapsLock"].includes(e.key);
 
 /** A small in-page modal (no browser dialogs). Resolves with the form result or null. */
+// Esc always reaches the topmost pop-up, even when focus has slipped outside it
+// (a click on blank space, a button that was removed). Each pop-up keeps its own
+// Esc logic; this only hands the key back to it. Registered when core first loads,
+// so it runs before any screen or pop-up listener.
+const POPUPS = ".modal-backdrop, .fu-pop, .wa-ask, .ctx-menu";
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || !e.isTrusted) return;
+  const all = document.querySelectorAll(POPUPS);
+  const top = all[all.length - 1];
+  if (!top || top.contains(e.target)) return;
+  e.preventDefault(); e.stopImmediatePropagation();
+  const into = top.querySelector("input, select, textarea, button, [tabindex]") || top;
+  if (into.focus) into.focus({ preventScroll: true });
+  into.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true, cancelable: true }));
+}, true);
+
 export function modal({ title, body, onOpen, onSubmit, submitLabel = "Save", wide = false }) {
   return new Promise((resolve) => {
     const prev = document.activeElement;

@@ -289,10 +289,15 @@ body { grid-template-rows:40px 38px minmax(0,1fr) auto; }
 .shortcuts header { flex-wrap: wrap; gap: 8px; }
 .shortcuts header .hint { flex-basis: 100%; }
 .sc-q { width: min(340px, 100%); }
-.sc-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.sc-table th, .sc-table td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); }
-.sc-table th { position: sticky; top: 0; background: var(--head); }
-.sc-table .grp { background: var(--head); font-weight: 700; color: var(--muted); }
+.shortcuts .modal-body { padding-top: 0; }                                  /* the sticky header sits flush at the top — rows never show above it */
+.sc-table { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; font-size: 12px; }
+.sc-table th, .sc-table td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.sc-table th { position: sticky; top: 0; z-index: 2; background: var(--head); box-shadow: inset 0 -2px 0 var(--line); }
+.sc-table .grp td { background: var(--head); font-weight: 700; color: var(--text); text-transform: uppercase; font-size: 11px; letter-spacing: .04em; padding-top: 12px; border-top: 1px solid var(--line); }
+.sc-table .sc-note { text-align: right; }
+.sc-table.fixed { table-layout: auto; }
+.sc-table.fixed td:first-child { width: 180px; white-space: nowrap; }
+.sc-h { margin: 16px 0 6px; font-size: 13px; }
 .sc-table tr[data-i] { cursor: pointer; }
 .sc-table tr.on { background: var(--sel); outline: 2px solid var(--accent); outline-offset: -2px; }
 .sc-table .changed .sc-note, .sc-cap { color: var(--accent); font-weight: 700; }
@@ -404,6 +409,7 @@ fieldset.np legend { font-weight: 700; font-size: 12px; color: var(--ok); }
 .pick.on { background: var(--sel); }
 .pick .score { margin-left: auto; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
 .pick-empty { padding: 8px; }
+.pick-manual { border-top: 1px dashed var(--line); }
 .map-grid .grid { max-height: 50vh; }
 @media (max-width: 1100px) { .pdoc-split { grid-template-columns: 1fr; } .pdoc-side { border-left: 0; border-top: 1px solid var(--line); max-height: 40vh; } .form-grid.three { grid-template-columns: 1fr 1fr; } }
 .pdoc-head .kv small { font-size: 10.5px; font-weight: 400; }

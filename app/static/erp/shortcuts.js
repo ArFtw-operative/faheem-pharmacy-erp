@@ -7,6 +7,11 @@ import { $, esc, h, isModifierOnly, keyName } from "erp/core";
 import * as keys from "erp/keys";
 
 let openNow = false;
+// categories in the order people meet them in the app; any other group follows in registry order
+const GROUP_ORDER = ["Everywhere", "POS", "Sales history", "Customers", "Inventory", "Stock ledger", "Stock history",
+  "Stock adjustments", "Purchases", "Purchase document", "Masters", "Reports", "Settings"];
+const ACTION_AT = new Map(keys.ACTIONS.map((a, i) => [a.id, i]));
+const groupAt = (a) => { const i = GROUP_ORDER.indexOf(a.group); return i < 0 ? GROUP_ORDER.length + ACTION_AT.get(a.id) : i; };
 
 export function openShortcuts({ status, scope } = {}) {
   if (openNow) return;
@@ -16,7 +21,7 @@ export function openShortcuts({ status, scope } = {}) {
     <header><h2>Keyboard shortcuts</h2>
       <input class="sc-q" placeholder="Search actions or keys…" autocomplete="off" aria-label="Search shortcuts">
       <span class="hint">↑↓ select · <kbd>Enter</kbd> change · <kbd>Backspace</kbd> clear · <kbd>R</kbd> reset · <kbd>Esc</kbd> close</span></header>
-    <div class="modal-body"><table class="sc-table"><colgroup><col><col style="width:170px"><col style="width:130px"><col style="width:36%"></colgroup>
+    <div class="modal-body"><table class="sc-table"><colgroup><col><col style="width:180px"><col style="width:180px"><col style="width:80px"></colgroup>
       <thead><tr><th>Action</th><th>Shortcut</th><th>Default</th><th></th></tr></thead><tbody></tbody></table>
       <h3 class="sc-h">Fixed keys (always the same)</h3>
       <table class="sc-table fixed"><tbody>${keys.FIXED.map(([k, what]) => `<tr><td><kbd>${esc(k)}</kbd></td><td>${esc(what)}</td></tr>`).join("")}</tbody></table>
@@ -31,9 +36,9 @@ export function openShortcuts({ status, scope } = {}) {
   function render() {
     const q = qIn.value.trim().toLowerCase();
     rows = keys.ACTIONS.filter((a) => !q || `${a.label} ${a.group} ${keys.keyFor(a.id)}`.toLowerCase().includes(q));
-    // the current screen's group first, then everywhere, then the rest
+    // the current screen's group first, then everywhere, then the rest — each group kept together, in menu order
     const rank = (a) => (a.scope === scope ? 0 : a.scope === "global" ? 1 : 2);
-    rows.sort((a, b) => rank(a) - rank(b));
+    rows.sort((a, b) => rank(a) - rank(b) || groupAt(a) - groupAt(b) || ACTION_AT.get(a.id) - ACTION_AT.get(b.id));
     at = Math.min(at, Math.max(rows.length - 1, 0));
     let group = "";
     body.innerHTML = rows.map((a, i) => {
@@ -73,6 +78,8 @@ export function openShortcuts({ status, scope } = {}) {
 
   function onKey(e) {
     if (!document.body.contains(el)) return;
+    const dialogs = document.querySelectorAll(".modal-backdrop");
+    if (dialogs[dialogs.length - 1] !== el) return;   // a dialog opened on top of this one gets its own keys
     e.stopPropagation();
     if (e.isComposing || e.repeat || busy) { e.preventDefault(); return; }
     if (e.key === "Tab" && !capturing) {
