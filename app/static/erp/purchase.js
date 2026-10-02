@@ -137,6 +137,8 @@ export function create(ctx, params, root) {
     onActivate: (r) => (canEdit() && !DONE.includes(r.status) ? editLine(r) : openLedger(r)),
     contextMenu: (r) => canEdit() && !DONE.includes(r.status) ? [
       { label: 'Adjust quantity / form', action: () => adjustQuantity(r) },
+      { label: 'Verify invoice unit', action: () => verifyInvoiceUnit(r) },
+      { label: 'Medicine reference', action: () => showReference(r) },
       { label: "Correct line", key: "Enter", action: () => editLine(grid.selected) },
       { label: "Match product", key: keys.keyFor("purchase.product"), action: () => matchProduct(grid.selected) },
       { label: "Create as new product", key: keys.keyFor("purchase.newProduct"), action: () => newProduct(grid.selected) },
@@ -311,27 +313,22 @@ export function create(ctx, params, root) {
 
   function renderSide(r) {
     if (!r) { side.innerHTML = `<p class="hint">${isOpen() ? "F3 adds a line. F2 edits the invoice header." : ""}</p>`; return; }
-    const raw = r.raw || {};
-    const rows = FIELDS.filter(([f]) => raw[f] !== undefined || corr(r, f)).map(([f, label]) => {
-      const c = corr(r, f);
-      return `<tr><th>${esc(label)}</th><td class="mono">${esc(raw[f] ?? "")}</td><td class="mono">${c ? `<b>${esc(c.value)}</b><br><small class="muted">${esc(c.by)} · ${esc(fmtDateTime(c.at))}</small>` : ""}</td></tr>`;
-    }).join("");
-    const issues = (r.issues || []).map((i) => `<li class="${i.accepted ? "muted" : i.level === "warn" ? "warn" : i.level === "info" ? "muted" : "bad"}">${esc(i.message)}${i.accepted ? " (accepted)" : ""}</li>`).join("");
-    const prod = r.item ? `<b>${esc(r.item.name)}</b><br><span class="muted">${esc(r.item.code)} · ${esc(r.item.pack || "")} · 1 ${esc(t(r.item.pack_unit))} = ${r.item.upp} ${esc(t(r.item.base_unit))}</span>`
-      : r.new_product ? `<span class="tag new">NEW PRODUCT</span> ${esc(r.name)}<br><span class="muted">${esc(r.category || "General")} · ${r.units_per_pack ? `1 ${esc(t(r.pack_unit || "PACK"))} = ${r.units_per_pack} ${esc(t(r.base_unit || "UNIT"))}` : "units not set"}</span>`
-      : '<span class="bad">Not matched — F4 choose, Shift+F4 create new</span>';
+    const p = r.physical || {};
+    const reportRow = (label, value) => `<tr><th>${esc(label)}</th><td>${esc(value ?? '—')}</td></tr>`;
+    const issues = (r.issues || []).filter(i => !i.accepted && i.level !== 'info').map(i => `<li>${esc(i.message)}</li>`).join('');
+    const prod = `<b>${esc(r.item?.name || r.name)}</b><br><span class="muted">${esc(r.item?.code || r.supplier_code || '')}</span>`;
     const receipt = r.receipt || {};
-    const qtyNote = receipt.resolved ? `<p class="hint"><b>Receives ${receipt.received_base_units} ${esc(t(receipt.base_unit))}s</b><br>${(receipt.evidence || []).map(esc).join("<br>")}</p>` : '<p class="hint">Physical quantity awaits product / invoice-unit verification.</p>';
+    const facts = [reportRow('Form', p.form ? t(p.form) : '—'),
+      reportRow('Received stock', equivalent(receipt)), reportRow('Equivalent', p.equivalent || (receipt.resolved ? equivalent(receipt) : '—')),
+      reportRow('Packaging', p.units_per_pack ? `1 ${t(p.pack_unit)} = ${p.units_per_pack} ${t(p.base_unit)}` : 'Not confirmed'),
+      reportRow('Batch', r.batch || '—'), reportRow('Expiry', r.expiry ? fmtExp(r.expiry) : r.expiry_raw || '—'),
+      reportRow('Billed quantity', receipt.paid ?? r.qty), reportRow('Free quantity on invoice', receipt.free ?? r.free ?? 0),
+      reportRow('Retail MRP', `₹${money(r.mrp)}`)].join('');
     side.innerHTML = `
-      <h3>Line ${r.line_no} <span class="ps-${STATUS[r.status][1]}">${STATUS[r.status][0]}</span></h3>
-      <div class="side-prod">${prod}</div>${qtyNote}${costTable(r)}
-      ${issues ? `<ul class="issues">${issues}</ul>` : '<p class="ok">No issues.</p>'}
-      ${canEdit() && !DONE.includes(r.status) ? '<button type="button" data-adjust-quantity>Adjust quantity / form</button><button type="button" data-invoice-unit>Verify invoice unit</button><button type="button" data-reference>Medicine reference</button>' : ""}
-      ${rows ? `<table class="rawtab"><thead><tr><th></th><th>Supplier</th><th>Corrected</th></tr></thead><tbody>${rows}</tbody></table>` : ""}
-      ${r.status === "POSTED" && r.batch_id ? '<p class="hint">Enter opens the product\'s stock ledger.</p>' : ""}`;
-    side.querySelector("[data-invoice-unit]")?.addEventListener("click", () => verifyInvoiceUnit(r));
-    side.querySelector('[data-adjust-quantity]')?.addEventListener('click', () => adjustQuantity(r));
-    side.querySelector("[data-reference]")?.addEventListener("click", () => showReference(r));
+      <h3>Line ${r.line_no} report <span class="ps-${STATUS[r.status][1]}">${STATUS[r.status][0]}</span></h3>
+      <div class="side-prod">${prod}</div><table class="rawtab"><tbody>${facts}</tbody></table>${costTable(r)}
+      ${issues ? `<p><b>Needs attention</b></p><ul class="issues">${issues}</ul>` : '<p class="ok">Checks passed.</p>'}
+      ${r.corrections?._physical_adjustment && r.status !== 'POSTED' ? '<p class="hint">Corrected packaging will apply to Inventory when this line is posted.</p>' : ''}`;
   }
 
   async function adjustQuantity(r) {
@@ -377,17 +374,18 @@ export function create(ctx, params, root) {
   // what one pack cost: invoice rate → after discounts → + GST → rate incl. GST (stock is costed at this)
   function costTable(r) {
     if (!r.landed) return "";
-    const packs = Number(r.landed) && Number(r.rate_incl) ? Number(r.landed) / Number(r.rate_incl) : 0;
+    const packs = r.receipt?.resolved ? Number(r.receipt.master_pack_equivalent) : 0;
     const g = doc?.summary?.gst || {};
     const split = Number(r.igst) ? `IGST ₹${money(r.igst)}` : `CGST ₹${money(r.cgst)} + SGST ₹${money(r.sgst)}`;
-    const upp = r.item ? r.item.upp : r.units_per_pack;
-    const perUnit = upp > 1 ? ` <small class="muted">(₹${money(Number(r.rate_incl) / upp)} per ${esc(t(r.item ? r.item.base_unit : r.base_unit || "unit"))})</small>` : "";
+    const upp = r.physical?.units_per_pack || 1;
+    const packRate = packs > 0 ? Number(r.landed) / packs : null;
+    const perUnit = upp > 1 && packRate !== null ? ` <small class="muted">(₹${money(packRate / upp)} per ${esc(t(r.physical.base_unit || 'unit'))})</small>` : '';
     return `<table class="costtab"><tbody>
-      <tr><th>Invoice rate / pack</th><td class="num">₹${money(r.rate)}</td></tr>
+      <tr><th>Invoice billed rate</th><td class="num">₹${money(r.rate)}</td></tr>
       <tr><th>Taxable value${Number(r.discount) ? " (after discount / scheme)" : ""}</th><td class="num">₹${money(r.taxable)}</td></tr>
       <tr><th>GST ${r.gst !== "" ? Number(r.gst) + "%" : "0% (not on invoice)"}</th><td class="num">+ ₹${money(r.gst_amount)}<br><small class="muted">${split}</small></td></tr>
       <tr><th>Value incl. GST</th><td class="num">₹${money(r.landed)}</td></tr>
-      <tr class="total"><th>Rate / pack incl. GST${packs ? ` <small class="muted">÷ ${Math.round(packs * 100) / 100} packs</small>` : ""}</th><td class="num"><b>₹${money(r.rate_incl)}</b>${perUnit}</td></tr>
+      <tr class="total"><th>Cost per ${esc(t(r.physical?.pack_unit || 'pack'))} incl. GST</th><td class="num"><b>${packRate !== null ? '₹' + money(packRate) : 'Not confirmed'}</b>${perUnit}</td></tr>
     </tbody></table>${r.gst_worked_out ? `<p class="hint">Worked out from the invoice. This line was posted before GST tracking, so its stock was costed before GST at ₹${money(r.batch_rate || r.rate)} per pack${upp > 1 ? "" : ""} — not re-costed.</p>`
       : g.cost_includes_gst === false ? '<p class="hint">Stock is costed before GST (purchase_cost_includes_gst is off).</p>' : ""}`;
   }
