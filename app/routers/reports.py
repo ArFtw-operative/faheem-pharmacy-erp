@@ -95,7 +95,7 @@ def report_lookup(kind: str, q: str = "", db: Session = Depends(get_db), user: U
 
 
 @router.get('/api/purchase-invoices')
-def purchase_invoices(supplier: str, period: str = 'today', from_date: str = '', to_date: str = '', invoice: str = '',
+def purchase_invoices(supplier: str, period: str = 'all', from_date: str = '', to_date: str = '', invoice: str = '',
                       db: Session = Depends(get_db), user: User = Depends(require_permission('reports.purchase'))):
     from app.services import purchase_audit_report
     raw = dict(supplier=supplier,period=period,invoice=invoice)

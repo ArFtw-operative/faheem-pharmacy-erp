@@ -70,6 +70,7 @@ export function create(ctx,params,root) {
     root.innerHTML='<div class="report-module"><p class="muted">Loading report parameters…</p></div>';
     try { if(!options) options=await api('/reports/api/options'); } catch(error){statusError(error);showSelector();return;}
     if(ownVersion!==version)return;
+    if(selected.id==='supplier-purchases'){supplierBrowser(preset);return;}
     const stock=selected.filters.includes('as_of');
     root.innerHTML=`<div class="report-module"><header class="report-heading report-breadcrumb"><button type="button" class="btn" data-selector>← Reports</button><h1>${esc(selected.title)}</h1></header>
       <form class="report-parameters" aria-label="Report parameters">
@@ -89,6 +90,16 @@ export function create(ctx,params,root) {
     form.addEventListener('change',e=>{if(e.target.name==='period')updatePeriod(); if(selected.id==='supplier-purchases'&&['supplier','period','from','to','invoice'].includes(e.target.name))loadInvoices(); if(e.target.matches('[data-invoice-id]'))syncInvoices(); if(document)$('.report-notice',root).textContent='Parameters changed. Generate Report to apply them.';});
     if(focus)$('select,input',form)?.focus();
   }
+  function supplierBrowser(preset) {
+    root.innerHTML=`<div class="report-module"><header class="report-heading report-breadcrumb"><button type="button" class="btn" data-selector>← Reports</button><h1>Supplier-wise Purchase</h1></header>
+      <form class="report-parameters" aria-label="Supplier invoices"><input type="hidden" name="supplier"><input type="hidden" name="invoice_ids"><input type="hidden" name="period" value="all">
+      <section class="report-suppliers"><h2>Suppliers</h2><div class="report-cards">${options.suppliers.map(s=>`<button type="button" class="report-card" data-supplier="${esc(s.value)}"><strong>${esc(s.label)}</strong><span>View all invoices →</span></button>`).join('')||'<p>No suppliers available.</p>'}</div></section>
+      <fieldset class="report-invoices" hidden><legend>Invoices</legend><p data-invoice-notice></p><div data-invoice-list></div></fieldset>
+      <button type="submit" data-generate hidden>Generate Report</button></form><div class="report-notice" role="status">Click a supplier to view all their invoices.</div><div class="report-result"></div></div>`;
+    $('form',root).onsubmit=e=>{e.preventDefault();generate();};
+    if(preset.supplier){$('[name=supplier]',root).value=preset.supplier;loadInvoices();}
+    else $('[data-supplier]',root)?.focus();
+  }
   function syncInvoices() {
     const field=$('[name=invoice_ids]',root);
     if(field)field.value=$$('[data-invoice-id]:checked',root).map(c=>c.value).join(',');
@@ -101,13 +112,12 @@ export function create(ctx,params,root) {
     $('[data-invoice-list]',panel).innerHTML=''; invoicesLoading=!!supplier;
     if(!supplier)return;
     $('[data-invoice-notice]',panel).textContent='Loading invoices...';
-    const p=parameters(), query=new URLSearchParams({supplier,period:p.period||'today',from_date:p.from||'',to_date:p.to||'',invoice:p.invoice||''});
+    const query=new URLSearchParams({supplier});
     try {
       const data=await api('/reports/api/purchase-invoices?'+query);
       if(own!==invoiceVersion||!panel.isConnected)return;
-      $('[data-invoice-notice]',panel).textContent=data.invoices.length?'All listed invoices are selected. Uncheck invoices to narrow the audit.':'No received invoices for this supplier and period.';
-      $('[data-invoice-list]',panel).innerHTML=data.invoices.map(d=>`<label><input type="checkbox" data-invoice-id value="${d.id}" checked> <b>${esc(d.invoice||d.reference)}</b> | ${esc(d.reference)} | ${esc(d.date)} | ${esc(d.status)} | ${d.lines} lines | ${money(d.total)}</label>`).join('');
-      syncInvoices();
+      $('[data-invoice-notice]',panel).textContent=data.invoices.length?'Click an invoice to open its complete audit. Draft and cancelled invoices are labelled and have no received value.':'No invoices for this supplier.';
+      $('[data-invoice-list]',panel).innerHTML=data.invoices.map(d=>`<button type="button" class="btn report-invoice" data-audit-invoice="${d.id}"><b>${esc(d.invoice||d.reference||'Draft #'+d.id)}</b><span>${esc(d.reference)} · ${esc(d.date)} · ${esc(d.status)} · ${d.lines} lines · ₹${money(d.total)}</span></button>`).join('');
     } catch(error){if(own===invoiceVersion){$('[data-invoice-notice]',panel).textContent='Could not load invoices. Change supplier or period to retry.';statusError(error);}}
     finally {if(own===invoiceVersion)invoicesLoading=false;}
   }
@@ -175,7 +185,7 @@ export function create(ctx,params,root) {
     const cols=doc.columns;
     const totals=Object.keys(doc.totals).length;
     const firstText=cols.findIndex(c=>c.kind==='text');
-    return `<article class="report-document"><header class="report-document-head"><strong>${esc(doc.pharmacy)}</strong><h2>${esc(doc.title.toUpperCase())}</h2><div><span>${doc.parameters.as_of? 'As of: '+dateLabel(doc.to_date):'From: '+dateLabel(doc.from_date)+'　 To: '+dateLabel(doc.to_date)}</span><span>Generated: ${esc(doc.generated_at)}</span></div></header>
+    return `<article class="report-document"><header class="report-document-head"><strong>${esc(doc.pharmacy)}</strong><h2>${esc(doc.title.toUpperCase())}</h2><div><span>${doc.id==='supplier-purchases'&&doc.parameters.period==='all'?'All invoice history':doc.parameters.as_of? 'As of: '+dateLabel(doc.to_date):'From: '+dateLabel(doc.from_date)+'　 To: '+dateLabel(doc.to_date)}</span><span>Generated: ${esc(doc.generated_at)}</span></div></header>
       <div class="report-table-scroll" tabindex="0" aria-label="Generated ${esc(doc.title)}"><table class="report-table"><thead><tr>${cols.map(c=>`<th class="${c.kind}" scope="col">${esc(c.label)}</th>`).join('')}</tr></thead><tbody>
       ${doc.rows.map((row,i)=>`<tr data-row="${i}" ${row._drill?'class="drillable" title="Double-click or select and press Enter for details"':''}>${cols.map(c=>`<td class="${c.kind}">${esc(fmt(c,row[c.key]))}</td>`).join('')}</tr>`).join('')||`<tr><td colspan="${cols.length}" class="report-empty">No records match the selected parameters.</td></tr>`}
       </tbody>${totals?`<tfoot><tr>${cols.map((c,i)=>`<td class="${c.kind}">${i===firstText?'TOTAL':c.key in doc.totals?esc(fmt(c,doc.totals[c.key])):''}</td>`).join('')}</tr></tfoot>`:''}</table></div>
@@ -187,9 +197,9 @@ export function create(ctx,params,root) {
   function toggleView(){textView=!textView;store.set('report-view',textView?'document':'grid');if(document)renderDocument();ctx.status(textView?'Document view (as printed)':'Grid view','ok');}
   function renderDocument() {
     const body=textView&&document.text?`<pre class="report-text" tabindex="0" aria-label="${esc(document.title)} document">${esc(document.text)}</pre>`:documentHTML(document);
-    $('.report-result',root).innerHTML=`<div class="report-toolbar"><strong>${esc(document.title)}</strong><span class="muted">${dateLabel(document.from_date)} – ${dateLabel(document.to_date)}</span><span class="spacer"></span>
+    $('.report-result',root).innerHTML=`<div class="report-toolbar"><strong>${esc(document.title)}</strong><span class="muted">${document.id==='supplier-purchases'&&document.parameters.period==='all'?'All invoice history':dateLabel(document.from_date)+' – '+dateLabel(document.to_date)}</span><span class="spacer"></span>
       <button type="button" class="btn" data-view title="Switch grid / document (${esc(keys.keyFor('reports.view'))})">${textView?'Grid view':'Document view'} <kbd>${esc(keys.keyFor('reports.view'))}</kbd></button>
-      <button type="button" class="btn" data-columns>Columns ⚙</button><button type="button" class="btn" data-filter>Filter</button><button type="button" class="btn" data-print>Print</button>
+      <button type="button" class="btn" data-columns>Columns ⚙</button><button type="button" class="btn" data-filter>${document.id==='supplier-purchases'?'Suppliers / invoices':'Filter'}</button><button type="button" class="btn" data-print>Print</button>
       ${canExport?['pdf','xlsx','csv','txt'].map(fmt=>`<button type="button" class="btn" data-export="${fmt}">${{pdf:'PDF',xlsx:'Excel',csv:'CSV',txt:'Text'}[fmt]}</button>`).join(''):''}<button type="button" class="btn" data-refresh>Refresh</button></div>${body}`;
   }
   function openColumns() {
@@ -238,6 +248,8 @@ export function create(ctx,params,root) {
   }
   root.addEventListener('click',e=>{
     const button=e.target.closest('button');if(button?.dataset.report){choose(button.dataset.report);return;}
+    if(button?.dataset.supplier){cancel();document=null;$('.report-result',root).innerHTML='';$('[name=supplier]',root).value=button.dataset.supplier;$$('[data-supplier]',root).forEach(b=>b.setAttribute('aria-pressed',String(b===button)));$('.report-notice',root).textContent='Choose an invoice to view its audit.';loadInvoices();return;}
+    if(button?.dataset.auditInvoice){$('[name=invoice_ids]',root).value=button.dataset.auditInvoice;$$('[data-audit-invoice]',root).forEach(b=>b.setAttribute('aria-pressed',String(b===button)));generate();return;}
     if(button?.hasAttribute('data-selector'))showSelector();
     else if(button?.hasAttribute('data-reset'))choose(selected.id);
     else if(button?.hasAttribute('data-columns'))openColumns();

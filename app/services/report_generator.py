@@ -157,8 +157,13 @@ def parameters(db, report, raw):
         raise ReportError('Parameter values must be text or numbers')
     p = {k:str(v).strip() for k,v in raw.items()}
     today = datetime.now(tz_for(db)).date()
+    if report['id']=='supplier-purchases': p.setdefault('period','all')
     try:
-        if 'as_of' in report['filters']:
+        if report['id']=='supplier-purchases' and p.get('period')=='all':
+            earliest,latest=db.execute(select(func.min(Purchase.purchase_date),func.max(Purchase.purchase_date))).one()
+            first=day_of(earliest,tz_for(db)) if earliest else today
+            last=day_of(latest,tz_for(db)) if latest else today
+        elif 'as_of' in report['filters']:
             first = last = date.fromisoformat(p.get('as_of') or today.isoformat())
             if last>today: raise ReportError('Stock as-of date cannot be in the future')
         elif p.get('period','today') == 'custom':
@@ -167,7 +172,7 @@ def parameters(db, report, raw):
             first,last=preset_dates(p.get('period','today'),today)
         if first>last: raise ReportError('From date must be on or before To date')
         # Bound query cost while retaining multi-year reports.
-        if (last-first).days>3660: raise ReportError('Choose a date range of up to ten years')
+        if (last-first).days>3660 and p.get('period')!='all': raise ReportError('Choose a date range of up to ten years')
         start=datetime.combine(first,time.min,tz_for(db)).astimezone(timezone.utc).replace(tzinfo=None)
         end=datetime.combine(last+timedelta(days=1),time.min,tz_for(db)).astimezone(timezone.utc).replace(tzinfo=None)
     except (ValueError,OverflowError) as exc:

@@ -69,6 +69,16 @@ def test_supplier_invoice_audit_selection_and_partial_receipt(db,client):
     result=client.get('/reports/api/purchase-invoices',params={'supplier':supplier.id,'period':'custom','from_date':RANGE['from'],'to_date':RANGE['to']})
     assert result.status_code==200
     assert [d['id'] for d in result.json()['invoices']]==[docs[0].id,docs[1].id]
+    old=Purchase(supplier_id=supplier.id,invoice_no='OLD-DRAFT',status='DRAFT',purchase_date=datetime(2010,1,1),total=10)
+    db.add(old);db.flush()
+    db.add(PurchaseItem(purchase_id=old.id,product_name='Old draft item',status='NEEDS_REVIEW',quantity=1,line_total=10))
+    db.commit()
+    all_invoices=client.get('/reports/api/purchase-invoices',params={'supplier':supplier.id})
+    assert all_invoices.status_code==200
+    assert {d['id'] for d in all_invoices.json()['invoices']}=={old.id,docs[0].id,docs[1].id}
+    audit=reports.generate(db,'supplier-purchases',{'supplier':str(supplier.id),'invoice_ids':str(old.id)})
+    assert len(audit['rows'])==1 and audit['rows'][0]['invoice']=='OLD-DRAFT'
+    assert audit['rows'][0]['received'] is None and audit['totals']['landed']==0
 
 
 def test_presets_are_calendar_periods():

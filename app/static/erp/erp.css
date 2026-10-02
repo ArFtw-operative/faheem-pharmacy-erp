@@ -317,6 +317,11 @@ body { grid-template-rows: 40px 30px minmax(0, 1fr) auto; }
 .report-invoices [data-invoice-list] { max-height:180px; overflow:auto; }
 .report-parameters .report-invoices label { flex-direction:row; align-items:center; padding:4px; border-bottom:1px solid var(--line); }
 .report-parameters .report-invoices input { min-width:0; width:16px; height:16px; }
+.report-suppliers { width:100%; }
+.report-suppliers h2 { font-size:13px; margin:0 0 6px; }
+.report-invoice { display:flex; width:100%; align-items:center; justify-content:space-between; gap:12px; margin:3px 0; text-align:left; }
+.report-invoice span { font-size:11px; color:var(--muted); }
+.report-suppliers [aria-pressed=true],.report-invoice[aria-pressed=true] { border-color:var(--accent); background:var(--head); }
 .report-generate { display: flex; gap: 6px; }
 .report-notice { padding: 7px 0; color: var(--muted); font-size: 12px; }
 .report-toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 6px 8px; border: 1px solid var(--line); background: var(--head); }

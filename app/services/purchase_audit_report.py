@@ -30,8 +30,9 @@ def columns(col):
 
 
 def documents(db, p, start, end):
-    q = select(Purchase).where(Purchase.purchase_date >= start, Purchase.purchase_date < end,
-                              Purchase.status.in_(('POSTED','PARTIAL')))
+    q = select(Purchase)
+    if p.get('period')!='all':
+        q=q.where(Purchase.purchase_date >= start, Purchase.purchase_date < end,Purchase.status.in_(('POSTED','PARTIAL')))
     if p.get('supplier'): q = q.where(Purchase.supplier_id == int(p['supplier']))
     if p.get('invoice'): q = q.where(Purchase.invoice_no.ilike('%'+p['invoice']+'%'))
     return list(db.scalars(q.options(joinedload(Purchase.supplier),selectinload(Purchase.items).joinedload(PurchaseItem.item))
