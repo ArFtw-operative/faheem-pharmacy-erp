@@ -1,4 +1,5 @@
 import * as keys from "erp/keys";
+import { physicalEditor } from 'erp/physical-units';
 // Inventory — product grid + batch pane + detail strip. Back-office control:
 // stock changes only through ledgered adjustments (F5), packaging through the
 // guarded product editor (Ctrl+E). Nothing here edits a stock number directly.
@@ -324,7 +325,7 @@ export function create(ctx, params, root) {
         <label class="full">Product name *<input name="name" value="${esc(d ? d.name : "")}" maxlength="250" required autofocus></label>
         <label>Generic / composition<input name="generic_name" value="${esc(d ? d.generic : "")}"></label>
         <label>Manufacturer<input name="manufacturer" value="${esc(d ? d.manufacturer : "")}"></label>
-        <label>Dosage form<select name="dosage_form">${(BOOT.units.forms || []).map((u) => `<option value="${u}" ${d && d.form === u ? "selected" : ""}>${u ? title(u) : "—"}</option>`).join("")}</select></label>
+        <label>Item form (set in Packaging)<input data-form-display value="${esc(d?.form || p.base_unit || '')}" disabled></label>
         <label>Strength<input name="strength" value="${esc(d ? d.strength : "")}" placeholder="650 mg"></label>
         <label>Category<select name="category">${catOptions.filter((c) => c.active || (d && d.category === c.code)).map((c) => `<option value="${esc(c.code)}" ${d && d.category === c.code ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
         <label>Barcode<input name="barcode" value="${esc(d ? d.barcode : "")}"></label>
@@ -333,13 +334,12 @@ export function create(ctx, params, root) {
       <div class="form-grid" data-p="p" hidden>
         ${d && d.packaging_convertible ? `<p class="full warn-box">Stock is counted per pack now (${d.stock} ${esc(unitName(p.pack_unit, d.stock))}). Setting units per purchase unit to N repacks it through the ledger: ${d.stock} × N. The strip MRP stays on each batch, so one unit = strip MRP ÷ N.</p>` : ""}
         ${locked ? `<p class="full warn-box">This product holds ${d.stock} ${esc(unitName(p.base_unit, d.stock))}. Stock unit and pack size can change only at zero stock, so existing stock is never reinterpreted. The loose-sale flag can still change.</p>` : ""}
-        <label>Pack as printed<input name="pack_size" value="${esc(d ? d.pack_raw : "")}" placeholder="15S, 2X10S, 200ML"></label>
-        <label>Stock / sale unit${sel("base_unit", BOOT.units.base, p.base_unit)}</label>
-        <label>Purchase unit${sel("pack_unit", BOOT.units.pack, p.pack_unit)}</label>
-        <label>Units per purchase unit<input name="units_per_pack" type="number" min="1" max="10000" value="${p.units_per_pack}" placeholder="auto" ${locked ? "disabled" : ""}></label>
+        <input type="hidden" name="pack_size" value="${esc(d ? d.pack_raw : '')}">
+        <div class="full" data-simple-packaging></div>
+        ${d ? '<p class="full hint" data-inventory-equivalent aria-live="polite"></p>' : ''}
         <label>Loose sale<select name="loose_sale"><option value="auto">Automatic (from pack / form)</option><option value="true" ${d && p.loose_sale ? "selected" : ""}>Yes</option><option value="false" ${d && !p.loose_sale ? "selected" : ""}>No</option></select></label>
         ${p.content ? `<label>Content<input value="${esc(p.content)}" disabled></label>` : ""}
-        <p class="full hint pack-hint">Detected automatically from the pack and form (${esc(p.source === "MANUAL" ? "corrected by a user" : "automatic")}). Change these only to correct an exception: Dolo 650 15'S → Tablet, Strip, 15. Syrup 200 ml → Bottle, Bottle, 1.</p>
+        <p class="full hint">Choose the physical form and units per strip/container. Existing supplier pack text is retained as source evidence.</p>
       </div>
       <div class="form-grid" data-p="c" hidden>
         <label>Default MRP (₹ per purchase unit)<input name="mrp" inputmode="decimal" value="${esc(d ? d.mrp : "")}"></label>
@@ -356,17 +356,34 @@ export function create(ctx, params, root) {
     };
     tabsEl.addEventListener("click", (e) => { const b = e.target.closest("[data-t]"); if (b) show(b.dataset.t); });
     el.addEventListener("keydown", (e) => { if (e.altKey && ["1", "2", "3"].includes(e.key)) { e.preventDefault(); show(["g", "p", "c"][Number(e.key) - 1]); } });
-    const packIn = el.querySelector('[name="pack_size"]');
-    packIn.addEventListener("input", () => {
-      const m = /^\s*(?:1\s*[xX]\s*)?(\d+)\s*'?\s*[sS]?\s*$/.exec(packIn.value);
-      const hint = el.querySelector(".pack-hint");
-      hint.textContent = m && Number(m[1]) > 1 ? `“${packIn.value}” reads as a strip of ${m[1]}: tablets/capsules are counted singly and sold loose automatically.` : "The unit of measure is detected from the pack and form when you save.";
+    const editor = physicalEditor({ form: d?.form || '', base: p.base_unit, count: p.units_per_pack || 1, quantities: false, locked });
+    el.querySelector('[data-simple-packaging]').append(editor);
+    el.simplePackaging = editor;
+    el.newProduct = !d;
+    editor.addEventListener('packaging-preview', () => {
+      const v = editor.packagingValues();
+      el.querySelector('[data-form-display]').value = title(v.dosage_form || v.base_unit);
     });
+    if (d) {
+      const preview = () => {
+        const v = editor.packagingValues(), n = Number(v.units_per_pack), total = d.packaging_convertible ? d.stock * n : d.stock;
+        el.querySelector('[data-inventory-equivalent]').textContent = `Stock equivalent after saving: ${total} ${unitName(v.base_unit, total)}`;
+      };
+      editor.addEventListener('packaging-preview', preview);
+      preview();
+    }
     return el;
   }
   const collect = (form) => {
     const out = {};
     form.querySelectorAll("[name]").forEach((i) => { if (!i.disabled) out[i.name] = i.value; });
+    const container = form.querySelector('.editor'), editor = container?.simplePackaging;
+    if (editor && (container.newProduct || editor.packagingDirty) && !editor.querySelector('[name="physical_form"]').disabled) {
+      const values = editor.packagingValues();
+      for (const k of ['base_unit','pack_unit','units_per_pack','dosage_form']) out[k] = values[k];
+      if (!out.pack_size && ['TABLET','CAPSULE'].includes(values.base_unit)) out.pack_size = `${values.units_per_pack}S`;
+    }
+    for (const k of Object.keys(out)) if (k.startsWith('physical_')) delete out[k];
     return out;
   };
   async function edit() {

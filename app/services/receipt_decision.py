@@ -48,6 +48,14 @@ def effective(line):
     return values
 
 
+def definition(line):
+    staged=(line.corrections or {}).get('_physical_adjustment')
+    if staged and line.item and staged.get('item_id')==line.item.id:
+        return staged['definition']
+    obj=line.item or line
+    return {k:getattr(obj,k) for k in ('base_unit','pack_unit','units_per_pack','dosage_form')}
+
+
 def signature(purchase, line):
     """Changing identity, raw pack, layout, or master conversion invalidates memory."""
     v = effective(line)
@@ -60,6 +68,9 @@ def signature(purchase, line):
     annotation = re.sub(r"[\d.,+\s]", "", str(v.get("quantity", ""))).casefold()
     if annotation:
         identity.append(annotation)
+    current = {k:getattr(item,k) for k in ('base_unit','pack_unit','units_per_pack','dosage_form')} if item else None
+    if (line.corrections or {}).get('_physical_adjustment') and definition(line) != current:
+        identity.append(definition(line))
     return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
 
 
@@ -111,7 +122,7 @@ def decide(line, confirmation=None, *, validate_master=False):
     out = {"version": VERSION, "resolved": False, "issues": issues, "evidence": evidence,
            "paid": None, "free": None, "received_base_units": None,
            "invoice_units": None, "units_per_invoice_unit": None, "master_pack_equivalent": None,
-           "base_unit": line.item.base_unit if line.item else line.base_unit or "UNIT",
+           "base_unit": definition(line)['base_unit'] or 'UNIT',
            "source": "UNRESOLVED", "candidates": []}
 
     def issue(code, message, field="pack"):
@@ -128,7 +139,7 @@ def decide(line, confirmation=None, *, validate_master=False):
         issue("quantity_invalid", "Paid plus free quantity must be greater than zero", "quantity")
         return out
     item = line.item
-    master = item.units_per_pack if item else line.units_per_pack
+    master = definition(line)['units_per_pack']
     pack = units.parse_pack(v.get("pack"))
     if validate_master and not (confirmation and confirmation.get('source') in {'CONFIRMED','SUPPLIER_MEMORY'}):
         problems = master_problems(line)
@@ -228,7 +239,18 @@ def resolve(db, purchase, line):
         if purchase_automation.enabled(db):
             confirmed = purchase_automation.receipt_evidence(db, purchase, line)
     from app.services import purchase_automation
-    result = decide(line, confirmed, validate_master=purchase_automation.active(db, purchase))
+    staged=(line.corrections or {}).get('_physical_adjustment')
+    if staged and line.item:
+        from app.services.purchase_adjustment import snapshot
+        if snapshot(line.item) not in (staged['before'],staged['definition']):
+            confirmed=None
+            result=decide(line,validate_master=True)
+            result['resolved']=False
+            result['issues'].append(dict(code='packaging_changed',field='pack',level='review',message='Product packaging changed after adjustment; recheck this line.'))
+        else:
+            result=decide(line,confirmed,validate_master=purchase_automation.active(db,purchase))
+    else:
+        result = decide(line, confirmed, validate_master=purchase_automation.active(db, purchase))
     if confirmed and confirmed.get("history_line_ids"):
         result["history_line_ids"] = confirmed["history_line_ids"]
     if not line.pack_size:
@@ -267,7 +289,7 @@ def confirm(db, purchase, line, *, factor, mrp_basis, reason, user=None):
 
 def mrp_per_master_pack(line):
     d = line.receipt_decision or {}
-    master = line.item.units_per_pack if line.item else line.units_per_pack
+    master = definition(line)['units_per_pack']
     basis = d.get("mrp_basis", "MASTER_PACK")
     if basis == "BASE":
         return line.mrp * master

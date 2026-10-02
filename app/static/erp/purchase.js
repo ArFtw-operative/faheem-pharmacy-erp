@@ -1,4 +1,5 @@
 import * as keys from "erp/keys";
+import { physicalEditor, equivalent } from 'erp/physical-units';
 // Purchase document — one supplier invoice, reviewed line by line before it
 // reaches stock. Every cell shows the corrected value; the supplier's original
 // stays visible in the side panel (and in the audit trail). Nothing is posted
@@ -108,6 +109,7 @@ export function create(ctx, params, root) {
       { key: "expiry", label: "Expiry", width: 74, render: (r) => cell(r, "expiry", r.expiry ? fmtExp(r.expiry) : `<span class="muted">${esc(r.expiry_raw || "—")}</span>`) },
       { key: "qty", label: "Billed", width: 50, align: "num", render: (r) => cell(r, "quantity", esc(r.receipt?.paid ?? r.qty)) },
       { key: "free", label: "Free", width: 46, align: "num", render: (r) => cell(r, "free", esc(r.receipt?.free ?? r.free ?? "")) },
+      { key: 'equivalent', label: 'Equivalent', width: 155, render: r => `<span class="${r.receipt?.resolved ? '' : 'muted'}">${esc(equivalent(r.receipt))}</span>` },
       { key: "rate", label: "Rate", width: 70, align: "num", render: (r) => cell(r, "rate", money(r.rate)) },
       { key: "mrp", label: "MRP", width: 70, align: "num", render: (r) => cell(r, "mrp", money(r.mrp)) },
       { key: "discount", label: "Disc", width: 62, align: "num", render: (r) => (Number(r.discount) ? money(r.discount) : "") },
@@ -131,6 +133,7 @@ export function create(ctx, params, root) {
     onSelect: (r) => renderSide(r),
     onActivate: (r) => (canEdit() && !DONE.includes(r.status) ? editLine(r) : openLedger(r)),
     contextMenu: (r) => canEdit() && !DONE.includes(r.status) ? [
+      { label: 'Adjust quantity / form', action: () => adjustQuantity(r) },
       { label: "Correct line", key: "Enter", action: () => editLine(grid.selected) },
       { label: "Match product", key: keys.keyFor("purchase.product"), action: () => matchProduct(grid.selected) },
       { label: "Create as new product", key: keys.keyFor("purchase.newProduct"), action: () => newProduct(grid.selected) },
@@ -320,11 +323,23 @@ export function create(ctx, params, root) {
       <h3>Line ${r.line_no} <span class="ps-${STATUS[r.status][1]}">${STATUS[r.status][0]}</span></h3>
       <div class="side-prod">${prod}</div>${qtyNote}${costTable(r)}
       ${issues ? `<ul class="issues">${issues}</ul>` : '<p class="ok">No issues.</p>'}
-      ${canEdit() && !DONE.includes(r.status) ? '<button type="button" data-invoice-unit>Verify invoice unit</button><button type="button" data-reference>Medicine reference</button>' : ""}
+      ${canEdit() && !DONE.includes(r.status) ? '<button type="button" data-adjust-quantity>Adjust quantity / form</button><button type="button" data-invoice-unit>Verify invoice unit</button><button type="button" data-reference>Medicine reference</button>' : ""}
       ${rows ? `<table class="rawtab"><thead><tr><th></th><th>Supplier</th><th>Corrected</th></tr></thead><tbody>${rows}</tbody></table>` : ""}
       ${r.status === "POSTED" && r.batch_id ? '<p class="hint">Enter opens the product\'s stock ledger.</p>' : ""}`;
     side.querySelector("[data-invoice-unit]")?.addEventListener("click", () => verifyInvoiceUnit(r));
+    side.querySelector('[data-adjust-quantity]')?.addEventListener('click', () => adjustQuantity(r));
     side.querySelector("[data-reference]")?.addEventListener("click", () => showReference(r));
+  }
+
+  async function adjustQuantity(r) {
+    if (!r || !canEdit() || DONE.includes(r.status)) return;
+    const editor = physicalEditor({ form: r.dosage_form || '', base: r.item?.base_unit || r.base_unit,
+      count: r.units_per_pack || r.item?.upp || 1, quantity: r.receipt?.paid ?? r.qty, free: r.receipt?.free ?? r.free ?? 0 });
+    const body = h('<div><p>Count the stock you receive. Rate and MRP are per strip/container. Packaging corrections are applied to stock when this purchase is posted.</p></div>');
+    body.append(editor);
+    const out = await modal({ title: `Adjust line ${r.line_no} — ${r.name}`, body, submitLabel: 'Save adjustment',
+      onSubmit: () => api(`/api/erp/purchases/${id}/lines/${r.id}/physical-quantity`, { method: 'PUT', body: editor.packagingValues() }) });
+    if (out) { await load(); ctx.status('Physical quantity and equivalent updated', 'ok'); }
   }
 
   async function verifyInvoiceUnit(r) {

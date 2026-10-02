@@ -790,6 +790,8 @@ def correct(db: Session, purchase: Purchase, line: PurchaseItem, changes: dict, 
     raw = line.raw or {}
     for field, value in changes.items():
         if field in EDITABLE:
+            if field in {'base_unit','pack_unit','units_per_pack','dosage_form','pack'}:
+                corrections.pop('_physical_adjustment',None)
             value = purchase_import.as_text(value)
             if value == (raw.get(field) or "") and field in corrections:
                 corrections.pop(field)          # back to what the supplier wrote
@@ -1094,6 +1096,14 @@ def post(db: Session, purchase: Purchase, *, user: User | None = None, accept_di
     try:
         with db.begin_nested():
             created_items = {}
+            from app.services import purchase_adjustment
+            for adjusted in target:
+                stamp=(adjusted.corrections or {}).get('_physical_adjustment')
+                if stamp and adjusted.item and purchase_adjustment.snapshot(adjusted.item)!=stamp['definition']:
+                    siblings=[l for l in target if l.item_id==adjusted.item_id]
+                    if any(receipt_decision.definition(l)!=stamp['definition'] for l in siblings):
+                        raise PurchaseError('Adjust the packaging of all selected rows for this product consistently before posting')
+                    purchase_adjustment.apply_at_post(db,adjusted,user=user)
             for line in sorted(target, key=lambda l: l.line_no):
                 item = line.item
                 identity = (line.product_name.casefold(), line.manufacturer.casefold(), line.pack_size.casefold(),

@@ -35,6 +35,16 @@ and readiness for automatic posting. Coverage is **not an accuracy measurement**
 
 ## Decision evidence
 
+The purchase grid's Equivalent column shows physical stock units. Right-click
+an open row and choose Adjust quantity / form: select tablets, capsules or a
+container form, units per strip, paid strip/container quantity and free quantity.
+The preview multiplies the received quantity by the physical count. It preserves
+the original invoice fields and records audited corrections. Existing-product
+packaging changes are staged until posting and require inventory-edit permission;
+posting applies them atomically through the stock ledger. Historical individually
+counted stock is protected from reinterpretation. The inventory Packaging tab
+uses the same form/count controls without requiring carton text such as 10x1x15.
+
 * Clear named forms and pack counts establish new-product units automatically.
   Content volume/weight never multiplies physical stock. An unspecified `10S`
   counts ten generic units, without falsely declaring them tablets or capsules.

@@ -348,6 +348,18 @@ async def purchase_invoice_unit(purchase_id: int, line_id: int, request: Request
     return _document(_doc(db, purchase_id))
 
 
+@router.put('/api/erp/purchases/{purchase_id}/lines/{line_id}/physical-quantity')
+async def purchase_physical_quantity(purchase_id:int,line_id:int,request:Request,db:Session=Depends(get_db),
+                                    user:User=Depends(require_permission('purchase.create'))):
+    from app.services import purchase_adjustment
+    data=await request.json()
+    if not isinstance(data,dict):
+        raise HTTPException(400,'Quantity adjustment requires an object')
+    p=_doc(db,purchase_id)
+    _run(db,purchase_adjustment.adjust,p,_line(p,line_id),data,user=user)
+    return _document(_doc(db,purchase_id))
+
+
 @router.get("/api/erp/purchases/{purchase_id}/decisions")
 def purchase_decisions(purchase_id: int, db: Session = Depends(get_db),
                        user: User = Depends(require_permission("purchase.view"))):
