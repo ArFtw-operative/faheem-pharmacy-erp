@@ -94,6 +94,22 @@ def report_lookup(kind: str, q: str = "", db: Session = Depends(get_db), user: U
     raise HTTPException(400, "Unknown lookup")
 
 
+@router.get('/api/purchase-invoices')
+def purchase_invoices(supplier: str, period: str = 'today', from_date: str = '', to_date: str = '', invoice: str = '',
+                      db: Session = Depends(get_db), user: User = Depends(require_permission('reports.purchase'))):
+    from app.services import purchase_audit_report
+    raw = dict(supplier=supplier,period=period,invoice=invoice)
+    if not supplier: raise HTTPException(400,'Choose a supplier first')
+    if period == 'custom': raw.update({'from':from_date,'to':to_date})
+    try:
+        p,start,end = report_generator.parameters(db,report_generator.BY_ID['supplier-purchases'],raw)
+        docs = purchase_audit_report.documents(db,p,start,end)
+    except report_generator.ReportError as exc: raise HTTPException(400,str(exc))
+    return {'invoices':[dict(id=d.id,invoice=d.invoice_no,reference=d.reference_no or '',
+                             date=str(d.invoice_date or report_generator.day_of(d.purchase_date,report_generator.tz_for(db))),
+                             status=d.status,total=str(d.total),lines=len(d.items)) for d in docs]}
+
+
 @router.post("/api/generate")
 async def generate_report(request: Request, db: Session = Depends(get_db), user: User = Depends(require_permission("reports.sales"))):
     try: data = await request.json()

@@ -26,6 +26,51 @@ def sell(db,item,batch,qty=1,when=datetime(2026,9,1,12),**kwargs):
 RANGE={'period':'custom','from':'2026-09-01','to':'2026-09-30'}
 
 
+def test_supplier_invoice_audit_selection_and_partial_receipt(db,client):
+    supplier=Supplier(name='Audit Supplier');other=Supplier(name='Other supplier')
+    db.add_all([supplier,other]);db.flush()
+    docs=[]
+    for sup,number in ((supplier,'A1'),(supplier,'A2'),(other,'B1')):
+        doc=Purchase(supplier_id=sup.id,invoice_no=number,status='PARTIAL',total=Decimal('105'),
+                     supplier_total=Decimal('106'),purchase_date=datetime(2026,9,2,12))
+        db.add(doc);db.flush();docs.append(doc)
+        db.add(PurchaseItem(purchase_id=doc.id,product_name='Tablet',line_no=1,status='POSTED',
+                           quantity=2,quantity_free=0,raw={'quantity':'2.5','free':'0.5','pack':'10x1x15'},
+                           receipt_decision={'resolved':True,'received_base_units':45,'base_unit':'TABLET','master_pack_equivalent':'3'},
+                           line_total=100,taxable_value=100,gst_amount=5,cgst_amount=Decimal('2.5'),sgst_amount=Decimal('2.5'),
+                           igst_amount=0,landed_total=105,gst_rate=5,batch_no='BATCH1',expiry_date=date(2028,3,1)))
+        db.add(PurchaseItem(purchase_id=doc.id,product_name='Not received',line_no=2,status='NEEDS_REVIEW',quantity=1,line_total=50))
+    db.commit()
+    params=RANGE|{'supplier':str(supplier.id),'invoice_ids':str(docs[0].id)}
+    report=reports.generate(db,'supplier-purchases',params)
+    assert len(report['rows'])==2
+    received,pending=report['rows']
+    assert received['paid']==Decimal('2.5') and received['free']==Decimal('0.5')
+    assert received['received']==45 and received['equivalent']==3
+    assert pending['received'] is None and pending['landed'] is None
+    assert report['totals']['landed']==105 and report['totals']['gst']==5
+    assert received['difference']==-1 and received['gstin']==''
+    from app.services import report_document
+    from openpyxl import load_workbook
+    import pymupdf
+    text=report_document.text_document(report)
+    assert 'Billed quantity: 2.5' in text and 'Free quantity: 0.5' in text
+    pdf=pymupdf.open(stream=report_document.pdf_bytes(report),filetype='pdf')
+    assert 'TOTALS (received lines only)' in ''.join(page.get_text() for page in pdf)
+    workbook=load_workbook(BytesIO(report_document.excel_bytes(report)))
+    index=next(i for i,c in enumerate(report['columns'],1) if c['key']=='paid')
+    assert workbook.active.cell(5,index).value==2.5
+    assert workbook.active.cell(5,index).number_format=='#,##0.######'
+    with pytest.raises(reports.ReportError,match='do not belong'):
+        reports.generate(db,'supplier-purchases',params|{'invoice_ids':str(docs[2].id)})
+    with pytest.raises(reports.ReportError,match='valid invoices'):
+        reports.generate(db,'supplier-purchases',params|{'invoice_ids':'1,wrong'})
+    login(client)
+    result=client.get('/reports/api/purchase-invoices',params={'supplier':supplier.id,'period':'custom','from_date':RANGE['from'],'to_date':RANGE['to']})
+    assert result.status_code==200
+    assert [d['id'] for d in result.json()['invoices']]==[docs[0].id,docs[1].id]
+
+
 def test_presets_are_calendar_periods():
     today=date(2026,9,30)
     assert reports.preset_dates('this_week',today)==(date(2026,9,28),today)

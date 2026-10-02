@@ -313,6 +313,10 @@ body { grid-template-rows: 40px 30px minmax(0, 1fr) auto; }
 .report-parameters label { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; color: var(--muted); font-weight: 600; }
 .report-parameters input,.report-parameters select { min-width: 125px; max-width: 190px; height: 30px; }
 .report-parameters input:disabled { background: var(--head); color: var(--muted); }
+.report-invoices { flex-basis:100%; border:1px solid var(--line); padding:8px; margin:0; }
+.report-invoices [data-invoice-list] { max-height:180px; overflow:auto; }
+.report-parameters .report-invoices label { flex-direction:row; align-items:center; padding:4px; border-bottom:1px solid var(--line); }
+.report-parameters .report-invoices input { min-width:0; width:16px; height:16px; }
 .report-generate { display: flex; gap: 6px; }
 .report-notice { padding: 7px 0; color: var(--muted); font-size: 12px; }
 .report-toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 6px 8px; border: 1px solid var(--line); background: var(--head); }

@@ -45,7 +45,7 @@ def excel_bytes(report):
             cell.border=Border(bottom=line,right=line)
             if cell.row==4: cell.font=Font(bold=True);cell.fill=PatternFill('solid',fgColor='F4F6F7')
             elif cols[cell.column-1]['kind'] in ('money','number'):
-                cell.alignment=Alignment(horizontal='right');cell.number_format='#,##0.00' if cols[cell.column-1]['kind']=='money' else '#,##0'
+                cell.alignment=Alignment(horizontal='right');cell.number_format='#,##0.00' if cols[cell.column-1]['kind']=='money' else '#,##0.######'
     if report['totals']:
         for cell in ws[ws.max_row]: cell.font=Font(bold=True);cell.border=Border(top=Side(style='thin',color='1B2327'))
     for i,c in enumerate(cols,1): ws.column_dimensions[get_column_letter(i)].width=28 if c['kind']=='text' else 18
@@ -98,6 +98,21 @@ def text_document(report, width_min=78):
 
     Numbers right-aligned, text left-aligned; cost / profit columns appear
     only when the report's selected columns include them."""
+    if report['id']=='supplier-purchases' and report.get('parameters',{}).get('supplier'):
+        import textwrap
+        width=110;rule='-'*width
+        out=[report['pharmacy'].upper(),report['title'].upper(),
+             f"Period: {_dmy(report['from_date'])} to {_dmy(report['to_date'])} | Generated: {report['generated_at']}",rule]
+        for n,row in enumerate(report['rows'],1):
+            out.append(f"ITEM {n}")
+            for c in report['columns']:
+                out.extend(textwrap.wrap(f"{c['label']}: {_cell(c,row.get(c['key']))}",width,subsequent_indent='  ') or [''])
+            out.append(rule)
+        out.append('TOTALS (received lines only)')
+        for c in report['columns']:
+            if c['key'] in report['totals']: out.append(f"{c['label']}: {_cell(c,report['totals'][c['key']])}")
+        out+=textwrap.wrap(report.get('note',''),width)
+        return '\n'.join(out)+'\n'
     cols=report['columns']
     rows=[[_cell(c,r.get(c['key'])) for c in cols] for r in report['rows']]
     head=['SNo']+[c['label'] for c in cols]
@@ -140,9 +155,10 @@ def pdf_bytes(report):
     """PDF of the same text document (monospace), landscape, header repeated on every page."""
     import pymupdf
     lines=text_document(report).split('\n')
+    audit=report['id']=='supplier-purchases' and report.get('parameters',{}).get('supplier')
     try: rule_at=[i for i,l in enumerate(lines) if l and set(l)=={'-'}]
     except Exception: rule_at=[]
-    head=lines[:rule_at[2]+1] if len(rule_at)>=3 else lines[:8]
+    head=lines[:4] if audit else lines[:rule_at[2]+1] if len(rule_at)>=3 else lines[:8]
     rest=lines[len(head):]
     width_chars=max((len(l) for l in lines),default=80)
     doc=pymupdf.open()

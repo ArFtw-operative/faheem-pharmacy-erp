@@ -20,6 +20,7 @@ from app.permissions import has_permission
 from app.services import settings_service, inventory_pricing, financials, business_time
 from app.services.stock_ledger import MOVEMENT_TYPES, MOVEMENT_LABELS
 from app.utils import money, to_decimal
+from app.services import purchase_audit_report
 
 PERIODS = [('today', 'Today'), ('yesterday', 'Yesterday'), ('this_week', 'This Week'),
            ('last_week', 'Last Week'), ('last_7', 'Last 7 Days'), ('this_month', 'This Month'), ('last_month', 'Last Month'),
@@ -56,7 +57,7 @@ CATALOG = [
     dict(id='sales-returns', title='Sales Returns', group='Sales Reports', description='Completed customer returns and refunds', permission='reports.sales', filters=['item','batch','refund_method'], columns=[DATE,col('reference','Return Number'),col('invoice','Bill Number'),ITEM,QTY,col('value','Refund','money',total=True),col('disposition','Disposition'),BATCH,col('reason','Reason',default=False)]),
     dict(id='purchase-summary', title='Purchase Summary', group='Purchase Reports', description='Purchases grouped by date', permission='reports.purchase', filters=['supplier','invoice','item','category','group_by'], columns=[DATE,col('bills','Invoices','number',total=True),col('value','Purchase Value','money',total=True)]),
     dict(id='purchase-register', title='Purchase Register', group='Purchase Reports', description='Supplier invoices and received purchases', permission='reports.purchase', filters=['supplier','invoice','item','category'], columns=[DATE,col('invoice','Invoice Number'),col('supplier','Supplier'),col('value','Purchase Value','money',total=True),col('status','Status')]),
-    dict(id='supplier-purchases', title='Supplier-wise Purchase', group='Purchase Reports', description='Purchase totals by supplier', permission='reports.purchase', filters=['supplier','invoice','item','category'], columns=[col('supplier','Supplier'),col('bills','Invoices','number',total=True),col('value','Purchase Value','money',total=True)]),
+    dict(id='supplier-purchases', title='Supplier-wise Purchase', group='Purchase Reports', description='Supplier totals and selected-invoice item audit', permission='reports.purchase', filters=['supplier','invoice','invoice_ids','item','category'], columns=[col('supplier','Supplier'),col('bills','Invoices','number',total=True),col('value','Purchase Value','money',total=True)]),
     dict(id='purchase-returns', title='Purchase Returns', group='Purchase Reports', description='Goods returned to suppliers', permission='reports.purchase', filters=['supplier','invoice','item','category','batch'], columns=[DATE,col('invoice','Invoice Number'),col('supplier','Supplier'),ITEM,QTY,col('value','Return Value','money',total=True),BATCH,col('reason','Reason'),col('status','Status')]),
     dict(id='current-stock', title='Current Stock', group='Inventory Reports', description='Product stock at the selected date', permission='inventory.view', filters=INVENTORY_FILTERS, columns=[ITEM,PACK,col('unit','Stock Unit'),QTY,col('reorder','Reorder Level','number'),CATEGORY,BRAND,col('mrp','MRP / unit','money',False),col('value','Stock at MRP','money',False,True)]),
     dict(id='batch-stock', title='Batch-wise Stock', group='Inventory Reports', description='Stock by product and manufactured batch', permission='inventory.view', filters=INVENTORY_FILTERS, columns=[ITEM,col('batch','Batch'),col('expiry','Expiry'),col('unit','Stock Unit'),QTY,col('supplier','Supplier',default=False),CATEGORY,BRAND,col('mrp','MRP / unit','money',False),col('value','Stock at MRP','money',False,True)]),
@@ -87,7 +88,9 @@ class ReportError(ValueError):
 
 
 def catalog(user):
-    return [{**r, 'columns': visible_columns(r['columns'], user)} for r in CATALOG if has_permission(user, r['permission'])]
+    return [{**r, 'columns': visible_columns(r['columns'], user),
+             **({'audit_columns':purchase_audit_report.columns(col)} if r['id']=='supplier-purchases' else {})}
+            for r in CATALOG if has_permission(user, r['permission'])]
 
 
 def visible_columns(columns, user):
@@ -177,6 +180,9 @@ def parameters(db, report, raw):
     for k, choices in enums.items():
         if k in p and p[k] not in choices: raise ReportError('Choose a valid '+k.replace('_',' '))
     if p.get('supplier') and not p['supplier'].isdigit(): raise ReportError('Choose a valid supplier')
+    if p.get('invoice_ids') and (not all(v.isdigit() for v in p['invoice_ids'].split(',')) or len(p['invoice_ids']) > 12000):
+        raise ReportError('Choose valid invoices')
+    if p.get('invoice_ids') and not p.get('supplier'): raise ReportError('Choose a supplier for selected invoices')
     report_extra.validate(p, ReportError)
     p.update({'from':first.isoformat(),'to':last.isoformat()})
     return p,start,end
@@ -304,6 +310,8 @@ def sale_rows(db,rid,p,start,end,tz,requested):
 
 
 def purchase_rows(db,rid,p,start,end,tz):
+    if rid == 'supplier-purchases' and p.get('supplier'):
+        return purchase_audit_report.rows(db,p,start,end,tz,day_of,matches,ReportError)
     if rid=='purchase-returns':
         q=select(PurchaseReturn).where(PurchaseReturn.return_date>=start,PurchaseReturn.return_date<end)
         if p.get('supplier'): q=q.where(PurchaseReturn.supplier_id==int(p['supplier']))
@@ -479,6 +487,9 @@ def generate(db,rid,raw,selected=None,user=None):
     p,start,end=parameters(db,report,raw);tz=tz_for(db)
     if rid=='profit': p.setdefault('profit_basis',settings_service.get_setting(db,'profit_basis','realized'))
     columns=visible_columns(report['columns'],user);note=''
+    if rid == 'supplier-purchases' and p.get('supplier'):
+        columns=purchase_audit_report.columns(col)
+        note='Received values include POSTED lines only. Unposted lines are listed with blank received values. Invoice totals and charges repeat for reference and must not be summed. Returns are reported separately in Purchase Returns. Blank stock conversion means no recorded receipt evidence; blank GSTIN does not block this report.'
     if p.get('category'):
         from app.services.inventory_service import categories
         known={c.upper():c for c in set(categories(db))|set(db.scalars(select(Item.category).distinct()))}

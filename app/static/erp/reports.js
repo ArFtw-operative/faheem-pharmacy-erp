@@ -3,6 +3,7 @@ import { $, $$, api, esc, h, money, store, modal } from 'erp/core';
 import * as keys from 'erp/keys';
 
 const FILTERS = {
+  invoice_ids: ['Invoices','hidden'],
   category: ['Category','select'], manufacturer: ['Brand / Manufacturer','select'], supplier: ['Supplier','select'],
   item: ['Item','lookup'], batch: ['Batch','text'], invoice: ['Invoice number','text'], customer: ['Customer','lookup'],
   profit_basis: ['Profit basis','select',[['realized','Actual sale value'],['mrp','MRP margin']]],
@@ -37,7 +38,8 @@ const dateLabel = (d) => { const [y,m,day]=String(d).split('-'); return `${day}-
 export function create(ctx,params,root) {
   let catalog=ctx.boot.report_catalog || [], options=null, selected=null, document=null;
   let request=null, version=0, rowAt=0, canExport=!!ctx.boot.can?.['reports.export'];
-  const prefKey=() => `report-columns:${ctx.boot.user?.username}:${selected.id}:${$('select[name=view]',root)?.value || ''}`;
+  let invoiceVersion=0, invoicesLoading=false;
+  const prefKey=() => `report-columns:${ctx.boot.user?.username}:${selected.id}:${$('select[name=view]',root)?.value || ''}:${selected.id==='supplier-purchases'&&$('[name=supplier]',root)?.value?'audit':'summary'}`;
   function cancel() { version++; if(request)request.abort();request=null; }
   function statusError(error) { if(error.name!=='AbortError')ctx.status(error.message,'error'); }
   function showSelector(focus=true) {
@@ -73,6 +75,7 @@ export function create(ctx,params,root) {
       <form class="report-parameters" aria-label="Report parameters">
         ${stock?`<label>As of date<input name="as_of" type="date" value="${options.today}" max="${options.today}" required></label>`:`<label>Period<select name="period">${options.periods.map(([v,l])=>option(v,l)).join('')}</select></label><label>From<input name="from" type="date" required></label><label>To<input name="to" type="date" required></label>`}
         ${selected.filters.filter(n=>n!=='as_of').map(filter).join('')}
+        ${selected.id==='supplier-purchases'?'<fieldset class="report-invoices" hidden><legend>Available invoices</legend><p data-invoice-notice></p><div data-invoice-list></div></fieldset>':''}
         <div class="report-generate"><button type="submit" class="btn primary" data-generate>Generate Report <kbd data-shortcut="reports.generate">${esc(keys.keyFor('reports.generate'))}</kbd></button><button type="button" class="btn" data-reset>Reset</button><button type="button" class="btn" data-columns>Columns ⚙</button></div>
       </form><div class="report-notice" role="status">Choose parameters, then generate the report.</div>
       <div class="report-result"></div></div>`;
@@ -80,10 +83,33 @@ export function create(ctx,params,root) {
     for(const [name,value] of Object.entries(preset)){const field=form.elements.namedItem(name);if(field)field.value=value;}
     $$('.report-lookup input',form).forEach(lookupField);
     updatePeriod();
+    if(selected.id==='supplier-purchases')loadInvoices();
     form.onsubmit=e=>{e.preventDefault();generate();};
     form.addEventListener('input',()=>{if(document)$('.report-notice',root).textContent='Parameters changed. Generate Report to apply them.';});
-    form.addEventListener('change',e=>{if(e.target.name==='period')updatePeriod(); if(document)$('.report-notice',root).textContent='Parameters changed. Generate Report to apply them.';});
+    form.addEventListener('change',e=>{if(e.target.name==='period')updatePeriod(); if(selected.id==='supplier-purchases'&&['supplier','period','from','to','invoice'].includes(e.target.name))loadInvoices(); if(e.target.matches('[data-invoice-id]'))syncInvoices(); if(document)$('.report-notice',root).textContent='Parameters changed. Generate Report to apply them.';});
     if(focus)$('select,input',form)?.focus();
+  }
+  function syncInvoices() {
+    const field=$('[name=invoice_ids]',root);
+    if(field)field.value=$$('[data-invoice-id]:checked',root).map(c=>c.value).join(',');
+  }
+  async function loadInvoices() {
+    const own=++invoiceVersion, panel=$('.report-invoices',root), form=$('form',root);
+    if(!panel)return;
+    const supplier=form.elements.supplier.value;
+    panel.hidden=!supplier; form.elements.invoice_ids.value='';
+    $('[data-invoice-list]',panel).innerHTML=''; invoicesLoading=!!supplier;
+    if(!supplier)return;
+    $('[data-invoice-notice]',panel).textContent='Loading invoices...';
+    const p=parameters(), query=new URLSearchParams({supplier,period:p.period||'today',from_date:p.from||'',to_date:p.to||'',invoice:p.invoice||''});
+    try {
+      const data=await api('/reports/api/purchase-invoices?'+query);
+      if(own!==invoiceVersion||!panel.isConnected)return;
+      $('[data-invoice-notice]',panel).textContent=data.invoices.length?'All listed invoices are selected. Uncheck invoices to narrow the audit.':'No received invoices for this supplier and period.';
+      $('[data-invoice-list]',panel).innerHTML=data.invoices.map(d=>`<label><input type="checkbox" data-invoice-id value="${d.id}" checked> <b>${esc(d.invoice||d.reference)}</b> | ${esc(d.reference)} | ${esc(d.date)} | ${esc(d.status)} | ${d.lines} lines | ${money(d.total)}</label>`).join('');
+      syncInvoices();
+    } catch(error){if(own===invoiceVersion){$('[data-invoice-notice]',panel).textContent='Could not load invoices. Change supplier or period to retry.';statusError(error);}}
+    finally {if(own===invoiceVersion)invoicesLoading=false;}
   }
   // Customer / Item filters: live search. Picking a customer filters on exactly that
   // customer; picking a product fills its exact name. Typed text still works as a contains-match.
@@ -120,7 +146,8 @@ export function create(ctx,params,root) {
     return values;
   }
   function availableColumns() {
-    if(document && document.parameters.view === ($('select[name=view]',root)?.value))return document.available_columns;
+    if(selected.id==='supplier-purchases'&&$('[name=supplier]',root)?.value)return selected.audit_columns;
+    if(document && document.parameters.supplier === ($('[name=supplier]',root)?.value||'') && document.parameters.view === ($('select[name=view]',root)?.value))return document.available_columns;
     if(selected.id==='sales-summary'){
       if($('[name=view]',root)?.value==='detail')return catalog.find(r=>r.id==='bill-register').columns;
       return [{key:'date',label:'Date',kind:'text',default:true},...options.categories.filter(Boolean).map(code=>({key:'cat:'+code,label:(options.category_names||{})[code]||code,kind:'money',default:true})),{key:'value',label:'Total',kind:'money',default:true},{key:'bills',label:'Bills',kind:'number',default:true}];
@@ -130,6 +157,7 @@ export function create(ctx,params,root) {
   async function generate(columnSelection) {
     if(!selected)return;
     const form=$('form',root);if(!form.reportValidity())return;
+    if(selected.id==='supplier-purchases'&&form.elements.supplier.value&&(invoicesLoading||!form.elements.invoice_ids.value)){ctx.status(invoicesLoading?'Wait for invoices to load':'Select at least one available invoice','warn');return;}
     cancel();const ownVersion=version;request=new AbortController();
     const button=$('[data-generate]',root);button.disabled=true;$('.report-notice',root).textContent='Generating report…';
     const cols=columnSelection ?? store.get(prefKey(),null);
@@ -137,6 +165,7 @@ export function create(ctx,params,root) {
       const generated=await api('/reports/api/generate',{method:'POST',signal:request.signal,body:{report:selected.id,parameters:parameters(),...(Array.isArray(cols)&&cols.length?{columns:cols}:{})}});
       if(ownVersion!==version)return;
       document=generated;
+      if(selected.id==='supplier-purchases'&&form.elements.supplier.value)textView=false;
       rowAt=0;renderDocument();$('.report-notice',root).textContent=`Report generated · ${document.rows.length} row${document.rows.length===1?'':'s'}`;
       ctx.status(document.title+' generated','ok');$('.report-table-scroll',root)?.focus();
     } catch(error){statusError(error);if(ownVersion===version)$('.report-notice',root).textContent='Report could not be generated. Check the parameters and try again.';}
