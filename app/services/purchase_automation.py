@@ -135,6 +135,8 @@ def identify_posted_copy(db, purchase, user=None):
 
 def _human_units(row):
     c = row.corrections or {}
+    if (c.get('_invoice_unit') or {}).get('operator_counts'):
+        return False
     d = row.receipt_decision or {}
     # Legacy receipts predate decision snapshots, but explicit UOM edits/acceptance
     # still show who reviewed their conversion. Auto-prepared rows never vote.

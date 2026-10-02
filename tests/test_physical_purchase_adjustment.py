@@ -127,3 +127,39 @@ def test_posted_line_cannot_be_adjusted(db):
     purchasing.post(db,p)
     with pytest.raises(purchasing.PurchaseError):
         physical.adjust(db,p,p.items[0],values())
+
+
+def test_counting_strips_preserves_box_billing_and_posts_physical_units(db):
+    enable(db)
+    p=draft(db,',NEW BRAND,10x1x15,B,May-2028,1,,10,20,10')
+    physical.adjust(db,p,p.items[0],values())
+    line=p.items[0]
+    assert line.line_total==10
+    assert line.receipt_decision['paid']=='1'
+    assert line.receipt_decision['received_base_units']==30
+    purchasing.post(db,p)
+    assert db.query(Batch).one().quantity==30
+    assert db.query(Batch).one().purchase_rate==5
+    assert not stock_ledger.reconcile(db)
+
+
+def test_delivery_count_is_not_learned_as_supplier_conversion(db):
+    enable(db)
+    sup=supplier(db)
+    p=draft(db,',NEW BRAND,10x1x15,B,May-2028,2,,10,20,20',sup=sup)
+    physical.adjust(db,p,p.items[0],dict(form='TABLET',units_per_pack='15',quantity='2',free='1'))
+    assert p.items[0].receipt_decision['received_base_units']==45
+    purchasing.post(db,p)
+    from app.models import SupplierProductMap
+    assert not db.query(SupplierProductMap).one().receipt_conventions
+    next_p=draft(db,',NEW BRAND,10x1x15,C,May-2028,2,,10,20,20',sup=sup)
+    assert not next_p.items[0].receipt_decision['resolved']
+
+
+def test_changing_billed_quantity_invalidates_delivery_count(db):
+    enable(db)
+    p=draft(db,',NEW BRAND,10x1x15,B,May-2028,1,,10,20,10')
+    physical.adjust(db,p,p.items[0],values())
+    purchasing.correct(db,p,p.items[0],{'quantity':'3'})
+    assert not p.items[0].receipt_decision['resolved']
+    assert any(i['code']=='physical_count_stale' for i in p.items[0].issues)

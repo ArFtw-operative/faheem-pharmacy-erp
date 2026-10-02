@@ -202,6 +202,13 @@ def decide(line, confirmation=None, *, validate_master=False):
         issue("conversion_missing", "Define the product's retail pack before confirming the invoice unit", "units_per_pack")
         return out
     physical = total * factor
+    counted = confirmation.get('operator_counts') if confirmation else None
+    if counted:
+        if (str(paid),str(free)) != (counted['billed_paid'],counted['billed_free']):
+            issue('physical_count_stale', 'Invoice quantity changed after counting stock. Recheck the received quantity.', 'quantity')
+            return out
+        physical = Decimal(counted['paid']) + Decimal(counted['free'])
+        factor = float(physical / total)
     out["units_per_invoice_unit"] = factor
     out["mrp_basis"] = basis
     if physical % 1:
@@ -210,7 +217,7 @@ def decide(line, confirmation=None, *, validate_master=False):
     if physical > 2147483647:
         issue("quantity_invalid", "Physical stock exceeds the supported integer range", "quantity")
         return out
-    paid_base, free_base = paid * factor, free * factor
+    paid_base, free_base = (Decimal(counted['paid']),Decimal(counted['free'])) if counted else (paid * factor, free * factor)
     # 2.5+0.5 of 15 = 45 tablets; 37.5/7.5 are accounting equivalents, not half tablets.
     split = bool(paid_base % 1 or free_base % 1)
     out.update(resolved=True, received_base_units=int(physical),
@@ -218,7 +225,7 @@ def decide(line, confirmation=None, *, validate_master=False):
                ledger_paid_units=int(physical) if split else int(paid_base),
                ledger_free_units=0 if split else int(free_base),
                financial_split_only=split, master_pack_equivalent=str(physical / master))
-    evidence.append(f"({paid} billed + {free} free) × {factor} = {int(physical)} {out['base_unit'].lower()}s")
+    evidence.append(f"Operator counted {int(physical)} {out['base_unit'].lower()}s; original invoice billing preserved" if counted else f"({paid} billed + {free} free) × {factor} = {int(physical)} {out['base_unit'].lower()}s")
     if split:
         evidence.append("Paid/free fractions are financial allocations; the ledger receives whole physical units")
     return out
@@ -300,6 +307,8 @@ def mrp_per_master_pack(line):
 
 def remember(db, purchase, line):
     stamp = (line.corrections or {}).get("_invoice_unit")
+    if stamp and stamp.get('operator_counts'):
+        return
     if not stamp or (line.receipt_decision or {}).get("scope") != stamp.get("scope"):
         return
     m = mapping(db, purchase, line)

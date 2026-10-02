@@ -45,7 +45,10 @@ def adjust(db, purchase, line, values, *, user=None):
             raise purchasing.PurchaseError('Editing an existing product packaging definition requires inventory edit permission')
         if inv.stock_on_hand(db,item_id) and (line.item.units_per_pack or 1)!=1:
             raise purchasing.PurchaseError('This product already holds individually counted stock. Correct its packaging at zero stock or select the proper size variant.')
-    changes = {**definition,'quantity':str(paid),'free':str(bonus)}
+    billed_paid,billed_free = rd.quantities(rd.effective(line))
+    if billed_paid+billed_free <= 0:
+        raise purchasing.PurchaseError('Correct the invoice billed quantity before adjusting received stock')
+    changes = {**definition}
     if item_id:
         changes['item_id']=item_id
     else:
@@ -55,6 +58,17 @@ def adjust(db, purchase, line, values, *, user=None):
         line.corrections={**(line.corrections or {}),'_physical_adjustment':dict(item_id=item_id,before=original,definition=definition)}
     rd.confirm(db,purchase,line,factor=int(n),mrp_basis='MASTER_PACK',
                reason=f'Operator counted {int(n)} {base.lower()}s per {pack.lower()} using the simple quantity adjustment',user=user)
+    if (paid,bonus)!=(billed_paid,billed_free):
+        # A count for this delivery is not a reusable supplier billing convention.
+        stamp={**line.corrections['_invoice_unit'],'operator_counts':dict(
+            paid=str(paid*int(n)),free=str(bonus*int(n)),
+            billed_paid=str(billed_paid),billed_free=str(billed_free))}
+        line.corrections={**line.corrections,'_invoice_unit':stamp}
+        purchasing.refresh_line(db,purchase,line)
+        purchasing._refresh_totals(purchase)
+        from app import audit
+        audit.record(db,action=audit.A_UPDATE,entity_type='purchase_line',entity_id=line.id,user=user,
+                     after={'physical_count':stamp['operator_counts']},details='Counted received stock; preserved invoice billing')
     return line
 
 def apply_at_post(db, line, *, user=None):
