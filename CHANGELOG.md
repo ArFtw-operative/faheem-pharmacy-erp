@@ -3,6 +3,33 @@
 Release notes for Faheem Pharmacy. Versions follow semantic versioning; every release
 lists its database migrations. Upgrades keep all business history (see docs/UPGRADES.md).
 
+## 1.8.0 — 2026-10-02
+
+- **Purchases:** receipt decisions and supplier unit verification are kept per line and learned per
+  supplier; intake is automated from reviewed supplier and packaging evidence. Fixed-width PDF invoices
+  are recovered in full and printed counts enforced. Unregistered-pharmacy purchases are supported and
+  GSTINs are informational only (no posting gate). Physical quantity adjustment counts received strips
+  without changing what the invoice billed; stock equivalents, form and base unit are shown per line.
+- **Purchases → Add line:** a line can be typed in full by hand ("Enter manually" in the product picker),
+  then created as a new product or matched later with F4.
+- **Purchase audit reports:** selected supplier invoices, browseable without date filters, with
+  complete exports; accounting charges kept concise; recorded receipt conversion shown.
+- **Inventory:** item and all-batch report replaces the detail strip; specifications and the supplier of
+  each batch are in the right-hand batch panel; equivalents shown.
+- **Stock adjustments:** product selection and dialog keys fixed; strip adjustment prefilled with the
+  resolved received quantity.
+- **POS:** the Customer field has its own search and list (no longer the item box); "#" in the item box
+  jumps to it.
+- **Keyboard:** the shortcuts window groups each category once, current screen first, with a fixed
+  header. Esc always closes the topmost pop-up, even when focus has left it.
+- **Workspace:** no clipping; overflow tabs are reachable with arrows and the "All tabs" list.
+- **Desktop → ERP Maintenance** now opens a menu: **Users** (reset 2FA / two-step sign-in, reset password,
+  unlock, enable / disable, change name — the list shows each user's 2FA state) and the optimisation tasks.
+  Resetting 2FA also unlocks the account. CLI: `faheem-erp menu maintenance`.
+
+**Migrations:** `c9e2a5b8d1f4` adds `purchase_items.receipt_decision` and
+`supplier_product_maps.receipt_conventions` (additive). **Fixtures:** `tests/fixtures/releases/1.8.0.db`.
+
 ## 1.7.0 — 2026-10-01
 
 - **Purchases:** delete unreceived drafts from the register or document (Alt+Delete, reassignable),
