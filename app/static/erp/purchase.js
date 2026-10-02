@@ -254,6 +254,7 @@ export function create(ctx, params, root) {
     const probs = [...g.problems, ...(g.missing_rate_lines ? [`${g.missing_rate_lines} line(s) have no GST %. How to fix: open the Needs review chip, select each line with a GST-missing note and press Enter to type the GST % from the invoice.`] : [])];
     modal({ title: `GST on ${doc.purchase.reference_no || "this purchase"}`, wide: true, submitLabel: "Close",
       body: `<p class="muted">${esc(g.mode_reason)}. Stock is costed ${g.cost_includes_gst ? "including" : "before"} GST.</p>
+        ${(g.registration_notes || []).map((note) => `<p class="muted">${esc(note)}</p>`).join("")}
         <table class="grid-lite"><thead><tr><th>GST %</th><th class="num">Lines</th><th class="num">Taxable</th><th class="num">CGST</th><th class="num">SGST</th><th class="num">IGST</th><th class="num">GST</th></tr></thead>
         <tbody>${rows}</tbody><tfoot><tr><th>Total</th><th></th><th></th><th></th><th></th><th></th><th class="num">₹${money(g.total)}</th></tr></tfoot></table>
         ${g.printed ? `<p>GST printed on the invoice: <b>₹${money(g.printed)}</b> ${Math.abs(Number(g.printed) - Number(g.total)) <= 1 ? '<span class="ok">— matches</span>' : '<span class="bad">— does not match</span>'}</p>` : '<p class="muted">The invoice file does not print a GST total, so it cannot be cross-checked.</p>'}

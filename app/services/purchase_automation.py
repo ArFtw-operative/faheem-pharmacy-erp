@@ -330,9 +330,6 @@ def assessment(db, purchase):
     blockers = []
     if not purchase.supplier_id:
         blockers.append({"code": "NO_SUPPLIER", "message": "Supplier identity is missing"})
-    seller = (purchase.charges or {}).get("_supplier_evidence") or {}
-    if seller.get("gstin") and purchase.supplier and purchase.supplier.gst_number and seller["gstin"].upper() != purchase.supplier.gst_number.upper():
-        blockers.append({"code": "SUPPLIER_CONFLICT", "message": "Printed supplier GSTIN differs from the selected supplier"})
     if not purchase.invoice_no:
         blockers.append({"code": "NO_INVOICE_NO", "message": "Supplier invoice number is missing"})
     if not purchase.invoice_date:

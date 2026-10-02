@@ -7,7 +7,9 @@ No schema migration is required.
 
 The pharmacy GSTIN is optional. An unregistered pharmacy leaves `gst_number`
 blank and sets `pharmacy_state_code` in Shop details for the supplier tax split.
-Supplier GSTIN and invoice tax validation still apply. A purchase/stock reset
+Missing, invalid or differing GSTINs are informational record-keeping notes for
+both pharmacy and supplier; they never prevent posting. Invoice tax arithmetic
+is still verified. A purchase/stock reset
 retains reviewed packaging facts, including contradictions, independently of
 the deleted documents; it does not retain invoice copies.
 
@@ -61,7 +63,7 @@ and readiness for automatic posting. Coverage is **not an accuracy measurement**
 ## Posting controls
 
 Automatic posting requires supplier, invoice number/date, batch and expiry data,
-resolved physical units, rate/MRP, verified tax inputs, valid configured GSTINs,
+resolved physical units, rate/MRP, verified tax inputs,
 line values within ₹0.02 of a supported printed basis, invoice tax within ₹0.02,
 and the invoice total within ₹0.01. Extraction problems, identity conflicts,
 unresolved packs, expired stock and duplicate invoices hold the whole document.

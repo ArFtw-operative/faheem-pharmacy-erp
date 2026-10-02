@@ -747,19 +747,20 @@ def gst_summary(db: Session, purchase: Purchase) -> dict:
         problems.append(f"The invoice prints total GST ₹{money(printed)}, the lines add up to ₹{money(total)} "
                         f"(difference ₹{money(printed - total)}). Per slab: {slabs}. How to fix: find the line(s) whose GST % differs from the "
                         "paper invoice (Needs review / GST warnings first) and correct them; a missing or extra line also shows here.")
-    # Unregistered pharmacies have no GSTIN. Validate a supplied registration,
-    # never demand one as a prerequisite for recording supplier purchases.
+    # Registration numbers are record-keeping metadata, never posting gates.
+    registration_notes = []
     ours = G.gstin_problem(pol.our_gstin) if pol.our_gstin else ""
     if ours:
-        problems.append(f"Pharmacy GSTIN {ours}. It decides CGST + SGST versus IGST. How to fix: "
-                        "python scripts/manage.py setting set gst_number <your 15-character GSTIN>.")
+        registration_notes.append(f"Pharmacy GSTIN {ours}. Recorded for reference; does not prevent posting.")
     theirs = G.gstin_problem(supplier_gstin)
     if theirs:
-        problems.append(f"Supplier GSTIN {theirs}. How to fix: Purchases → Suppliers, edit "
-                        f"{purchase.supplier.name if purchase.supplier else 'the supplier'} and enter the GSTIN printed on their invoice.")
+        registration_notes.append(f"Supplier GSTIN {theirs}. Recorded for reference; does not prevent posting.")
+    seller = (purchase.charges or {}).get('_supplier_evidence') or {}
+    if seller.get('gstin') and supplier_gstin and seller['gstin'].upper() != supplier_gstin.upper():
+        registration_notes.append('Printed supplier GSTIN differs from the saved record. Both values are retained; does not prevent posting.')
     return {"mode": mode, "mode_reason": why, "total": str(money(total)), "printed": str(printed) if printed is not None else None,
             "by_rate": [{k: (str(v) if isinstance(v, Decimal) else v) for k, v in r.items()} for r in G.by_rate(rows)],
-            "cost_includes_gst": pol.cost_includes_gst, "problems": problems,
+            "cost_includes_gst": pol.cost_includes_gst, "problems": problems, "registration_notes": registration_notes,
             "missing_rate_lines": sum(1 for l in purchase.items if l.status not in DONE and l.gst_rate is None and l.gst_source != "NONE")}
 
 
@@ -1265,8 +1266,6 @@ def save_supplier(db: Session, data: dict, *, supplier: Supplier | None = None, 
             raise PurchaseError("Credit days must be a whole number")
     if "active" in data:
         supplier.is_active = bool(data["active"])
-    if supplier.gst_number and not re.fullmatch(r"\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d]Z[A-Z\d]", supplier.gst_number.upper()):
-        raise PurchaseError("GSTIN must look like 29ABCDE1234F1Z5")
     supplier.gst_number = supplier.gst_number.upper()
     db.flush()
     audit.record(db, action=audit.A_CREATE if new else audit.A_UPDATE, entity_type="supplier", entity_id=supplier.code,

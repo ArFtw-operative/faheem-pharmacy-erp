@@ -234,8 +234,8 @@ def test_supplier_master_validation(db):
     assert s.code == f"SUP{s.id:04d}" and s.credit_days == 30
     with pytest.raises(PurchaseError, match="already exists"):
         supplier(db)
-    with pytest.raises(PurchaseError, match="GSTIN"):
-        purchasing.save_supplier(db, {"name": "Bad GST", "gst_number": "123"})
+    recorded = purchasing.save_supplier(db, {"name": "Partial GST record", "gst_number": "123"})
+    assert recorded.gst_number == "123"
 
 
 # --------------------------------------------------------------------------- API

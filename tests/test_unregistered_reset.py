@@ -1,4 +1,5 @@
 from datetime import date
+import pytest
 from sqlalchemy import select, text
 
 from app.models import Batch, InventoryMovement, Purchase, User, Item
@@ -22,14 +23,37 @@ def test_unregistered_pharmacy_can_autopost_using_its_state(db):
     assert not purchasing.gst_summary(db,p)['problems']
 
 
-def test_blank_pharmacy_gstin_does_not_hide_invalid_supplier_gstin(db):
+def test_supplier_registration_notes_do_not_become_posting_problems(db):
     settings.set_setting(db,'gst_number','')
     p=draft(db,',NEW TABLET,10S,B,May-2028,2,,10,20,20')
     p.supplier.gst_number='INVALID'
     problems=purchasing.gst_summary(db,p)['problems']
     assert not any('Pharmacy GSTIN' in s for s in problems)
-    assert any('Supplier GSTIN' in s for s in problems)
+    assert not problems
+    assert any('Supplier GSTIN' in s for s in purchasing.gst_summary(db,p)['registration_notes'])
     assert gst.supply_type('', '36AAPFU0939F1ZW', our_state='36')[0]=='INTRA'
+
+
+@pytest.mark.parametrize('store_gstin,seller_gstin', [('', ''), ('', '123'), ('INVALID', '27AAPFU0939F1ZX')])
+def test_registration_numbers_never_block_automatic_posting(db, store_gstin, seller_gstin):
+    sup=supplier(db)
+    sup.gst_number=seller_gstin
+    settings.set_setting(db,'gst_number',store_gstin)
+    enable(db,'post')
+    p=auto.import_file(db,'record-only.csv',zero_tax_csv('N,NEW TABLET,10S,B1,May-2028,2,,10,20,20'),
+                      supplier_id=sup.id,invoice_no='RECORD-ONLY',invoice_date=date(2026,9,1),
+                      supplier_total='20',user=db.scalar(select(User)))[0]
+    assert p.status=='POSTED'
+    assert not purchasing.gst_summary(db,p)['problems']
+    assert not auto.assessment(db,p)['document_blockers']
+
+
+def test_printed_and_saved_gstin_difference_is_informational(db):
+    enable(db)
+    p=draft(db,'N,NEW TABLET,10S,B1,May-2028,2,,10,20,20')
+    p.charges={**(p.charges or {}), '_supplier_evidence':{'gstin':'27AAPFU0939F1ZV'}}
+    assert not any(b['code']=='SUPPLIER_CONFLICT' for b in auto.assessment(db,p)['document_blockers'])
+    assert any('differs' in n for n in purchasing.gst_summary(db,p)['registration_notes'])
 
 
 def test_reset_clears_purchases_and_stock_but_preserves_catalogue_and_reviewed_knowledge(db):
