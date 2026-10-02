@@ -40,6 +40,7 @@ def get_profile(db: Session) -> dict[str, str]:
         "pharmacy_email",
         "pharmacy_website",
         "gst_number",
+        "pharmacy_state_code",
         "show_gst",
         "drug_license_number",
         "show_drug_license",

@@ -715,7 +715,7 @@ def _apply_gst(purchase: Purchase) -> None:
     if db is None:
         return
     pol = G.policy(db)
-    mode, _ = G.supply_type(pol.our_gstin, purchase.supplier.gst_number if purchase.supplier else "")
+    mode, _ = G.supply_type(pol.our_gstin, purchase.supplier.gst_number if purchase.supplier else "", our_state=pol.our_state)
     if not any(l.status == POSTED for l in purchase.items):   # fixed once stock has been received on it
         purchase.supply_type = mode
     factor = G.bill_discount_factor(purchase)
@@ -735,7 +735,7 @@ def gst_summary(db: Session, purchase: Purchase) -> dict:
 
     pol = G.policy(db)
     supplier_gstin = purchase.supplier.gst_number if purchase.supplier else ""
-    mode, why = G.supply_type(pol.our_gstin, supplier_gstin)
+    mode, why = G.supply_type(pol.our_gstin, supplier_gstin, our_state=pol.our_state)
     mode = purchase.supply_type or mode
     factor = G.bill_discount_factor(purchase)
     rows = [G.line_breakdown(l, factor, mode, _received_packs(l)) for l in purchase.items if l.status != CLOSED]
@@ -747,7 +747,9 @@ def gst_summary(db: Session, purchase: Purchase) -> dict:
         problems.append(f"The invoice prints total GST ₹{money(printed)}, the lines add up to ₹{money(total)} "
                         f"(difference ₹{money(printed - total)}). Per slab: {slabs}. How to fix: find the line(s) whose GST % differs from the "
                         "paper invoice (Needs review / GST warnings first) and correct them; a missing or extra line also shows here.")
-    ours = G.gstin_problem(pol.our_gstin)
+    # Unregistered pharmacies have no GSTIN. Validate a supplied registration,
+    # never demand one as a prerequisite for recording supplier purchases.
+    ours = G.gstin_problem(pol.our_gstin) if pol.our_gstin else ""
     if ours:
         problems.append(f"Pharmacy GSTIN {ours}. It decides CGST + SGST versus IGST. How to fix: "
                         "python scripts/manage.py setting set gst_number <your 15-character GSTIN>.")

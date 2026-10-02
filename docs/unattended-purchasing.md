@@ -5,6 +5,12 @@ It runs locally using invoice fields, the ERP master, the local reference catalo
 and reviewed supplier history. There are no model calls or supplier-name rules.
 No schema migration is required.
 
+The pharmacy GSTIN is optional. An unregistered pharmacy leaves `gst_number`
+blank and sets `pharmacy_state_code` in Shop details for the supplier tax split.
+Supplier GSTIN and invoice tax validation still apply. A purchase/stock reset
+retains reviewed packaging facts, including contradictions, independently of
+the deleted documents; it does not retain invoice copies.
+
 ## Configuration
 
 Use the existing settings command:

@@ -13,6 +13,7 @@ from collections import Counter
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
@@ -114,6 +115,37 @@ def _human_units(row):
                                               or "units_suggested" in c.get("_accepted", []))
 
 
+def preserve_reviewed_pack_knowledge(db, *, user=None):
+    """Retain verified conversion facts across an authorized purchase reset.
+
+    This stores no invoices, quantities, prices or customer data. Contrary
+    examples are retained too, so resetting documents cannot erase a conflict.
+    """
+    saved = json.loads(settings_service.get_setting(db, 'purchase_reviewed_pack_knowledge', '[]'))
+    facts = {r['source']:r for r in saved}
+    for row in db.scalars(select(PurchaseItem).join(Purchase).where(
+        Purchase.status.in_(("POSTED","PARTIAL")), PurchaseItem.status=='POSTED'
+    ).options(selectinload(PurchaseItem.purchase), selectinload(PurchaseItem.item))):
+        item, d = row.item, row.receipt_decision or {}
+        if not item or not row.purchase.supplier_id or not _human_units(row) or units.parse_pack(row.pack_size).kind != 'NESTED':
+            continue
+        if item.base_unit not in {'TABLET','CAPSULE'}:
+            continue
+        master = row.units_per_pack
+        if d.get('resolved') and Decimal(d.get('master_pack_equivalent') or '0') > 0:
+            master = Decimal(d['received_base_units'])/Decimal(d['master_pack_equivalent'])
+        factor = d.get('units_per_invoice_unit') if d.get('resolved') else row.units_per_pack
+        if not factor or master != item.units_per_pack:
+            continue
+        fact = dict(supplier_id=row.purchase.supplier_id, layout=layout(row.purchase), item_id=item.id,
+                    base=item.base_unit, master=item.units_per_pack, factor=factor,
+                    basis=d.get('mrp_basis','MASTER_PACK'), pack=row.pack_size)
+        fact['source'] = 'verified:' + hashlib.sha256(json.dumps(fact,sort_keys=True).encode()).hexdigest()[:16]
+        facts[fact['source']] = fact
+    settings_service.set_setting(db,'purchase_reviewed_pack_knowledge',json.dumps(list(facts.values())),user=user)
+    return len(facts)
+
+
 def receipt_evidence(db, purchase, line):
     pack = units.parse_pack(line.pack_size)
     if re.search(r"[a-z]", str(rd.effective(line).get("quantity", "")), re.I):
@@ -163,6 +195,24 @@ def receipt_evidence(db, purchase, line):
         votes.append(old)
         if line.item and item.id == line.item.id and _pack_key(old.pack_size) == _pack_key(line.pack_size):
             exact.append(old)
+    saved = json.loads(settings_service.get_setting(db, 'purchase_reviewed_pack_knowledge', '[]'))
+    live_ids = {r.item_id for r in votes}
+    for fact in saved:
+        if fact['supplier_id'] != purchase.supplier_id or sorted(tuple(c) for c in fact['layout']) != layout(purchase):
+            continue
+        item = db.get(Item, fact['item_id'])
+        if not item or item.deleted_at or item.units_per_pack != fact['master'] or item.base_unit != fact['base']:
+            continue
+        old_pack = units.parse_pack(fact['pack'])
+        if fact['factor'] != old_pack.units_per_pack or fact['basis'] != 'MASTER_PACK':
+            conflicts.append(fact['source'])
+            continue
+        saved_vote = SimpleNamespace(item_id=item.id, id=fact['source'])
+        if item.id not in live_ids:
+            votes.append(saved_vote)
+            live_ids.add(item.id)
+        if line.item and line.item.id == item.id and _pack_key(fact['pack']) == _pack_key(line.pack_size):
+            exact.append(saved_vote)
     if conflicts:
         return None
     # A repeat product may reuse its reviewed conversion. A new product needs

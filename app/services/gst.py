@@ -71,14 +71,14 @@ def state_of(gstin: str) -> str:
     return g[:2] if len(g) >= 2 and g[:2].isdigit() else ""
 
 
-def supply_type(our_gstin: str, supplier_gstin: str) -> tuple[str, str]:
+def supply_type(our_gstin: str, supplier_gstin: str, *, our_state: str = "") -> tuple[str, str]:
     """("INTRA" | "INTER", reason). Unknown states are treated as intra-state, and say so."""
-    ours, theirs = state_of(our_gstin), state_of(supplier_gstin)
+    ours, theirs = state_of(our_gstin) or (our_state if our_state in STATES else ""), state_of(supplier_gstin)
     if ours and theirs:
         if ours == theirs:
             return "INTRA", f"supplier and pharmacy both in {STATES.get(ours, ours)} → CGST + SGST"
         return "INTER", f"supplier in {STATES.get(theirs, theirs)}, pharmacy in {STATES.get(ours, ours)} → IGST"
-    missing = " and ".join(x for x, v in (("the pharmacy's GSTIN", ours), ("the supplier's GSTIN", theirs)) if not v)
+    missing = " and ".join(x for x, v in (("the pharmacy's state", ours), ("the supplier's GSTIN", theirs)) if not v)
     return "INTRA", f"assumed intra-state (CGST + SGST) because {missing} is not set"
 
 
@@ -100,6 +100,7 @@ class Policy:
     changed_on: date | None = None
     cost_includes_gst: bool = True
     our_gstin: str = ""
+    our_state: str = ""
 
     def valid_for(self, when: date | None) -> set[Decimal]:
         if self.changed_on and when and when < self.changed_on:
@@ -120,6 +121,7 @@ def policy(db: Session) -> Policy:
         changed_on=changed,
         cost_includes_gst=(get_setting(db, "purchase_cost_includes_gst", "true") or "true").lower() in ("1", "true", "yes", "on"),
         our_gstin=(get_setting(db, "gst_number", "") or "").strip().upper(),
+        our_state=(get_setting(db, "pharmacy_state_code", "") or "").strip(),
     )
 
 

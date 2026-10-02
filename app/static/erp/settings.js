@@ -239,10 +239,11 @@ function invoiceStore(ctx, el) {
         row("Pharmacy name", field("pharmacy_name", "Faheem Pharmacy"))
         + row("Address", `<textarea class="sf" data-k="address" rows="2" maxlength="300" style="width:420px;max-width:100%">${esc(v.fields.address || "")}</textarea>`)
         + row("Contact numbers", field("contact_numbers", "98xxxxxxxx / 98xxxxxxxx"))
-        + row("Email", field("pharmacy_email", "name@example.com")))}
+        + row("Email", field("pharmacy_email", "name@example.com"))
+        + row("Pharmacy state code", field("pharmacy_state_code", "Two-digit state code; GSTIN is optional", 320)))}
 
       ${sec("Optional fields", "shown only when switched on",
-        row("GSTIN", `<label class="es-chk"><input type="checkbox" class="ss" data-k="show_gst" ${sw.show_gst ? "checked" : ""}> Show</label>${field("gst_number", "15-character GSTIN", 220)}`)
+        row("GSTIN", `<label class="es-chk"><input type="checkbox" class="ss" data-k="show_gst" ${sw.show_gst ? "checked" : ""}> Show</label>${field("gst_number", "Optional — leave blank if unregistered", 280)}`)
         + row("Drug licence", `<label class="es-chk"><input type="checkbox" class="ss" data-k="show_drug_license" ${sw.show_drug_license ? "checked" : ""}> Show</label>${field("drug_license_number", "e.g. 20B/21B numbers", 300)}`))}
 
       ${sec("Invoice text", "",

@@ -18,7 +18,7 @@ ADMIN = Depends(require_permission("settings.manage"))
 CLASSIC = {"id": "classic", "name": "Classic", "description": "The plain invoice used for printing", "stamp": False}
 # editable text fields → settings keys (the shop profile is shared with the printed invoice)
 FIELDS = {"pharmacy_name": 120, "address": 300, "contact_numbers": 120, "pharmacy_email": 120,
-          "gst_number": 20, "drug_license_number": 120,
+          "gst_number": 20, "pharmacy_state_code": 2, "drug_license_number": 120,
           "invoice_store_thanks": 60, "invoice_store_note": 120, "invoice_store_closing": 120}
 SWITCHES = ("show_gst", "show_drug_license")
 
@@ -64,6 +64,10 @@ async def save_store(request: Request, db: Session = Depends(get_db), user: User
             values[key] = " ".join(str(body["fields"][key] or "").split())[:limit] if key != "address" else str(body["fields"][key] or "").strip()[:limit]
     if values.get("pharmacy_name", "x") == "":
         raise HTTPException(400, "The pharmacy name cannot be empty")
+    if values.get("pharmacy_state_code"):
+        from app.services.gst import STATES
+        if values["pharmacy_state_code"] not in STATES:
+            raise HTTPException(400, "Enter a valid two-digit pharmacy state code")
     for key in SWITCHES:
         if key in body.get("switches", {}):
             values[key] = "1" if body["switches"][key] else "0"

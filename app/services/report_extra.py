@@ -537,7 +537,7 @@ def purchase_gst(db, p, start, end, tz):
     facts = []
     for line, doc in db.execute(q.order_by(Purchase.purchase_date, Purchase.id, PurchaseItem.line_no)):
         sup = doc.supplier
-        mode = doc.supply_type or G.supply_type(pol.our_gstin, sup.gst_number if sup else '')[0]
+        mode = doc.supply_type or G.supply_type(pol.our_gstin, sup.gst_number if sup else '', our_state=pol.our_state)[0]
         if line.gst_amount is not None:
             b = {'taxable': line.taxable_value, 'gst': line.gst_amount, 'cgst': line.cgst_amount or Decimal(0),
                  'sgst': line.sgst_amount or Decimal(0), 'igst': line.igst_amount or Decimal(0), 'landed': line.landed_total,
@@ -574,7 +574,7 @@ def purchase_gst(db, p, start, end, tz):
         gst = money(value - taxable) if incl else money(value * r / 100)
         doc = db.get(Purchase, ret.purchase_id) if ret.purchase_id else None
         sup = ret.supplier
-        mode = (doc.supply_type if doc else '') or G.supply_type(pol.our_gstin, sup.gst_number if sup else '')[0]
+        mode = (doc.supply_type if doc else '') or G.supply_type(pol.our_gstin, sup.gst_number if sup else '', our_state=pol.our_state)[0]
         cgst, sgst, igst = G.split(gst, mode)
         facts.append(dict(day=ret.return_date, reference=ret.reference_no or '', invoice=(doc.invoice_no if doc else '') + ' (return)',
                           supplier=sup.name if sup else '', gstin=sup.gst_number if sup else '', item=ret.product_name,
