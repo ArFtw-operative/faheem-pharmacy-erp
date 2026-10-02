@@ -336,8 +336,8 @@ export function create(ctx, params, root) {
     const counted = r.corrections?._invoice_unit?.operator_counts;
     const count = r.units_per_pack || r.item?.upp || 1;
     const editor = physicalEditor({ form: r.dosage_form || '', base: r.item?.base_unit || r.base_unit,
-      count, quantity: counted ? Number(counted.paid) / count : r.receipt?.paid ?? r.qty,
-      free: counted ? Number(counted.free) / count : r.receipt?.free ?? r.free ?? 0 });
+      count, quantity: counted ? Number(counted.paid) / count : r.receipt?.resolved ? Number(r.receipt.paid_base_equivalent) / count : r.receipt?.paid ?? r.qty,
+      free: counted ? Number(counted.free) / count : r.receipt?.resolved ? Number(r.receipt.free_base_equivalent) / count : r.receipt?.free ?? r.free ?? 0 });
     const body = h('<div><p>Count the stock you receive. The invoice billed quantity, rate and amount stay unchanged. MRP is per retail strip/container. Packaging corrections are applied when this purchase is posted.</p></div>');
     body.append(editor);
     const out = await modal({ title: `Adjust line ${r.line_no} — ${r.name}`, body, submitLabel: 'Save adjustment',
