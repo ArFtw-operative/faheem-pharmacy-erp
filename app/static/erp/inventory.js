@@ -199,6 +199,7 @@ export function create(ctx, params, root) {
     store.set("inv:filters", F);
     try {
       const d = await api(query(0), { signal: ctrl.signal });
+      if (!d) return; // A newer search cancelled this request.
       total = d.total;
       products.setRows(d.rows, { keep });
       $(".f-count", root).textContent = `${total} product${total === 1 ? "" : "s"}`;
@@ -232,6 +233,7 @@ export function create(ctx, params, root) {
     dctrl = new AbortController();
     try {
       const d = await api("/api/erp/inventory/" + id, { signal: dctrl.signal });
+      if (!d) return; // Selection moved while this detail request was loading.
       details.set(id, d);
       if (products.selected && products.selected.id === id) applyDetail(d);
     } catch (err) { if (err.name !== "AbortError") ctx.status(err.message, "error"); }
