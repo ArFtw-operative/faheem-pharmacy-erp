@@ -34,9 +34,8 @@ export function create(ctx, params, root) {
     <div class="split">
       <div class="pane products"><div class="pane-h">PRODUCTS</div></div>
       <div class="divider" title="Drag to resize"></div>
-      <div class="pane batches"><div class="pane-h">BATCHES <span class="b-title muted"></span>${CAN["purchase.view"] && CAN["inventory.edit"] ? ' <button type="button" class="btn b-cost">Verify cost</button>' : ""}</div></div>
+      <div class="pane batches"><section class="inv-detail" aria-label="Product specifications"></section><div class="pane-h">BATCHES <span class="b-title muted"></span>${CAN["purchase.view"] && CAN["inventory.edit"] ? ' <button type="button" class="btn b-cost">Verify cost</button>' : ""}</div></div>
     </div>
-    <div class="inv-detail"></div>
   </div>`;
   for (const k of ["category", "form", "loose", "stock", "expiry", "supplier"]) $(".f-" + k, root).value = F[k] || "";
 
@@ -254,25 +253,16 @@ export function create(ctx, params, root) {
     const d = detail, el = $(".inv-detail", root);
     if (!d) { el.innerHTML = '<span class="muted">Select a product · see the shortcut bar for product actions</span>'; return; }
     const p = d.packaging;
-    const price = value => value === undefined || value === null || value === '' ? '—' : `₹${money(value)}`;
-    const fact = (label,value) => `<div><span class="muted">${esc(label)}</span><br><b>${esc(value)}</b></div>`;
+    const fact = (label,value) => `<div><span class="muted">${esc(label)}</span><b>${esc(value)}</b></div>`;
     const allBatches = d.batches || [];
-    const batchRows = allBatches.map(b => `<tr${b.id === batches.selected?.id ? ' class="inv-report-selected"' : ''}>
-      <td class="mono">${esc(b.batch_no || '—')}</td><td>${esc(b.expiry ? fmtExp(b.expiry) : 'Not recorded')}</td>
-      <td>${b.stock} ${esc(unitName(p.base_unit,b.stock))}</td><td>${esc(b.equivalent || '—')}</td>
-      <td>${esc(price(b.pack_mrp))}</td>${CAN['purchase.view'] ? `<td>${esc(price(b.purchase_rate))}</td>` : ''}
-      <td>${esc(b.supplier || 'Not recorded')}</td><td>${esc(b.invoice || b.purchase_ref || '—')}</td>
-      <td>${esc(b.received ? fmtDateTime(b.received) : '—')}</td><td>${esc(b.status || '—')}</td></tr>`).join('');
     el.innerHTML = `<div class="inv-report-title"><b>${esc(d.name)}</b><span class="mono muted">${esc(d.code)}</span>
       <span class="muted">${esc([d.category_name,title(d.form),d.manufacturer,d.strength].filter(Boolean).join(' · '))}</span></div>
-      <div class="inv-report-facts">${fact('Current stock',`${d.stock} ${unitName(p.base_unit,d.stock)}`)}
+      <div class="inv-report-facts">${fact('Form',title(d.form) || '—')}${fact('Base unit',title(p.base_unit))}${fact('Manufacturer',d.manufacturer || '—')}
+      ${fact('Current stock',`${d.stock} ${unitName(p.base_unit,d.stock)}`)}
       ${fact('Equivalent',d.equivalent || '—')}${fact('Available for sale',`${d.sellable} ${unitName(p.base_unit,d.sellable)}`)}
       ${fact('Packaging',p.pack_label || 'Not confirmed')}${p.content ? fact('Content',p.content) : ''}
       ${fact('Rack',d.rack || '—')}${fact('Batches',`${allBatches.length} total · ${allBatches.filter(b => b.stock > 0).length} with stock`)}</div>
-      ${d.generic ? `<p class="hint">${esc(d.generic)}</p>` : ''}
-      <div class="inv-report-batches"><table aria-label="Item batch report"><thead><tr>
-      <th>Batch</th><th>Expiry</th><th>Stock</th><th>Equivalent</th><th>MRP / pack</th>${CAN['purchase.view'] ? '<th>Rate / pack</th>' : ''}
-      <th>Supplier</th><th>Invoice</th><th>Received</th><th>Status</th></tr></thead><tbody>${batchRows || `<tr><td colspan="${CAN['purchase.view'] ? 10 : 9}" class="muted">No batches recorded.</td></tr>`}</tbody></table></div>`;
+      ${d.generic ? `<p class="hint"><b>Composition</b> ${esc(d.generic)}</p>` : ''}`;
   }
   async function refresh(id) {
     details.delete(id);

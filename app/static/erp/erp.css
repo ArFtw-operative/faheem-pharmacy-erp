@@ -191,20 +191,18 @@ td.warn { color: var(--warn); background: var(--warn-bg); }
 .last-bill { font-size: 12px; padding: 6px; background: var(--accent-2); border: 1px solid #b6dcc6; border-radius: var(--r); }
 .last-bill .change { color: var(--accent); font-size: 14px; }
 .pos-detail, .inv-detail { display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 6px 10px; border-top: 1px solid var(--line); background: var(--head); font-size: 12.5px; min-height: 32px; }
-.inv-detail { display: block; max-height: 38vh; overflow: auto; }
+.inv-detail { display: block; max-height: 42vh; overflow: auto; background: #fff; border-top: 0; border-bottom: 1px solid var(--line); }
 .inv-report-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; padding-bottom: 7px; }
-.inv-report-facts { display: flex; flex-wrap: wrap; gap: 6px 28px; padding-bottom: 8px; }
-.inv-report-batches { overflow: auto; }
-.inv-report-batches table { border-collapse: collapse; width: 100%; white-space: nowrap; font-size: 12px; }
-.inv-report-batches th, .inv-report-batches td { padding: 5px 9px; border-bottom: 1px solid var(--line); text-align: left; }
-.inv-report-batches th { background: var(--head); font-weight: 600; }
-.inv-report-selected { background: var(--accent-2); }
+.inv-report-facts { display: grid; gap: 0; padding-bottom: 4px; }
+.inv-report-facts > div { display: grid; grid-template-columns: 115px 1fr; gap: 10px; padding: 4px 0; border-bottom: 1px solid var(--line); }
 
 /* ---------------------------------------------------------------- inventory */
 .inv, .ledger { display: grid; grid-template-rows: auto 1fr auto; height: 100%; min-height: 0; }
+.inv { grid-template-rows: auto 1fr; }
 .ledger { grid-template-rows: auto 1fr; }
 .split { display: grid; min-height: 0; }
 .pane { display: grid; grid-template-rows: 24px 1fr; min-height: 0; min-width: 0; }
+.inv .pane.batches { grid-template-rows: auto 24px minmax(0, 1fr); }
 .pane-h { padding: 4px 8px; font-size: 11px; font-weight: 700; letter-spacing: .06em; color: var(--muted); background: #e9edef; border-bottom: 1px solid var(--line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .divider { cursor: col-resize; background: #dfe4e6; border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
 .divider:hover { background: #c7d0d3; }
