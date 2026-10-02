@@ -163,3 +163,32 @@ def test_changing_billed_quantity_invalidates_delivery_count(db):
     purchasing.correct(db,p,p.items[0],{'quantity':'3'})
     assert not p.items[0].receipt_decision['resolved']
     assert any(i['code']=='physical_count_stale' for i in p.items[0].issues)
+
+
+@pytest.mark.parametrize('form,count,quantity,free,base,equivalent',[
+    ('TABLET',15,'2.5','0.5','TABLET','3 strips'),
+    ('TABLET',30,'2','0','TABLET','2 strips'),
+    ('CAPSULE',10,'1.5','0','CAPSULE','1 strip + 5 capsules'),
+    ('SYRUP',1,'2.5','0.5','BOTTLE',''),
+    ('CREAM',1,'2','0','TUBE',''),
+])
+def test_purchase_columns_use_each_lines_physical_definition(db,form,count,quantity,free,base,equivalent):
+    from app.routers.purchases import _line_view
+    enable(db)
+    p=draft(db,f',NEW BRAND,,B,May-2028,{quantity},{free},10,20,{float(quantity)*10}')
+    physical.adjust(db,p,p.items[0],dict(form=form,units_per_pack=str(count),quantity=quantity,free=free))
+    view=_line_view(p.items[0])['physical']
+    assert view['form']==form and view['base_unit']==base
+    assert view['received']==int((float(quantity)+float(free))*count)
+    assert view['equivalent']==equivalent
+
+
+def test_purchase_columns_show_staged_definition_before_master_changes(db):
+    from app.routers.purchases import _line_view
+    enable(db)
+    item=inv.create_item(db,name='EXAMPLE BRAND',pack_size='15',base_unit='PACK',pack_unit='PACK',units_per_pack=1)
+    p=draft(db,',EXAMPLE BRAND,15,B,May-2028,2,,10,20,20')
+    physical.adjust(db,p,p.items[0],values())
+    assert item.base_unit=='PACK'
+    view=_line_view(p.items[0])['physical']
+    assert view['base_unit']=='TABLET' and view['equivalent']=='2 strips'

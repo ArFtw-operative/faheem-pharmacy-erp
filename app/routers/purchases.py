@@ -83,6 +83,16 @@ def _header(p: Purchase) -> dict:
 
 def _line_view(l: PurchaseItem, gst_ctx: tuple | None = None) -> dict:
     it = l.item
+    from app.services import receipt_decision, packaging_service, units
+    physical = receipt_decision.definition(l)
+    staged = (l.corrections or {}).get('_physical_adjustment')
+    form = physical['dosage_form'] or (physical['base_unit'] if staged else packaging_service.detect_form(
+        it if it else Item(name=l.product_name, generic_name='', dosage_form='')))
+    receipt = l.receipt_decision or {}
+    received = receipt.get('received_base_units') if receipt.get('resolved') else None
+    physical_view = {**physical, 'form': form, 'received': received,
+        'equivalent': units.describe_stock(received, physical['units_per_pack'], physical['base_unit'], physical['pack_unit'])
+            if received is not None and (physical['units_per_pack'] or 1) > 1 else ''}
     view = {
         "id": l.id, "line_no": l.line_no, "status": l.status, "name": l.product_name,
         "supplier_code": l.supplier_code, "batch": l.batch_no, "expiry": _iso(l.expiry_date), "expiry_raw": l.expiry_raw,
@@ -95,6 +105,7 @@ def _line_view(l: PurchaseItem, gst_ctx: tuple | None = None) -> dict:
         "dosage_form": l.dosage_form, "base_unit": l.base_unit, "pack_unit": l.pack_unit, "units_per_pack": l.units_per_pack,
         "raw": l.raw or {}, "corrections": {k: v for k, v in (l.corrections or {}).items()},
         "receipt": l.receipt_decision or {},
+        "physical": physical_view,
         "issues": l.issues or [], "batch_id": l.batch_id,
         # GST snapshot: taxable after bill discount, tax split, landed value and rate per pack incl. GST
         "taxable": _s(l.taxable_value), "gst_amount": _s(l.gst_amount), "cgst": _s(l.cgst_amount), "sgst": _s(l.sgst_amount),
