@@ -114,14 +114,14 @@ export function create(ctx, params, root) {
     batches: [...batches.columns, ...extraPrices.filter(c => c.key !== "pack_mrp"), ...provenance]};
   const order = {
     products: ["code", "name", "upp", "purchase_rate", "pack_mrp", "stock", "equivalent", "form", "base_unit", "loose", "reorder", "status", "rack", "unit_purchase_rate", "purchase_invoice"],
-    batches: ["batch_no", "expiry", "pack_mrp", "purchase_rate", "stock", "unit_mrp", "equivalent", "status", "supplier", "received", "invoice", "unit_purchase_rate", "purchase_invoice"],
+    batches: ["batch_no", "supplier", "stock", "expiry", "pack_mrp", "purchase_rate", "unit_mrp", "equivalent", "status", "received", "invoice", "unit_purchase_rate", "purchase_invoice"],
   };
   for (const p of Object.keys(choices)) choices[p].sort((a, b) => order[p].indexOf(a.key) - order[p].indexOf(b.key));
   const grids = {products, batches};
   const columnKey = p => `inventory-columns:${BOOT.user?.username}:${p}`;
   function chosenColumns(p) {
     const saved = store.get(columnKey(p), null);
-    const picked = choices[p].filter(c => Array.isArray(saved) ? saved.includes(c.key) : c.default !== false);
+    const picked = choices[p].filter(c => Array.isArray(saved) ? saved.includes(c.key) || (p === 'batches' && c.key === 'supplier') : c.default !== false);
     return picked.length ? picked : choices[p].filter(c => c.default !== false);
   }
   for (const p of Object.keys(grids)) grids[p].setColumns(chosenColumns(p));
