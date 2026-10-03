@@ -14,6 +14,7 @@ from sqlalchemy import func, or_, select
 
 from app.models import (FOLLOWUP_REASONS, Batch, Customer, CustomerFollowUp, Item, Sale, SaleItem, SaleReturn, SaleReturnItem,
                         Supplier, User)
+from app.services import units
 from app.utils import money, to_decimal
 
 
@@ -199,7 +200,7 @@ def non_moving(db, p, start, end, tz, names):
                          mrp=money(b.mrp), last_sold=_day(when, tz) if when else 'Never', days_idle=idle if idle is not None else '',
                          expiry=b.expiry_date.strftime('%b-%Y') if b.expiry_date else '',
                          cost_value=money(to_decimal(b.unit_cost) * b.quantity) if to_decimal(b.unit_cost) > 0 else None,
-                         mrp_value=money(to_decimal(b.mrp) * b.quantity / upp)))
+                         mrp_value=units.line_amount(b.mrp, upp, b.quantity)))
     rows.sort(key=lambda r: (r['last_sold'] != 'Never', -(r['days_idle'] or 10 ** 6) if r['days_idle'] != '' else 0, r['item']))
     note = (f'Non-moving: stock on hand with no sale in the {days} days up to {to_day:%d-%b-%Y}. Returned or voided quantities are '
             'not sales activity. Quantities are in each product’s base unit.')

@@ -664,3 +664,7 @@ button.chip.clear-sel { color: var(--muted); }
 .wa-save { flex-direction: row !important; align-items: center; gap: 6px !important; color: var(--text) !important; }
 .wa-save input { height: auto; }
 .wa-ask { width: 380px; }
+.cat-pick { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.cat-pick .chip { font-size: 13px; padding: 4px 10px; }
+.cat-pick .chip.on { border-color: var(--accent); color: var(--accent); }
+.cat-pick .chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

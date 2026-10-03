@@ -12,7 +12,7 @@ import * as keys from "erp/keys";
 import { createStudio } from "erp/studio";
 import { followUpPopover } from "erp/followup";
 import { WA_ICON, askPhone, normalizePhone, prettyPhone, sendInvoice, waStatus } from "erp/whatsapp";
-import { $, $$, ApiError, api, daysUntil, debounce, describe, esc, fmtExp, fmtExpShort, h, money, num, parseQty, r2, rupees, uid, unitName } from "erp/core";
+import { $, $$, ApiError, api, daysUntil, debounce, describe, esc, lineAmount, fmtExp, fmtExpShort, h, money, num, parseQty, r2, rupees, uid, unitName } from "erp/core";
 
 // Bill numbers are slots among the POS tabs that are open right now: one tab is
 // always Bill 1, a second Bill 2, and closing a tab frees its number again.
@@ -195,7 +195,7 @@ export function create(ctx, params, root, saved) {
     for (const b of pool(l)) {
       if (need <= 0) break;
       const take = Math.min(b.stock, need);
-      if (take > 0) { out.push({ b, qty: take, amount: r2(num(b.pack_mrp) * take / (b.upp || upp(l))) }); need -= take; }
+      if (take > 0) { out.push({ b, qty: take, amount: lineAmount(b.pack_mrp, b.upp || upp(l), take) }); need -= take; }
     }
     return out;
   }

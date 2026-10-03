@@ -396,9 +396,9 @@ def _normalise(db: Session, purchase: Purchase, line: PurchaseItem) -> list[dict
             _issue(issues, "qty_fraction", "quantity", "review",
                    f"“{qraw}{'+' + fraw if fraw else ''}” = {_n(received)} packs received — half packs can only be stocked as loose units: "
                    "confirm how many units one pack holds, or correct the quantity from the invoice")
-        elif (received * upp) % 1 != 0:
+        elif units.base_quantity(received, upp) % 1 != 0:
             _issue(issues, "qty_fraction", "quantity", "review",
-                   f"“{qraw}{'+' + fraw if fraw else ''}” = {_n(received)} packs = {_n(received * upp)} units — not a whole number of units; "
+                   f"“{qraw}{'+' + fraw if fraw else ''}” = {_n(received)} packs = {_n(units.base_quantity(received, upp))} units — not a whole number of units; "
                    "correct the quantity from the invoice")
     paid = paid_x
     if received <= 0:
@@ -460,7 +460,7 @@ def _normalise(db: Session, purchase: Purchase, line: PurchaseItem) -> list[dict
     line.line_total = taxable if rate is not None else (money(amount) if amount is not None else Decimal("0"))
     if scheme_split and rate is not None and received > 0 and not issues_has(issues, "qty_fraction"):
         # the value billed covers everything received: the cost per pack is spread over all of it
-        what = f"{_n(received)} packs" if received % 1 == 0 else f"{_n(received)} packs = {_n(received * upp)} units"
+        what = f"{_n(received)} packs" if received % 1 == 0 else f"{_n(received)} packs = {_n(units.base_quantity(received, upp))} units"
         _issue(issues, "scheme_split", "quantity", "info",
                f"Scheme: {_n(paid_x)} billed + {_n(free_x)} free = {what} received · billed ₹{money(taxable)} before GST "
                f"= ₹{money(taxable / received)} per pack (invoice rate ₹{money(rate)})")
@@ -1144,7 +1144,7 @@ def post(db: Session, purchase: Purchase, *, user: User | None = None, accept_di
             purchase.reference_no = reference
             complete = all(l.status in DONE for l in purchase.items)
             purchase.status = "POSTED" if complete else "PARTIAL"
-            if first:
+            if first or purchase.posted_at is None:         # first receipt, or again after a roll back
                 purchase.posted_at, purchase.posted_by = utcnow(), user.id if user else None
                 purchase.purchase_date = purchase.posted_at
             _refresh_totals(purchase)
@@ -1161,6 +1161,146 @@ def post(db: Session, purchase: Purchase, *, user: User | None = None, accept_di
                          + (f", {remaining} still open" if remaining else f" — complete, ₹{purchase.total}")
                          + (f", difference ₹{info['difference']} acknowledged" if accept_difference and differs else ""))
     return purchase
+
+
+def rollback(db: Session, purchase: Purchase, *, reason: str, line_ids: list[int] | None = None,
+             user: User | None = None) -> Purchase:
+    """Take posted lines back out of stock and return them to review.
+
+    Every receipt movement of those lines is reversed with a linked RECEIPT_REVERSAL
+    (the ledger is never edited), the lines become open again with all their evidence
+    and corrections, and the purchase is a draft again once no line remains received.
+    All or nothing: if any of the stock was already sold, returned or adjusted, nothing
+    changes and the message says which line — that stock needs a purchase return instead.
+    """
+    from app.models import InventoryMovement
+
+    db.flush()
+    db.execute(select(Purchase).where(Purchase.id == purchase.id).with_for_update()).scalar_one()
+    db.refresh(purchase)
+    if purchase.status not in ("POSTED", "PARTIAL"):
+        raise PurchaseError("Only a posted purchase can be rolled back to draft", "NOT_POSTED")
+    if len((reason or "").strip()) < 5:
+        raise PurchaseError("Give the reason for rolling back (at least five characters)")
+    posted = [l for l in purchase.items if l.status == POSTED]
+    if line_ids is None:
+        target = posted
+    else:
+        wanted = {int(i) for i in line_ids}
+        target = [l for l in purchase.items if l.id in wanted]
+        if len(target) != len(wanted):
+            raise PurchaseError("Some selected lines are not on this purchase", "BAD_LINES")
+        not_posted = [l.line_no for l in target if l.status != POSTED]
+        if not_posted:
+            raise PurchaseError(f"Line(s) {', '.join(map(str, not_posted))} are not posted", "NOT_POSTED")
+    if not target:
+        raise PurchaseError("There are no posted lines to roll back", "EMPTY")
+    returned = db.scalars(select(PurchaseReturn).where(PurchaseReturn.purchase_item_id.in_([l.id for l in target]))).all()
+    if returned:
+        lines = sorted({l.line_no for l in target if any(r.purchase_item_id == l.id for r in returned)})
+        raise PurchaseError(f"Line(s) {', '.join(map(str, lines))} already have a purchase return; roll back is not possible",
+                            "HAS_RETURN")
+    # base units each target line put into each batch (several lines may share one batch)
+    need: dict[int, int] = {}
+    for line in target:
+        if not line.batch_id:
+            raise PurchaseError(f"Line {line.line_no} has no received batch recorded; it cannot be rolled back", "NO_BATCH")
+        units_in = (line.receipt_decision or {}).get("received_base_units")
+        if units_in is None:
+            sharing = [l for l in posted if l.batch_id == line.batch_id]
+            if len(sharing) != 1:
+                raise PurchaseError(f"Line {line.line_no}: the received quantity is not recorded; it cannot be rolled back", "UNKNOWN_QTY")
+            units_in = -1                     # the whole receipt of this batch on this purchase
+        need[line.batch_id] = -1 if units_in == -1 else need.get(line.batch_id, 0) + int(units_in)
+    moves = list(db.scalars(select(InventoryMovement).where(
+        InventoryMovement.reference_type == "PURCHASE", InventoryMovement.reference_id == purchase.id,
+        InventoryMovement.movement_type.in_(("PURCHASE_RECEIPT", "FREE_STOCK")),
+        InventoryMovement.batch_id.in_(list(need))).order_by(InventoryMovement.id)))
+    stamp = {"by": _actor(user), "at": utcnow().isoformat(timespec="seconds"), "reason": reason.strip()[:300],
+             "reference": purchase.reference_no}
+    label = f"Purchase {purchase.reference_no} rolled back to draft: {reason.strip()[:200]}"
+    try:
+        with db.begin_nested():
+            for batch_id, wanted_units in need.items():
+                left = None if wanted_units == -1 else wanted_units
+                for move in (m for m in moves if m.batch_id == batch_id):
+                    open_qty = abs(move.quantity) - stock_ledger.reversed_quantity(db, move)
+                    take = open_qty if left is None else min(open_qty, left)
+                    if take <= 0:
+                        continue
+                    stock_ledger.reverse(db, move, quantity=take, movement_type="RECEIPT_REVERSAL", reason=label, user=user)
+                    if left is not None:
+                        left -= take
+                        if not left:
+                            break
+                if left:
+                    line_no = next(l.line_no for l in target if l.batch_id == batch_id)
+                    raise PurchaseError(f"Line {line_no}: the ledger holds less received stock than the line records; "
+                                        "it cannot be rolled back", "LEDGER_MISMATCH")
+            for line in target:
+                line.status, line.batch_id = REVIEW, None
+                if line.match_method == "NEW_PRODUCT":
+                    line.new_product, line.match_method = False, "MANUAL"   # keep the product the receipt created
+                line.corrections = {**(line.corrections or {}), "_rolled_back": stamp}
+            if not any(l.status == POSTED for l in purchase.items):
+                purchase.status = "DRAFT"
+                purchase.posted_at = purchase.posted_by = None
+                for line in purchase.items:
+                    if line.status == CLOSED:       # closed as not received: open again with the rest
+                        line.corrections = {k: v for k, v in (line.corrections or {}).items() if k != "_closed"}
+                        line.status = REVIEW
+            else:
+                purchase.status = "PARTIAL"
+            for line in purchase.items:
+                refresh_line(db, purchase, line)
+            _refresh_totals(purchase)
+            db.flush()
+    except stock_ledger.StockError as exc:
+        line_no = next((l.line_no for l in target if l.item and l.item.name in str(exc)), None)
+        raise PurchaseError((f"Line {line_no}: " if line_no else "") + f"{exc} The stock was already sold, returned or "
+                            "adjusted, so this receipt cannot be rolled back; use a purchase return instead.", "STOCK_USED")
+    audit.record(db, action=audit.A_UPDATE, entity_type="purchase", entity_id=purchase.reference_no or purchase.id, user=user,
+                 after={"rolled_back_lines": [l.line_no for l in target], "status": purchase.status, "reason": reason.strip()},
+                 details=f"Purchase {purchase.reference_no}: {len(target)} line(s) taken out of stock and returned to review — {reason.strip()}")
+    return purchase
+
+
+def set_category(db: Session, purchase: Purchase, line_ids: list[int], category: str, *,
+                 user: User | None = None) -> dict:
+    """Change only the category of the selected lines' products (one bill may hold FMCG,
+    OTC and PHARMA items). A matched product changes in the product master; a product
+    still to be created takes the category when it is created. Stock is not touched, so
+    this works on received lines too."""
+    from app.permissions import has_permission
+    from app.services import category_service, inventory_service
+
+    code = category_service.code_for(category)
+    if not code or code not in set(category_service.names(db)) | set(category_service.DEFAULTS):
+        raise PurchaseError("Choose a category from the list (Masters → Categories adds new ones)")
+    code = category_service.ensure(db, code, user=user)
+    by_id = {l.id: l for l in purchase.items}
+    wanted = [int(i) for i in line_ids or []]
+    if not wanted or any(i not in by_id for i in wanted):
+        raise PurchaseError("Select lines on this purchase", "BAD_LINES")
+    lines = [by_id[i] for i in wanted]
+    items = {l.item.id: l.item for l in lines if l.item is not None}
+    if any(i.category != code for i in items.values()) and user is not None and not has_permission(user, "inventory.edit"):
+        raise PurchaseError("Changing an existing product's category needs the inventory edit right")
+    products = 0
+    for item in items.values():
+        if item.category != code:
+            inventory_service.update_item(db, item, category=code, user=user)
+            products += 1
+    changed = 0
+    for line in lines:
+        if line.category != code:
+            line.category = code
+            changed += 1
+    db.flush()
+    audit.record(db, action=audit.A_UPDATE, entity_type="purchase", entity_id=purchase.reference_no or purchase.id, user=user,
+                 after={"lines": [l.line_no for l in lines], "category": code, "products": sorted(items)},
+                 details=f"Category set to {code} on {len(lines)} line(s), {products} product(s) updated")
+    return {"lines": len(lines), "changed": changed, "products": products, "category": code}
 
 
 def close_remaining(db: Session, purchase: Purchase, *, reason: str, user: User | None = None) -> Purchase:

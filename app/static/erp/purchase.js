@@ -1,5 +1,5 @@
 import * as keys from "erp/keys";
-import { physicalEditor, equivalent } from 'erp/physical-units';
+import { physicalEditor } from 'erp/physical-units';
 // Purchase document — one supplier invoice, reviewed line by line before it
 // reaches stock. Every cell shows the corrected value; the supplier's original
 // stays visible in the side panel (and in the audit trail). Nothing is posted
@@ -28,6 +28,7 @@ const FIELDS = [
   ["hsn", "HSN"], ["manufacturer", "Manufacturer"],
 ];
 const t = (s) => (s ? s.charAt(0) + s.slice(1).toLowerCase() : "");
+const catName = (code) => ((BOOT.category_options || []).find((c) => c.code === code) || {}).name || t(code);
 
 /** Make ``el`` the field the modal focuses when it opens. */
 const focusField = (form, el) => { if (!el) return; form.querySelectorAll("[autofocus]").forEach((x) => x.removeAttribute("autofocus")); el.setAttribute("autofocus", ""); };
@@ -100,7 +101,8 @@ export function create(ctx, params, root) {
   // the status chips filter the lines; the selection is kept by line id, so it survives switching filters
   let view = "all", switching = false;
   const markedIds = new Set();
-  const selectedRows = () => lines.filter((l) => markedIds.has(l.id) && !DONE.includes(l.status));
+  const markedRows = () => lines.filter((l) => markedIds.has(l.id));                 // any status (category, roll back)
+  const selectedRows = () => markedRows().filter((l) => !DONE.includes(l.status));   // open lines (post, correct)
   root.innerHTML = `<div class="pdoc">
     <div class="pdoc-head"></div>
     <div class="pdoc-bar"></div>
@@ -125,12 +127,13 @@ export function create(ctx, params, root) {
       { key: "name", label: "Supplier description", width: 230, render: (r) => cell(r, "name", esc(r.name) + (r.supplier_code ? ` <span class="muted mono">${esc(r.supplier_code)}</span>` : "")) },
       { key: "item", label: "Our product", width: 210, render: (r) => r.item ? `${esc(r.item.name)} <span class="tag">${esc(matchLabel(r.match))}</span>`
         : r.new_product ? `<span class="tag new">NEW</span> ${esc(r.name)}` : '<span class="bad">— F4 to match</span>' },
+      { key: "product_category", label: "Category", width: 84, render: (r) => r.product_category ? `<span class="tag">${esc(catName(r.product_category))}</span>` : '<span class="muted">—</span>' },
       { key: "batch", label: "Batch", width: 96, render: (r) => cell(r, "batch", `<span class="mono">${esc(r.batch || "—")}</span>`) },
       { key: "expiry", label: "Expiry", width: 74, render: (r) => cell(r, "expiry", r.expiry ? fmtExp(r.expiry) : `<span class="muted">${esc(r.expiry_raw || "—")}</span>`) },
       { key: "qty", label: "Billed", width: 50, align: "num", render: (r) => cell(r, "quantity", esc(r.receipt?.paid ?? r.qty)) },
       { key: "free", label: "Free", width: 46, align: "num", render: (r) => cell(r, "free", esc(r.receipt?.free ?? r.free ?? "")) },
-      { key: 'received_stock', label: 'Received stock', width: 155, render: r => `<span class="${r.receipt?.resolved ? '' : 'muted'}">${esc(equivalent(r.receipt))}</span>` },
-      { key: 'equivalent', label: 'Equivalent', width: 140, render: r => esc(r.physical?.equivalent || '—') },
+      { key: 'received_stock', label: 'Received stock', width: 120, render: r => esc(r.stock?.stock || '') },
+      { key: 'equivalent', label: 'Stock equivalent', width: 170, render: r => `<span class="${r.stock?.resolved ? '' : 'muted'}">${esc(r.stock?.equivalent || '')}</span>` },
       { key: 'form', label: 'Form', width: 90, render: r => esc((r.physical?.form || '').toLowerCase().replace(/^./, c => c.toUpperCase()) || '—') },
       { key: 'base_unit', label: 'Base Unit', width: 90, render: r => esc((r.physical?.base_unit || '').toLowerCase().replace(/^./, c => c.toUpperCase()) || '—') },
       { key: "rate", label: "Rate", width: 70, align: "num", render: (r) => cell(r, "rate", money(r.rate)) },
@@ -144,7 +147,7 @@ export function create(ctx, params, root) {
       { key: "issue", label: "Issue", width: 260, render: (r) => issueText(r) },
     ],
     multi: true,
-    canMark: (r) => !DONE.includes(r.status),
+    canMark: (r) => r.status !== "CLOSED",
     onMarks: (visible) => {
       if (switching) return;           // the grid is being refilled for another filter
       const shown = new Set(grid.rows.map((r) => r.id));
@@ -164,10 +167,13 @@ export function create(ctx, params, root) {
       { label: "Create as new product", key: keys.keyFor("purchase.newProduct"), action: () => newProduct(grid.selected) },
       { label: "Accept warnings", key: keys.keyFor("purchase.accept"), action: () => accept(grid.selected) },
       { label: "Remove line", key: keys.keyFor("purchase.removeLine"), action: () => removeLine(grid.selected) },
+      { label: "Change category only", key: keys.keyFor("purchase.category"), action: () => changeCategory() },
       { label: "Mark / unmark for posting", key: "Space", action: () => grid.toggleMark() },
       ...(draft() ? [{ label: "Delete purchase draft", key: keys.keyFor("purchase.delete"), action: deleteDoc },
         { label: "Cancel purchase draft", key: keys.keyFor("purchase.cancel"), action: cancelDoc }] : []),
-    ] : [{ label: "Stock ledger of the product", key: "Enter", action: () => openLedger(grid.selected) }],
+    ] : [{ label: "Stock ledger of the product", key: "Enter", action: () => openLedger(grid.selected) },
+      ...(CAN["purchase.create"] ? [{ label: "Change category only", key: keys.keyFor("purchase.category"), action: () => changeCategory() }] : []),
+      ...(r.status === "POSTED" && CAN["purchase.post"] ? [{ label: "Roll back to draft (take out of stock)", key: keys.keyFor("purchase.rollback"), action: () => rollback() }] : [])],
   });
   $(".pdoc-lines", root).append(grid.el);
 
@@ -206,7 +212,7 @@ export function create(ctx, params, root) {
   const VIEWS = { READY: "Ready", CORRECTED: "Corrected", NEEDS_REVIEW: "Needs review", PRODUCT_MATCH_REQUIRED: "Product match",
     INVALID: "Invalid", POSTED: "Posted", CLOSED: "Not received", SELECTED: "Selected" };
   function applyView(keep = true) {
-    for (const id of [...markedIds]) if (!lines.some((l) => l.id === id && !DONE.includes(l.status))) markedIds.delete(id);
+    for (const id of [...markedIds]) if (!lines.some((l) => l.id === id)) markedIds.delete(id);
     if (view === "SELECTED" && !markedIds.size) view = "all";
     const rows = view === "all" ? lines : view === "SELECTED" ? lines.filter((l) => markedIds.has(l.id)) : lines.filter((l) => l.status === view);
     switching = true;
@@ -244,12 +250,14 @@ export function create(ctx, params, root) {
       ${c.INVALID ? chip("INVALID", "Invalid", c.INVALID, "bad") : ""}
       ${c.POSTED ? chip("POSTED", "Posted", c.POSTED, "ok") : ""}
       ${c.CLOSED ? chip("CLOSED", "Not received", c.CLOSED) : ""}
+      ${markedRows().length && CAN["purchase.create"] ? `<button type="button" class="chip p-cat" title="Change only the category of the selected lines (${esc(keys.keyFor("purchase.category"))})">Category… <kbd>${esc(keys.keyFor("purchase.category"))}</kbd></button>` : ""}
       ${marked.length ? `${chip("SELECTED", "Selected", marked.length, "sel")}${markedReady < marked.length ? `<span class="hint">${marked.length - markedReady} not ready</span>` : ""}<button type="button" class="chip clear-sel" title="Clear the selection (Esc)">✕ clear</button>`
         : isOpen() && s.ready ? '<span class="hint">Shift+↑↓ selects lines · Space marks one · Ctrl+A all</span>' : ""}
       <span class="spacer"></span>
       ${s.gst && (s.gst.problems.length || s.gst.missing_rate_lines) ? `<button type="button" class="chip warn gst-chip" title="GST details (${esc(keys.keyFor("purchase.gst"))})">GST ⚠ ${s.gst.problems.length + (s.gst.missing_rate_lines ? 1 : 0)}</button>` : ""}
       ${p.warnings ? `<span class="hint" title="${esc(p.warnings)}">⚠ file notes</span>` : ""}
       ${s.automation?.mode !== "off" && s.automation && isOpen() ? `<button type="button" class="chip automation-chip">Automatic ${s.automation.resolved_rows}/${s.automation.total_rows} · ${s.automation.exceptions.length} exceptions</button>` : ""}
+      ${["POSTED", "PARTIAL"].includes(p.status) && CAN["purchase.post"] && c.POSTED ? `<button type="button" class="btn p-rollback" title="Take posted lines out of stock and back to review">Roll back to draft <kbd>${esc(keys.keyFor("purchase.rollback"))}</kbd></button>` : ""}
       ${postBtn}`;
     const automation = $(".automation-chip", bar);
     if (automation) automation.onclick = async () => {
@@ -265,6 +273,10 @@ export function create(ctx, params, root) {
     };
     const post = $(".p-post", bar);
     if (post) post.onclick = () => postDoc();
+    const cat = $(".p-cat", bar);
+    if (cat) cat.onclick = () => changeCategory();
+    const back = $(".p-rollback", bar);
+    if (back) back.onclick = () => rollback();
     const gchip = $(".gst-chip", bar);
     if (gchip) gchip.onclick = () => gstPanel();
     bar.querySelectorAll("[data-view]").forEach((b) => { b.onclick = () => setView(b.dataset.view); });
@@ -339,7 +351,7 @@ export function create(ctx, params, root) {
     const prod = `<b>${esc(r.item?.name || r.name)}</b><br><span class="muted">${esc(r.item?.code || r.supplier_code || '')}</span>`;
     const receipt = r.receipt || {};
     const facts = [reportRow('Form', p.form ? t(p.form) : '—'),
-      reportRow('Received stock', equivalent(receipt)), reportRow('Equivalent', p.equivalent || (receipt.resolved ? equivalent(receipt) : '—')),
+      reportRow('Received stock', r.stock?.stock), reportRow('Stock equivalent', r.stock?.equivalent),
       reportRow('Packaging', p.units_per_pack ? `1 ${t(p.pack_unit)} = ${p.units_per_pack} ${t(p.base_unit)}` : 'Not confirmed'),
       reportRow('Batch', r.batch || '—'), reportRow('Expiry', r.expiry ? fmtExp(r.expiry) : r.expiry_raw || '—'),
       reportRow('Billed quantity', receipt.paid ?? r.qty), reportRow('Free quantity on invoice', receipt.free ?? r.free ?? 0),
@@ -394,19 +406,18 @@ export function create(ctx, params, root) {
   // what one pack cost: invoice rate → after discounts → + GST → rate incl. GST (stock is costed at this)
   function costTable(r) {
     if (!r.landed) return "";
-    const packs = r.receipt?.resolved ? Number(r.receipt.master_pack_equivalent) : 0;
-    const g = doc?.summary?.gst || {};
+    const g = doc?.summary?.gst || {}, c = r.cost || {};
     const split = Number(r.igst) ? `IGST ₹${money(r.igst)}` : `CGST ₹${money(r.cgst)} + SGST ₹${money(r.sgst)}`;
-    const upp = r.physical?.units_per_pack || 1;
-    const packRate = packs > 0 ? Number(r.landed) / packs : null;
-    const perUnit = upp > 1 && packRate !== null ? ` <small class="muted">(₹${money(packRate / upp)} per ${esc(t(r.physical.base_unit || 'unit'))})</small>` : '';
+    const per = (v, unit) => v != null ? `₹${money(v)} per ${esc(t(unit))}` : "";
+    const head = c.per_pack != null ? per(c.per_pack, c.pack_unit) : per(c.per_invoice_unit, c.invoice_unit) || "—";
+    const extra = [c.per_pack != null && c.invoice_unit !== c.pack_unit ? per(c.per_invoice_unit, c.invoice_unit) : "", per(c.per_base, c.base_unit)].filter(Boolean).join(" · ");
     return `<table class="costtab"><tbody>
       <tr><th>Invoice billed rate</th><td class="num">₹${money(r.rate)}</td></tr>
       <tr><th>Taxable value${Number(r.discount) ? " (after discount / scheme)" : ""}</th><td class="num">₹${money(r.taxable)}</td></tr>
       <tr><th>GST ${r.gst !== "" ? Number(r.gst) + "%" : "0% (not on invoice)"}</th><td class="num">+ ₹${money(r.gst_amount)}<br><small class="muted">${split}</small></td></tr>
       <tr><th>Value incl. GST</th><td class="num">₹${money(r.landed)}</td></tr>
-      <tr class="total"><th>Cost per ${esc(t(r.physical?.pack_unit || 'pack'))} incl. GST</th><td class="num"><b>${packRate !== null ? '₹' + money(packRate) : 'Not confirmed'}</b>${perUnit}</td></tr>
-    </tbody></table>${r.gst_worked_out ? `<p class="hint">Worked out from the invoice. This line was posted before GST tracking, so its stock was costed before GST at ₹${money(r.batch_rate || r.rate)} per pack${upp > 1 ? "" : ""} — not re-costed.</p>`
+      <tr class="total"><th>Cost incl. GST</th><td class="num"><b>${head}</b>${extra ? `<br><small class="muted">${extra}</small>` : ""}</td></tr>
+    </tbody></table>${r.gst_worked_out ? `<p class="hint">Worked out from the invoice. This line was posted before GST tracking, so its stock was costed before GST at ₹${money(r.batch_rate || r.rate)} per pack — not re-costed.</p>`
       : g.cost_includes_gst === false ? '<p class="hint">Stock is costed before GST (purchase_cost_includes_gst is off).</p>' : ""}`;
   }
 
@@ -713,6 +724,56 @@ export function create(ctx, params, root) {
     grid.focus();
   }
 
+  /** Change only the category of the selected lines (or the current one): one click on a category applies it. */
+  async function changeCategory() {
+    if (CAN["purchase.create"] === false) { ctx.status("Changing categories needs purchase rights", "warn"); return; }
+    const rows = markedRows().length ? markedRows() : grid.selected ? [grid.selected] : [];
+    if (!rows.length) { ctx.status("Select lines first (Space marks one, Shift+↑↓ several)", "warn"); return; }
+    const cats = BOOT.category_options || [];
+    const now = [...new Set(rows.map((r) => r.product_category).filter(Boolean))];
+    const body = h(`<div><p>${rows.length} line(s) · now ${now.length ? now.map((c) => esc(catName(c))).join(", ") : "no category"}.
+      Click a category (or press its number) to apply it. Only the category changes — quantities, prices and stock stay as they are.</p>
+      <div class="cat-pick">${cats.map((c, i) => `<button type="button" class="chip${now.length === 1 && now[0] === c.code ? " on" : ""}" data-code="${esc(c.code)}">${i < 9 ? `<kbd>${i + 1}</kbd> ` : ""}${esc(c.name)}</button>`).join("")}</div>
+      <p class="hint">Matched products change in the product master; new products get it when they are created. Masters → Categories adds categories.</p></div>`);
+    let pick = null;
+    const apply = (code) => { pick = code; body.closest("form")?.requestSubmit(); };
+    body.querySelectorAll("[data-code]").forEach((b) => { b.onclick = () => apply(b.dataset.code); });
+    body.addEventListener("keydown", (e) => {
+      const n = Number(e.key);
+      if (Number.isInteger(n) && n >= 1 && n <= Math.min(9, cats.length)) { e.preventDefault(); apply(cats[n - 1].code); }
+    });
+    const out = await modal({ title: "Change category only", body, submitLabel: "Apply",
+      onOpen: () => (body.querySelector(".chip.on") || body.querySelector("[data-code]"))?.focus(),
+      onSubmit: () => {
+        if (!pick) throw new Error("Click a category, or press its number");
+        return api(`/api/erp/purchases/${id}/lines/category`, { method: "POST", body: { line_ids: rows.map((r) => r.id), category: pick } });
+      } });
+    if (out) {
+      render(out);
+      ctx.status(`Category ${catName(out.result.category)} on ${out.result.lines} line(s)${out.result.products ? ` · ${out.result.products} product(s) updated` : ""}`, "ok");
+    }
+    grid.focus();
+  }
+
+  /** Posted lines back to review: their stock is taken out again through the ledger (all or nothing). */
+  async function rollback() {
+    if (!doc || !["POSTED", "PARTIAL"].includes(doc.purchase.status)) { ctx.status("Only a posted purchase can be rolled back", "warn"); return; }
+    if (!CAN["purchase.post"]) { ctx.status("Rolling back a purchase needs the purchase post right", "warn"); return; }
+    const posted = markedRows().filter((r) => r.status === "POSTED");
+    const all = lines.filter((r) => r.status === "POSTED");
+    const scope = posted.length ? posted : all;
+    const out = await modal({
+      title: posted.length ? `Roll back ${posted.length} selected line(s) to draft` : `Roll back ${doc.purchase.reference_no} to draft`, submitLabel: "Roll back",
+      body: `<div class="form-grid"><p class="full">${scope.length} posted line(s) will be taken out of stock and returned to review with every correction kept.
+        ${posted.length && posted.length < all.length ? `${all.length - posted.length} other posted line(s) stay in stock.` : "The purchase becomes a draft again."}
+        If any of that stock was already sold, returned or adjusted, nothing changes — use a purchase return instead.</p>
+        <label class="full">Reason<input name="reason" required minlength="5" maxlength="300" autofocus placeholder="e.g. Wrong quantities posted"></label></div>`,
+      onSubmit: (form) => api(`/api/erp/purchases/${id}/rollback`, { method: "POST", body: { reason: form.reason.value, ...(posted.length ? { line_ids: posted.map((r) => r.id) } : {}) } }),
+    });
+    if (out) { markedIds.clear(); grid.clearMarks(); render(out); ctx.status(`${scope.length} line(s) rolled back · ${DOC[out.purchase.status]}`, "ok"); }
+    grid.focus();
+  }
+
   async function deleteDoc() {
     if (!guard(true)) return;
     if (!(await window.erpConfirm("Delete this purchase draft and all its unreceived lines?"))) return;
@@ -769,7 +830,7 @@ export function create(ctx, params, root) {
         "purchase.newProduct": () => newProduct(grid.selected), "purchase.accept": () => accept(grid.selected),
         "purchase.next": nextIssue, "purchase.post": () => postDoc(), "purchase.refresh": load, "purchase.cancel": cancelDoc,
         "purchase.delete": deleteDoc, "purchase.removeLine": () => removeLine(grid.selected),
-        "purchase.columns": columns, "purchase.gst": gstPanel,
+        "purchase.columns": columns, "purchase.gst": gstPanel, "purchase.category": changeCategory, "purchase.rollback": rollback,
         "purchase.source": () => doc && doc.purchase.has_source ? window.open(`/api/erp/purchases/${id}/source`, "_blank") : ctx.status("No supplier file (manual entry)", "warn"),
       };
       for (const [aid, fn] of Object.entries(act)) if (keys.matches(aid, name)) { fn(); return true; }

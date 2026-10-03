@@ -183,6 +183,13 @@ def to_base(quantity: int, units_per_pack: int, unit: str = "BASE") -> int:
     raise UnitError(f"Unknown transaction unit {unit!r}")
 
 
+def base_quantity(packs: Any, units_per_pack: Any) -> Decimal:
+    """Exact base units in a (possibly fractional) number of packs: 2.5 strips of 15 → 37.5.
+
+    Callers decide whether a fraction is allowed; stock postings use :func:`to_base`."""
+    return _dec(packs) * max(int(units_per_pack or 1), 1)
+
+
 def split_packs(base_qty: int, units_per_pack: int) -> tuple[int, int]:
     """``666, 15`` → ``(44, 6)``: whole packs and the loose remainder."""
     upp = max(int(units_per_pack or 1), 1)
@@ -258,6 +265,16 @@ def unit_price(pack_price: Any, units_per_pack: int) -> Decimal:
 def display_unit_price(pack_price: Any, units_per_pack: int) -> Decimal:
     """Unit MRP as printed on the counter (2 places)."""
     return unit_price(pack_price, units_per_pack).quantize(CENT, rounding=ROUND_HALF_UP)
+
+
+def unit_cost(pack_rate: Any, units_per_pack: Any) -> Decimal:
+    """Cost of one base unit to 6 places (stock valuation keeps more precision than MRP)."""
+    if int(units_per_pack or 0) < 1:
+        raise ValueError("Purchase UOM conversion must be positive")
+    rate = Decimal(str(pack_rate))
+    if not rate.is_finite() or rate < 0:
+        raise ValueError("Purchase rate must be a finite nonnegative amount")
+    return (rate / Decimal(int(units_per_pack))).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
 
 
 def line_amount(pack_price: Any, units_per_pack: int, qty: int) -> Decimal:

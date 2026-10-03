@@ -1,4 +1,4 @@
-import { esc, h, unitName } from 'erp/core';
+import { esc, h, toBase, unitName } from 'erp/core';
 
 const profiles = {
   TABLET: ['Tablets', 'TABLET', 'STRIP', 'TABLET'], CAPSULE: ['Capsules', 'CAPSULE', 'STRIP', 'CAPSULE'],
@@ -12,10 +12,6 @@ const profiles = {
   VIAL: ['Vials', 'VIAL', 'VIAL', ''], AMPOULE: ['Ampoules', 'AMPOULE', 'BOX', 'INJECTION'],
   JAR: ['Jars', 'JAR', 'JAR', ''], BOX: ['Whole boxes', 'BOX', 'BOX', ''], KIT: ['Kits', 'KIT', 'KIT', 'KIT'], PAIR: ['Pairs', 'PAIR', 'PACK', 'DEVICE'],
 };
-
-export function equivalent(receipt) {
-  return receipt?.resolved ? `${receipt.received_base_units} ${unitName(receipt.base_unit, receipt.received_base_units)}` : 'Quantity not confirmed';
-}
 
 export function physicalEditor({ form = '', base = '', count = 1, quantity = 1, free = 0, quantities = true, locked = false } = {}) {
   const initial = Object.hasOwn(profiles, form) ? form : Object.hasOwn(profiles, base) ? base : 'UNIT';
@@ -37,7 +33,7 @@ export function physicalEditor({ form = '', base = '', count = 1, quantity = 1, 
       el.querySelector('[data-free-label]').textContent = solid ? 'Free strips' : 'Free containers';
     }
     const n = Number(f('count').value), paid = quantities ? Number(f('quantity').value) : 1, bonus = quantities ? Number(f('free').value) : 0;
-    const total = Math.round((paid + bonus) * n * 1e6) / 1e6;
+    const total = toBase(paid + bonus, n);
     const valid = Number.isInteger(n) && n > 0 && paid >= 0 && bonus >= 0 && Number.isInteger(total) && total > 0;
     el.querySelector('[data-physical-preview]').textContent = valid
       ? quantities ? `(${paid} paid + ${bonus} free) × ${n} = ${total} ${unitName(p[1], total)} available` : `1 ${unitName(p[2], 1)} = ${n} ${unitName(p[1], n)}`

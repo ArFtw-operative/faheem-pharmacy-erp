@@ -3,7 +3,7 @@ import { physicalEditor } from 'erp/physical-units';
 // Inventory — product grid + batch pane + detail strip. Back-office control:
 // stock changes only through ledgered adjustments (F5), packaging through the
 // guarded product editor (Ctrl+E). Nothing here edits a stock number directly.
-import { $, $$, BOOT, api, debounce, describe, esc, fmtDateTime, fmtExp, fmtExpShort, h, modal, money, parseQty, store, unitName } from "erp/core";
+import { $, $$, BOOT, api, debounce, describe, esc, toBase, fmtDateTime, fmtExp, fmtExpShort, h, modal, money, parseQty, store, unitName } from "erp/core";
 import { Grid } from "erp/grid";
 
 const STATUS = { OK: "OK", LOW: "Low", OUT: "Out", EXPIRING: "Expiring", EXPIRED: "Expired stock" };
@@ -373,7 +373,7 @@ export function create(ctx, params, root) {
     });
     if (d) {
       const preview = () => {
-        const v = editor.packagingValues(), n = Number(v.units_per_pack), total = d.packaging_convertible ? d.stock * n : d.stock;
+        const v = editor.packagingValues(), n = Number(v.units_per_pack), total = d.packaging_convertible ? toBase(d.stock, n) : d.stock;
         el.querySelector('[data-inventory-equivalent]').textContent = `Stock equivalent after saving: ${total} ${unitName(v.base_unit, total)}`;
       };
       editor.addEventListener('packaging-preview', preview);

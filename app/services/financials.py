@@ -19,10 +19,8 @@ log=logging.getLogger('pharmacy.financials')
 
 
 def unit_cost(rate, factor):
-    if int(factor or 0)<1: raise ValueError('Purchase UOM conversion must be positive')
-    rate=Decimal(str(rate))
-    if not rate.is_finite() or rate<0: raise ValueError('Purchase rate must be a finite nonnegative amount')
-    return (rate/Decimal(factor)).quantize(PRECISION, rounding=ROUND_HALF_UP)
+    from app.services import units
+    return units.unit_cost(rate, factor)
 
 
 def batch_cost(batch):
@@ -67,7 +65,8 @@ def finalize(sale):
 
 def gross_value(line,quantity=None):
     qty=line.quantity if quantity is None else quantity
-    return money(line.pack_mrp*qty/(line.units_per_pack or 1)) if line.pack_mrp else money(line.mrp*qty)
+    from app.services import units
+    return units.line_amount(line.pack_mrp, line.units_per_pack or 1, qty) if line.pack_mrp else money(line.mrp*qty)
 
 
 def matches(line,filters):

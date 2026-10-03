@@ -93,14 +93,21 @@ def _line_view(l: PurchaseItem, gst_ctx: tuple | None = None) -> dict:
     physical_view = {**physical, 'form': form, 'received': received,
         'equivalent': units.describe_stock(received, physical['units_per_pack'], physical['base_unit'], physical['pack_unit'])
             if received is not None and (physical['units_per_pack'] or 1) > 1 else ''}
+    from app.services import packaging_conversion
+    try:
+        paid, free = receipt_decision.quantities(purchasing.effective(l))
+    except ValueError:
+        paid = free = None
+    stock = packaging_conversion.receipt_view(receipt, physical, pack_text=l.pack_size, item=it, paid=paid, free=free)
     view = {
-        "id": l.id, "line_no": l.line_no, "status": l.status, "name": l.product_name,
+        "id": l.id, "line_no": l.line_no, "status": l.status, "name": l.product_name, "stock": stock,
         "supplier_code": l.supplier_code, "batch": l.batch_no, "expiry": _iso(l.expiry_date), "expiry_raw": l.expiry_raw,
         "qty": l.quantity_raw if sheet_import.has_fraction(l.quantity_raw) else l.quantity, "free": l.quantity_free, "rate": str(l.rate), "mrp": str(l.mrp),
         "gst": str(l.gst_rate) if l.gst_rate is not None else "", "discount": str(l.discount), "amount": str(l.line_total),
         "hsn": l.hsn_code, "pack": l.pack_size, "manufacturer": l.manufacturer,
         "item": {"id": it.id, "code": it.article_id, "name": it.name, "pack": it.pack_size, "upp": it.units_per_pack or 1,
-                 "base_unit": it.base_unit, "pack_unit": it.pack_unit} if it else None,
+                 "base_unit": it.base_unit, "pack_unit": it.pack_unit, "category": it.category} if it else None,
+        "product_category": (it.category if it else l.category) or "",
         "match": l.match_method, "new_product": bool(l.new_product), "category": l.category,
         "dosage_form": l.dosage_form, "base_unit": l.base_unit, "pack_unit": l.pack_unit, "units_per_pack": l.units_per_pack,
         "raw": l.raw or {}, "corrections": {k: v for k, v in (l.corrections or {}).items()},
@@ -121,6 +128,7 @@ def _line_view(l: PurchaseItem, gst_ctx: tuple | None = None) -> dict:
         b = G.line_breakdown(l, factor, mode, purchasing._received_packs(l))
         view.update(taxable=str(b["taxable"]), gst_amount=str(b["gst"]), cgst=str(b["cgst"]), sgst=str(b["sgst"]),
                     igst=str(b["igst"]), landed=str(b["landed"]), rate_incl=str(b["rate_incl"]), gst_worked_out=True)
+    view["cost"] = packaging_conversion.unit_costs(view["landed"] or None, stock, receipt, physical)
     return view
 
 
@@ -399,6 +407,29 @@ async def purchase_close(purchase_id: int, request: Request, db: Session = Depen
     p = _doc(db, purchase_id)
     _run(db, purchasing.close_remaining, p, reason=str(data.get("reason") or ""), user=user)
     return _document(_doc(db, purchase_id))
+
+
+@router.post("/api/erp/purchases/{purchase_id}/rollback")
+async def purchase_rollback(purchase_id: int, request: Request, db: Session = Depends(get_db),
+                            user: User = Depends(require_permission("purchase.post"))):
+    """Posted lines back to review: their stock is reversed through the ledger."""
+    data = await request.json()
+    p = _doc(db, purchase_id)
+    ids = data.get("line_ids")
+    _run(db, purchasing.rollback, p, reason=str(data.get("reason") or ""),
+         line_ids=[int(i) for i in ids] if isinstance(ids, list) and ids else None, user=user)
+    return _document(_doc(db, purchase_id))
+
+
+@router.post("/api/erp/purchases/{purchase_id}/lines/category")
+async def purchase_lines_category(purchase_id: int, request: Request, db: Session = Depends(get_db),
+                                  user: User = Depends(require_permission("purchase.create"))):
+    """Change only the category of the selected lines' products."""
+    data = await request.json()
+    p = _doc(db, purchase_id)
+    ids = data.get("line_ids") if isinstance(data.get("line_ids"), list) else []
+    result = _run(db, purchasing.set_category, p, [int(i) for i in ids], str(data.get("category") or ""), user=user)
+    return {**_document(_doc(db, purchase_id)), "result": result}
 
 
 @router.post("/api/erp/purchases/{purchase_id}/cancel")

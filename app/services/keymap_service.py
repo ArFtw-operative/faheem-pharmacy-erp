@@ -138,6 +138,8 @@ ACTIONS: list[dict] = [
     {"id": "purchase.cancel", "scope": "purchase", "group": "Purchase document", "label": "Cancel draft", "key": "Alt+X"},
     {"id": "purchase.delete", "scope": "purchase", "group": "Purchase document", "label": "Delete unreceived draft", "key": "Alt+Delete"},
     {"id": "purchase.removeLine", "scope": "purchase", "group": "Purchase document", "label": "Remove unreceived line", "key": "Alt+D"},
+    {"id": "purchase.category", "scope": "purchase", "group": "Purchase document", "label": "Change category only (selected lines, one click)", "key": "F7", "bar": 10},
+    {"id": "purchase.rollback", "scope": "purchase", "group": "Purchase document", "label": "Roll back posted lines to draft (stock taken out again)", "key": "Alt+B"},
     # ---- Ledger
     {"id": "ledger.refresh", "scope": "ledger", "group": "Stock ledger", "label": "Refresh", "key": "F5", "bar": 1},
 ]

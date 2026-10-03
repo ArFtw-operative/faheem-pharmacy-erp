@@ -19,6 +19,7 @@ from pathlib import Path
 import pymupdf
 
 from app.config import BASE_DIR, UPLOAD_DIR
+from app.services import units
 
 ASSETS = BASE_DIR / "app" / "static" / "invoice-store"
 LOGO_SVG = BASE_DIR / "app" / "static" / "brand" / "svg" / "horizontal-color.svg"
@@ -146,7 +147,7 @@ def demo_data(db, items: int = 7) -> dict:
         upp, mrp, qty = (15, Decimal("32.28"), 10) if i % 3 == 0 else (1, Decimal("98.50") + i, 1 + i % 2)
         lines.append({"name": names[i % len(names)], "pack": "15 S" if upp > 1 else "10 S", "mfr": "MICRO",
                       "batch": f"DB{4400 + i}", "expiry": f"0{1 + i % 9}-2028", "qty": qty, "mrp": mrp, "upp": upp,
-                      "amount": (mrp * qty / upp).quantize(Decimal("0.01"))})
+                      "amount": units.line_amount(mrp, upp, qty)})
     gross = sum((l["amount"] for l in lines), Decimal("0"))
     total = gross.quantize(Decimal("1"))
     return {"invoice_no": "INV-PREVIEW-0001", "date": datetime.now(), "manual": False,

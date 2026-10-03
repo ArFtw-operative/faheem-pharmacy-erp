@@ -82,6 +82,20 @@ export function parseQty(text, upp) {
   return m ? parseInt(m[1], 10) * Math.max(1, upp || 1) + parseInt(m[2] || "0", 10) : NaN;
 }
 
+// Conversion mirror of app/services/units.py, for live previews only (the server decides).
+// tests/test_conversion_parity.py checks both give the same answers.
+
+/** Base units in a number of packs (may be fractional: 2.5 strips of 15 → 37.5). */
+export function toBase(packs, upp) {
+  return Math.round(num(packs) * Math.max(1, Math.trunc(num(upp)) || 1) * 1e6) / 1e6;
+}
+
+/** MRP for ``qty`` base units, priced from the pack MRP and rounded once (units.line_amount). */
+export function lineAmount(packMrp, upp, qty) {
+  const cents = num(packMrp) * 100 * num(qty) / Math.max(1, Math.trunc(num(upp)) || 1);
+  return Math.round(cents + 1e-9) / 100;
+}
+
 export function describe(qty, upp, base, pack) {
   upp = Math.max(1, upp || 1);
   if (upp === 1) return `${qty} ${unitName(base, qty)}`;

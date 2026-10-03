@@ -8,7 +8,7 @@
 //
 // F6 switches between the two lists.
 import * as keys from "erp/keys";
-import { $, $$, BOOT, api, debounce, esc, h, modal, unitName } from "erp/core";
+import { $, $$, BOOT, api, debounce, esc, h, modal, toBase, unitName } from "erp/core";
 import { Grid } from "erp/grid";
 
 const t = (s) => (s ? s.charAt(0) + s.slice(1).toLowerCase() : "—");
@@ -217,7 +217,7 @@ function uomPanel(ctx, el, CAN) {
     const sync = () => {
       const upp = Number(body.querySelector("[name=units_per_pack]").value) || 1;
       const unit = body.querySelector("[name=base_unit]").value;
-      const after = r.upp === 1 ? r.stock * upp : r.stock;
+      const after = r.upp === 1 ? toBase(r.stock, upp) : r.stock;
       body.querySelector(".preview").innerHTML = `${upp > 1 ? "Sold loose automatically" : "Sold whole"}. `
         + (r.stock ? `Stock becomes <b>${after}</b> ${esc(unitName(unit, after))}${r.upp === 1 && upp > 1 ? ` (${r.stock} × ${upp}, posted to the ledger)` : ""}.` : "Future stock is counted this way.");
     };
