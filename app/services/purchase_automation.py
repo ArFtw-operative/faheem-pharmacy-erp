@@ -318,10 +318,26 @@ def prepare_line(db, purchase, line):
     line.corrections = c
 
 
+def auto_create_products(db):
+    """Creating products without a person is off unless the pharmacy turns it on."""
+    return settings_service.get_setting(db, "purchase_auto_create_products", "off") == "on"
+
+
+def proposed_new_product(line):
+    """A new product the automation prepared that no person has confirmed yet."""
+    c = line.corrections or {}
+    return bool(line.new_product and (c.get("_automation") or {}).get("action") == "new_product" and not c.get("_product"))
+
+
 def review_issues(db, purchase, line, issues):
     if not active(db, purchase):
         return issues
     c = line.corrections or {}
+    if proposed_new_product(line) and not auto_create_products(db):
+        issues.append({"code": "new_product_unconfirmed", "field": "name", "level": "match",
+                       "message": f"Not in the catalogue as printed. Units are prepared ({line.units_per_pack} "
+                                  f"{(line.base_unit or 'unit').lower()}s per {(line.pack_unit or 'pack').lower()}): confirm it as a "
+                                  "new product (Shift+F4) or match the existing product (F4)."})
     if not line.item and not UOM_FIELDS.intersection(c):
         found = catalogue_candidates(db, line)
         if found and equivalent_candidate(found) is None:

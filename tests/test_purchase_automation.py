@@ -37,6 +37,7 @@ def test_pack_normalization_preserves_retail_count(pack,n):
 
 
 def test_clear_new_products_need_no_confirmation(db):
+    auto_create(db)
     enable(db)
     p=draft(db, ",NEW 500TAB,10T,B1,May-2028,2.5,0.5,10,20,25",
             ",NEW SYRUP,1x60ML.,B2,May-2028,3,,10,20,30")
@@ -95,6 +96,7 @@ def test_explicit_product_conversion_is_preserved(db):
 
 
 def test_repeated_new_product_batches_create_one_item(db):
+    auto_create(db)
     enable(db)
     p=draft(db,",NEW TABLET,10S,B1,May-2028,2,,10,20,20",
             ",NEW TABLET,10S,B2,May-2028,3,,10,20,30")
@@ -120,6 +122,12 @@ def zero_tax_csv(*rows):
     return ('\n'.join([lines[0]+',GST %']+[r+',0' for r in lines[1:]])+'\n').encode()
 
 
+def auto_create(db):
+    """These tests cover automatic product creation, which a pharmacy must switch on (default off)."""
+    settings_service.set_setting(db, 'purchase_auto_create_products', 'on')
+    db.commit()
+
+
 def auto_import(db, *, total='20', row=None, user=None, invoice='AUTO-1'):
     sup=supplier(db)
     sup.gst_number='36AAPFU0939F1ZW'
@@ -131,6 +139,7 @@ def auto_import(db, *, total='20', row=None, user=None, invoice='AUTO-1'):
 
 
 def test_complete_authorized_import_posts_once_and_retry_returns_original(db):
+    auto_create(db)
     user=db.scalar(select(User).where(User.username=='admin')) or db.scalar(select(User))
     p=auto_import(db,user=user)
     assert p.status=='POSTED', str(auto.assessment(db,p))
@@ -161,6 +170,7 @@ def test_automatic_post_still_requires_post_permission(db):
 
 
 def test_modified_invoice_number_case_does_not_duplicate_stock(db):
+    auto_create(db)
     user=db.scalar(select(User))
     p=auto_import(db,user=user)
     sup=p.supplier
@@ -206,6 +216,7 @@ def test_mixed_reference_forms_do_not_manufacture_identity(db,tmp_path,monkeypat
 
 
 def test_post_failure_keeps_complete_draft_and_no_partial_inventory(db,monkeypatch):
+    auto_create(db)
     from app.services import inventory_service
     from app.services import stock_ledger
     original=inventory_service.add_or_update_batch
@@ -230,6 +241,7 @@ def test_post_failure_keeps_complete_draft_and_no_partial_inventory(db,monkeypat
 
 
 def test_short_expiry_remains_visible_but_only_policy_breaches_block(db):
+    auto_create(db)
     from datetime import timedelta
     enable(db)
     future=date.today()+timedelta(days=65)
@@ -293,6 +305,7 @@ def test_missing_prices_do_not_overwrite_batch_prices_on_auto_post(db):
 
 
 def test_n_times_one_requires_retail_evidence_not_a_one_tablet_guess(db,tmp_path,monkeypatch):
+    auto_create(db)
     from app import config
     from app.services.medicine_reference import Catalog
     sup=supplier(db)
@@ -314,6 +327,7 @@ def test_n_times_one_requires_retail_evidence_not_a_one_tablet_guess(db,tmp_path
 
 
 def test_existing_upload_api_posts_verified_invoice_and_returns_idempotent_result(client,db):
+    auto_create(db)
     from tests.conftest import login
     login(client)
     enable(db,'post')
@@ -335,3 +349,14 @@ def test_existing_upload_api_posts_verified_invoice_and_returns_idempotent_resul
 
 
 
+
+
+def test_new_products_wait_for_a_person_by_default(db):
+    enable(db)
+    p=draft(db,'N,BRAND NEW 10MG TAB,10S,B1,May-2028,2,,10,20,20')
+    line=p.items[0]
+    assert line.new_product and line.units_per_pack==10            # units prepared from the pack
+    assert line.status=='PRODUCT_MATCH_REQUIRED'
+    assert 'new_product_unconfirmed' in {i['code'] for i in line.issues}
+    purchasing.correct(db,p,line,{'new_product':True})              # Shift+F4: a person confirms it
+    assert line.status=='READY'

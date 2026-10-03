@@ -60,7 +60,10 @@ def apply(db, purchase: Purchase, line: PurchaseItem, values: dict, *, user: Use
     spec = form_service.get(db, form) if form else None
     if form and spec is None:
         raise purchasing.PurchaseError("Choose the item form")
-    paid, free = receipt_decision.quantities(receipt_decision.effective(line))
+    try:
+        paid, free = receipt_decision.quantities(receipt_decision.effective(line))
+    except ValueError as exc:
+        raise purchasing.PurchaseError(f"Correct the billed quantity first: {exc}")
     current = receipt_decision.definition(line)
     want_def = None
     if spec is not None:

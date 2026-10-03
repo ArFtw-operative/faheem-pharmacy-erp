@@ -64,6 +64,8 @@ def fields(line) -> tuple[dict, dict]:
         conf["product"], prov["product"] = _PRODUCT.get(method, (0.9, "FUZZY_MATCH"))
         if line.new_product and "units_suggested" in codes:
             conf["product"] = 0.85
+        if "new_product_unconfirmed" in codes:
+            conf["product"], prov["product"] = 0.8, "PACKAGING_RULE"      # new-product queue: a person confirms it
     else:
         conf["product"], prov["product"] = 0.0, "NONE"
     # quantity (billed + free): known whenever the invoice gives it

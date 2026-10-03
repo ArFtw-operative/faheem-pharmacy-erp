@@ -98,15 +98,30 @@ def _index(db: Session) -> dict:
                             func.min(Item.created_at)).where(Item.deleted_at.is_(None))).one()
     if _INDEX["sig"] != tuple(sig):
         full, core = {}, {}
-        for iid, name in db.execute(select(Item.id, Item.name).where(Item.deleted_at.is_(None))):
-            full.setdefault(key(name), set()).add(iid)
-            core.setdefault(core_key(name), set()).add(iid)
+        for iid, name, pack in db.execute(select(Item.id, Item.name, Item.pack_size).where(Item.deleted_at.is_(None))):
+            names = {name} | ({f"{name} {pack}"} if _content_pack(pack) and not _has_size(name) else set())
+            for n in names:
+                full.setdefault(key(n), set()).add(iid)
+                core.setdefault(core_key(n), set()).add(iid)
         _INDEX.update(sig=tuple(sig), full=full, core=core)
     return _INDEX
 
 
+def _content_pack(pack: str) -> bool:
+    return bool(pack) and pp.detect_measurement(pp.normalize(pack)) is not None
+
+
+def _has_size(name: str) -> bool:
+    return bool(re.search(r"\d\s*(ML|L|G|GM|GMS|GRM|GRMS|KG)\b", str(name).upper()))
+
+
 def normalized_match(db: Session, description: str, pack: str = "") -> tuple[Item | None, str]:
-    """A product whose name differs only superficially, when exactly one exists. (item, reason)."""
+    """A product whose name differs only superficially, when exactly one exists. (item, reason).
+    A size printed in the pack column (60ML) counts as part of the name when the name has none."""
+    if _content_pack(pack) and not _has_size(description):
+        item, why = normalized_match(db, f"{description} {pack}")
+        if item is not None:
+            return item, why + f" (with the printed size {pack})"
     k = key(description)
     if not k or len(k) < 4:
         return None, ""
