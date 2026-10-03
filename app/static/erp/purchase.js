@@ -10,7 +10,7 @@ import { physicalEditor, formFor, formOptions, forms as itemForms, wireFormSelec
 //   F3       add a line                 F6        accept the line's warnings
 //   F8       next line needing review   F12       post to stock
 //   Delete   remove the line            Alt+O     supplier's file
-import { $, BOOT, api, debounce, esc, fmtDateTime, fmtExp, h, modal, money } from "erp/core";
+import { $, BOOT, api, debounce, esc, fmtDateTime, fmtExp, h, modal, money, toBase } from "erp/core";
 import { Grid } from "erp/grid";
 
 export const STATUS = {
@@ -19,6 +19,11 @@ export const STATUS = {
   CLOSED: ["Not received", "muted"],
 };
 const DOC = { DRAFT: "Draft", PARTIAL: "Partly posted", POSTED: "Posted", CANCELLED: "Cancelled" };
+// confidence gate (server: confidence_gate.py)
+const GATE = { AUTO_ACCEPT: ["Auto", "ok"], AUTO_ACCEPT_WITH_WARNING: ["Warning", "warn"], REVIEW: ["Review", "warn"], BLOCK: ["Blocked", "bad"] };
+const ATTENTION = ["REVIEW", "BLOCK"];
+const FIELD_NAMES = { product: "product", quantity: "quantity", batch: "batch", expiry: "expiry", packaging: "pack conversion",
+  amount: "amount", gst: "GST", mrp: "MRP" };
 const DONE = ["POSTED", "CLOSED"];
 const READYISH = ["READY", "CORRECTED"];
 const FIELDS = [
@@ -99,7 +104,9 @@ export function create(ctx, params, root) {
   const id = Number(params.id);
   let doc = null, lines = [];
   // the status chips filter the lines; the selection is kept by line id, so it survives switching filters
-  let view = "all", switching = false;
+  let view = null, switching = false;          // null until the first load picks the inbox or all lines
+  const gateOf = (l) => l.gate?.state || "";
+  const needsAttention = (l) => !DONE.includes(l.status) && ATTENTION.includes(gateOf(l));
   const markedIds = new Set();
   const markedRows = () => lines.filter((l) => markedIds.has(l.id));                 // any status (category, roll back)
   const selectedRows = () => markedRows().filter((l) => !DONE.includes(l.status));   // open lines (post, correct)
@@ -130,10 +137,15 @@ export function create(ctx, params, root) {
       { key: "product_category", label: "Category", width: 84, render: (r) => r.product_category ? `<span class="tag">${esc(catName(r.product_category))}</span>` : '<span class="muted">—</span>' },
       { key: "batch", label: "Batch", width: 96, render: (r) => cell(r, "batch", `<span class="mono">${esc(r.batch || "—")}</span>`) },
       { key: "expiry", label: "Expiry", width: 74, render: (r) => cell(r, "expiry", r.expiry ? fmtExp(r.expiry) : `<span class="muted">${esc(r.expiry_raw || "—")}</span>`) },
+      { key: "pack", label: "Packing", width: 82, render: (r) => cell(r, "pack", `<span class="mono">${esc(r.pack || "—")}</span>`) },
       { key: "qty", label: "Billed", width: 50, align: "num", render: (r) => cell(r, "quantity", esc(r.receipt?.paid ?? r.qty)) },
       { key: "free", label: "Free", width: 46, align: "num", render: (r) => cell(r, "free", esc(r.receipt?.free ?? r.free ?? "")) },
       { key: 'received_stock', label: 'Received stock', width: 120, render: r => esc(r.stock?.stock || '') },
-      { key: 'equivalent', label: 'Stock equivalent', width: 170, render: r => `<span class="${r.stock?.resolved ? '' : 'muted'}">${esc(r.stock?.equivalent || '')}</span>` },
+      { key: 'equivalent', label: 'Stock equivalent', width: 170, render: r => r.stock?.resolved || DONE.includes(r.status) || !canEdit()
+        ? `<span title="${esc(r.stock?.hierarchy || '')}">${esc(r.stock?.equivalent || '')}</span>`
+        : `<button type="button" class="linkish" data-pack-fix="${r.id}" title="${esc(r.stock?.hierarchy || 'Confirm what one invoice Qty is')}">${esc(r.stock?.equivalent || '')} ✎</button>` },
+      { key: 'gate', label: 'Confidence', width: 104, cellClass: r => 'gate-' + (GATE[r.gate?.state]?.[1] || 'muted'),
+        render: r => r.gate?.state && !DONE.includes(r.status) ? `<span title="${esc(gateTitle(r))}">${GATE[r.gate.state][0]}${r.gate.confidence != null ? ` ${Math.round(r.gate.confidence * 100)}%` : ''}</span>` : '' },
       { key: 'form', label: 'Form', width: 90, render: r => esc((r.physical?.form || '').toLowerCase().replace(/^./, c => c.toUpperCase()) || '—') },
       { key: 'base_unit', label: 'Base Unit', width: 90, render: r => esc((r.physical?.base_unit || '').toLowerCase().replace(/^./, c => c.toUpperCase()) || '—') },
       { key: "rate", label: "Rate", width: 70, align: "num", render: (r) => cell(r, "rate", money(r.rate)) },
@@ -160,6 +172,8 @@ export function create(ctx, params, root) {
     onActivate: (r) => (canEdit() && !DONE.includes(r.status) ? editLine(r) : openLedger(r)),
     contextMenu: (r) => canEdit() && !DONE.includes(r.status) ? [
       { label: 'Adjust quantity / form', action: () => adjustQuantity(r) },
+      { label: 'Correct packing (what one Qty is)', key: keys.keyFor("purchase.packaging"), action: () => packagingDialog(r) },
+      { label: 'Match inspector (why this match)', key: keys.keyFor("purchase.inspect"), action: () => inspector(r) },
       { label: 'Verify invoice unit', action: () => verifyInvoiceUnit(r) },
       { label: 'Medicine reference', action: () => showReference(r) },
       { label: "Correct line", key: "Enter", action: () => editLine(grid.selected) },
@@ -177,7 +191,13 @@ export function create(ctx, params, root) {
   });
   $(".pdoc-lines", root).append(grid.el);
 
-  const matchLabel = (m) => ({ SUPPLIER_MAP: "supplier map", CODE: "code", EXACT_NAME: "exact name", MANUAL: "chosen", NEW_PRODUCT: "created" })[m] || m.toLowerCase();
+  const matchLabel = (m) => ({ SUPPLIER_MAP: "supplier map", CODE: "code", EXACT_NAME: "exact name", NORMALIZED_NAME: "normalised name",
+    CANONICAL_NAME_PACK: "name + pack", MANUAL: "chosen", NEW_PRODUCT: "created" })[m] || m.toLowerCase();
+  function gateTitle(r) {
+    const g = r.gate || {};
+    const f = Object.entries(g.fields || {}).map(([k, v]) => `${FIELD_NAMES[k] || k} ${Math.round(v * 100)}% (${(g.provenance || {})[k] || "—"})`);
+    return `${GATE[g.state]?.[0] || ""}: weakest is ${FIELD_NAMES[g.weakest] || g.weakest}\n${f.join("\n")}`;
+  }
   function issueText(r) {
     const open = (r.issues || []).filter((i) => !i.accepted).sort((a, b) => (a.level === "info") - (b.level === "info"));
     if (!open.length) return (r.issues || []).length ? '<span class="muted">warnings accepted</span>' : "";
@@ -210,11 +230,18 @@ export function create(ctx, params, root) {
   }
 
   const VIEWS = { READY: "Ready", CORRECTED: "Corrected", NEEDS_REVIEW: "Needs review", PRODUCT_MATCH_REQUIRED: "Product match",
-    INVALID: "Invalid", POSTED: "Posted", CLOSED: "Not received", SELECTED: "Selected" };
+    INVALID: "Invalid", POSTED: "Posted", CLOSED: "Not received", SELECTED: "Selected", ATTENTION: "Needing attention",
+    GATE_WARN: "Accepted with a warning", GATE_AUTO: "Auto-accepted" };
   function applyView(keep = true) {
     for (const id of [...markedIds]) if (!lines.some((l) => l.id === id)) markedIds.delete(id);
     if (view === "SELECTED" && !markedIds.size) view = "all";
-    const rows = view === "all" ? lines : view === "SELECTED" ? lines.filter((l) => markedIds.has(l.id)) : lines.filter((l) => l.status === view);
+    if (view === null) view = lines.some(needsAttention) ? "ATTENTION" : "all";
+    if (view === "ATTENTION" && !lines.some(needsAttention)) { view = "all"; if (keep) ctx.status("Nothing needs attention any more — every open line is accepted", "ok"); }
+    const rows = view === "all" ? lines : view === "SELECTED" ? lines.filter((l) => markedIds.has(l.id))
+      : view === "ATTENTION" ? lines.filter(needsAttention)
+      : view === "GATE_WARN" ? lines.filter((l) => !DONE.includes(l.status) && gateOf(l) === "AUTO_ACCEPT_WITH_WARNING")
+      : view === "GATE_AUTO" ? lines.filter((l) => !DONE.includes(l.status) && gateOf(l) === "AUTO_ACCEPT")
+      : lines.filter((l) => l.status === view);
     switching = true;
     try {
       grid.setRows(rows, { keep });
@@ -242,7 +269,14 @@ export function create(ctx, params, root) {
         : `<button type="button" class="btn primary p-post" ${s.postable ? "" : "disabled"} title="${s.postable ? "" : "Every open line must be Ready or Corrected — or select the ready ones (Shift+↑↓) and post those"}">${p.status === "PARTIAL" ? `Post remaining ${s.open}` : "Post to stock"} <kbd>${esc(keys.keyFor("purchase.post"))}</kbd></button>`
       : "";
     const chip = (v, label, n, tone = "") => `<button type="button" class="chip ${tone}${view === v ? " on" : ""}" data-view="${v}" ${n || v === "all" || view === v ? "" : "disabled"} aria-pressed="${view === v}" title="${v === "all" ? "Show every line" : `Show only ${label.toLowerCase()} lines`}">${label} ${n}</button>`;
-    bar.innerHTML = `
+    const g = s.gate || {};
+    const openCount = (g.AUTO_ACCEPT || 0) + (g.AUTO_ACCEPT_WITH_WARNING || 0) + (g.REVIEW || 0) + (g.BLOCK || 0);
+    const inbox = isOpen() && openCount ? `<span class="inbox-sum" title="Confidence gate: lines are auto-accepted only when product, quantity, batch, expiry and pack conversion are all certain">
+        ${openCount} open · <b class="ok">${g.AUTO_ACCEPT || 0} auto</b> · <b class="warn">${g.AUTO_ACCEPT_WITH_WARNING || 0} warning</b> · <b class="${(g.REVIEW || 0) + (g.BLOCK || 0) ? "bad" : "ok"}">${(g.REVIEW || 0) + (g.BLOCK || 0)} need you</b></span>
+      ${chip("ATTENTION", "Needs attention", (g.REVIEW || 0) + (g.BLOCK || 0), (g.REVIEW || 0) + (g.BLOCK || 0) ? "warn" : "")}
+      ${chip("GATE_WARN", "Warnings", g.AUTO_ACCEPT_WITH_WARNING || 0)}${chip("GATE_AUTO", "Auto-accepted", g.AUTO_ACCEPT || 0, "ok")}
+      <span class="sep"></span>` : "";
+    bar.innerHTML = `${inbox}
       ${chip("all", "All lines", s.rows)}
       ${chip("READY", "Ready", c.READY, "ok")}${chip("CORRECTED", "Corrected", c.CORRECTED, "ok")}
       ${chip("NEEDS_REVIEW", "Needs review", c.NEEDS_REVIEW, c.NEEDS_REVIEW ? "warn" : "")}
@@ -793,6 +827,71 @@ export function create(ctx, params, root) {
     grid.focus();
   }
 
+  /** Correction dialog for a questionable pack: what one invoice Qty is, saved for this invoice, the product or the supplier. */
+  async function packagingDialog(r) {
+    if (!r || !guard()) return;
+    let p;
+    try { p = await api(`/api/erp/purchases/${id}/lines/${r.id}/packaging`); } catch (err) { ctx.status(err.message, "error"); return; }
+    const rd = p.reading || {}, lv = (x) => (x ? `${x.quantity} ${t(x.unit || "unit").toLowerCase()}` : "—");
+    let scope = "supplier";
+    const body = h(`<div class="pack-fix">
+      <p>Supplier packing: <b class="mono">${esc(p.raw || "(none)")}</b> · billed ${esc(r.stock?.quantity || "")} + free ${esc(r.receipt?.free ?? "0")} — the received quantity does not change here.</p>
+      <p class="muted">Read as: purchase ${esc(lv(rd.purchase))} · retail ${esc(lv(rd.retail))} · base ${esc(lv(rd.base))}${p.container ? ` · container ${esc(p.container.quantity)} ${esc(String(p.container.unit).toLowerCase().replace("gram", "g"))}` : ""}
+        · ${esc(rd.confidence || "")}${(rd.issues || []).length ? ` — ${esc(rd.issues[0])}` : ""}</p>
+      <div class="form-grid three">
+        <label class="full">Item form<select name="form">${formOptions(p.form ? formFor(p.form, p.base_unit) : formFor("", p.base_unit))}</select></label>
+        <label>Units per retail pack<input name="units_per_retail" type="number" min="1" max="10000" value="${esc(p.units_per_retail)}"></label>
+        <label>Retail packs per box<input name="retail_per_outer" type="number" min="1" max="1000" value="${esc(p.retail_per_outer)}"></label>
+        <fieldset class="full"><legend>One invoice Qty is</legend>
+          <label class="chk"><input type="radio" name="level" value="RETAIL"> one retail pack (strip / bottle / tube)</label>
+          <label class="chk"><input type="radio" name="level" value="OUTER"> one outer box of retail packs</label>
+          <label class="chk"><input type="radio" name="level" value="BASE"> one base unit (tablet / piece)</label></fieldset>
+        <label class="full">How was this checked?<input name="reason" maxlength="300" placeholder="e.g. Carton says 10 strips of 10"></label>
+      </div>
+      <p class="pack-preview hint" aria-live="polite"></p>
+      <div class="pack-scope"><button type="button" class="btn" data-scope="invoice">Save for this invoice</button>
+        <button type="button" class="btn" data-scope="product">Save as product packaging</button>
+        <button type="button" class="btn primary" data-scope="supplier">Save supplier alias <kbd>Enter</kbd></button></div>
+      <p class="hint">Saving writes the mapping store only: the next invoice with this packing from this supplier resolves without review.</p></div>`);
+    const f = (n) => body.querySelector(`[name="${n}"]`);
+    body.querySelector(`[name="level"][value="${p.level}"]`).checked = true;
+    const preview = () => {
+      const n = Number(f("units_per_retail").value) || 1, outer = Number(f("retail_per_outer").value) || 1;
+      const level = body.querySelector('[name="level"]:checked').value, qty = Number(r.stock?.quantity?.replace(/,/g, "") || 0);
+      const per = { RETAIL: n, OUTER: n * outer, BASE: 1 }[level];
+      body.querySelector(".pack-preview").textContent = `${qty} × ${per} = ${toBase(qty, per)} stock units`;
+    };
+    body.addEventListener("input", preview); body.addEventListener("change", preview); preview();
+    wireFormSelect(f("form"), preview);
+    body.querySelectorAll("[data-scope]").forEach((b) => { b.onclick = () => { scope = b.dataset.scope; body.closest("form")?.requestSubmit(); }; });
+    const out = await modal({ title: `Packing of line ${r.line_no} — ${r.name}`, body, wide: true, submitLabel: "Save supplier alias",
+      onSubmit: () => api(`/api/erp/purchases/${id}/lines/${r.id}/packaging`, { method: "PUT", body: {
+        form: f("form").value, units_per_retail: f("units_per_retail").value, retail_per_outer: f("retail_per_outer").value,
+        level: body.querySelector('[name="level"]:checked').value, scope, reason: f("reason").value } }) });
+    if (out) { render(out); ctx.status(`Line ${r.line_no}: packing saved ${scope === "invoice" ? "for this invoice" : scope === "product" ? "as product packaging" : "as a supplier alias"}`, "ok"); }
+    grid.focus();
+  }
+
+  /** Match Inspector: why the line got its product and pack, and the next best candidates. */
+  async function inspector(r) {
+    if (!r) return;
+    let d;
+    try { d = await api(`/api/erp/purchases/${id}/lines/${r.id}/inspect`); } catch (err) { ctx.status(err.message, "error"); return; }
+    const sig = (s) => Object.entries(s.signals).map(([k, v]) => `<span class="sig ${v >= 0.95 ? "ok" : v <= 0.05 ? "bad" : "muted"}">${esc(k)} ${Math.round(v * 100)}</span>`).join(" ");
+    const m = d.matched;
+    const pk = d.packaging || {};
+    await modal({ title: `Match inspector — line ${d.line}`, wide: true, submitLabel: "Close", onSubmit: () => true,
+      body: `<p><b>${esc(d.description)}</b></p>
+        ${m ? `<p>Matched to <b>${esc(m.name)}</b> (${esc(matchLabel(m.method || ""))}) · confidence ${Math.round(m.score * 100)}%</p>
+          <ul class="inspect">${m.reasons.map((x) => `<li>${esc(x)}</li>`).join("")}</ul><p>${sig(m)}</p>` : '<p class="warn">No product matched.</p>'}
+        ${d.candidates.length ? `<h4>Other candidates</h4><table class="grid-lite"><tbody>${d.candidates.map((c) => `<tr><td>${esc(c.name)}</td><td class="num">${Math.round(c.score * 100)}%${c.capped ? " ⚠" : ""}</td><td>${esc(c.reasons.join("; "))}</td></tr>`).join("")}</tbody></table>` : ""}
+        <h4>Packing</h4><p>${esc(pk.raw || "—")} → ${esc(pk.handler || "")}: ${(pk.levels || []).map((l) => `${l.quantity} ${esc((l.unit || "").toLowerCase())}`).join(" × ") || "not read"} · ${esc(pk.confidence || "")}
+          ${pk.decision?.source ? ` · conversion from ${esc(pk.decision.source.toLowerCase().replaceAll("_", " "))}` : ""}</p>
+        ${(pk.decision?.evidence || []).length ? `<ul class="inspect">${pk.decision.evidence.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+        ${d.gate ? `<h4>Confidence</h4><p>${esc(GATE[d.gate.state][0])} · ${Object.entries(d.gate.fields).map(([k, v]) => `${esc(FIELD_NAMES[k] || k)} ${Math.round(v * 100)}% <small class="muted">${esc(d.gate.provenance[k] || "")}</small>`).join(" · ")}</p>` : ""}` });
+    grid.focus();
+  }
+
   async function deleteDoc() {
     if (!guard(true)) return;
     if (!(await window.erpConfirm("Delete this purchase draft and all its unreceived lines?"))) return;
@@ -839,6 +938,10 @@ export function create(ctx, params, root) {
     if (e.target !== grid.el) return;
     if (e.key === "Delete") { e.preventDefault(); removeLine(grid.selected); }
   });
+  grid.el.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-pack-fix]");
+    if (b) { e.preventDefault(); packagingDialog(lines.find((l) => l.id === Number(b.dataset.packFix))); }
+  });
   load().then(() => { if (doc && doc.summary.blocking) nextIssue(); });
 
   return {
@@ -850,6 +953,8 @@ export function create(ctx, params, root) {
         "purchase.next": nextIssue, "purchase.post": () => postDoc(), "purchase.refresh": load, "purchase.cancel": cancelDoc,
         "purchase.delete": deleteDoc, "purchase.removeLine": () => removeLine(grid.selected),
         "purchase.columns": columns, "purchase.gst": gstPanel, "purchase.category": changeCategory, "purchase.rollback": rollback,
+        "purchase.packaging": () => packagingDialog(grid.selected), "purchase.inspect": () => inspector(grid.selected),
+        "purchase.inbox": () => setView(view === "ATTENTION" ? "all" : "ATTENTION"),
         "purchase.source": () => doc && doc.purchase.has_source ? window.open(`/api/erp/purchases/${id}/source`, "_blank") : ctx.status("No supplier file (manual entry)", "warn"),
       };
       for (const [aid, fn] of Object.entries(act)) if (keys.matches(aid, name)) { fn(); return true; }

@@ -198,9 +198,10 @@ def test_expired_and_mrp_below_rate_warnings(db):
     assert p.items[0].status == "CORRECTED"
 
 
-def test_images_and_scanned_pdfs_refused(db):
+def test_unreadable_images_and_blank_scans_are_refused(db):
+    # scans and photos go through OCR (tests/test_ocr_route.py); what cannot be read is still refused
     sup = supplier(db)
-    with pytest.raises(PurchaseError, match="Photos and scans"):
+    with pytest.raises(PurchaseError, match="scan|Photos|OCR"):
         purchasing.create_from_file(db, "bill.jpg", b"\xff\xd8\xff", supplier_id=sup.id)
     import pymupdf
 

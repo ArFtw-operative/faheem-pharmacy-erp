@@ -181,3 +181,23 @@ def receipt_levels(decision: dict, definition: dict) -> tuple[dict | None, dict 
 
     paid_units, free_units = int(d.get("ledger_paid_units") or 0), int(d.get("ledger_free_units") or 0)
     return (level(paid + free if split else paid, paid_units), None if split else level(free, free_units))
+
+
+def hierarchy_text(pack_text: str, *, form: str = "", description: str = "") -> str:
+    """``1 box = 10 strips × 10 capsules = 100 capsules`` (for the popover), or why it is unread."""
+    from app.services import packaging_parser as pp
+
+    if not (pack_text or "").strip():
+        return "No packing printed on the invoice"
+    p = pp.parse(pack_text, master_form=form, description=description)
+    if p.base is None:
+        return "; ".join(p.issues) or f"Packing {pack_text!r} is not understood"
+    parts = [f"1 {label(p.purchase.unit or 'PACK', 1)}"]
+    if p.retail and p.retail.quantity > 1 and p.retail.unit != p.base.unit:
+        parts.append(f"{number(p.retail.quantity)} {label(p.retail.unit, p.retail.quantity)}"
+                     + (f" × {number(p.retail_to_base)} {label(p.base.unit, p.retail_to_base)}" if p.retail_to_base and p.retail_to_base > 1 else ""))
+    parts.append(f"{number(p.base.quantity)} {label(p.base.unit or 'UNIT', p.base.quantity)}")
+    text = " = ".join(dict.fromkeys(parts))
+    if p.content:
+        text += f" ({content_text(1, (p.content[0], p.content[1].replace('GRAM', 'G')))} each)"
+    return f"{pack_text}: {text} · {p.confidence.lower()} confidence"

@@ -93,19 +93,85 @@ def parse(filename: str, content: bytes, *, learned: dict[str, str] | None = Non
     if not content:
         raise ImportError_("The file is empty")
     if suffix in IMAGE_SUFFIXES:
-        raise ImportError_("Photos and scans are not imported (no reliable text). Use the supplier's CSV/Excel file, "
-                           "a computer-generated PDF, or enter the invoice manually.")
+        from app.services import ocr
+
+        if not ocr.available():
+            raise ImportError_("Photos and scans need the local OCR engine (Tesseract), which is not installed. Use the "
+                               "supplier's CSV/Excel file, a computer-generated PDF, or enter the invoice manually.")
+        doc = RawDocument(format="IMAGE", sha256=hashlib.sha256(content).hexdigest())
+        _parse_scan(content, doc, is_pdf=False, learned=learned, vocab=vocab)
+        if not doc.lines and not doc.parts:
+            raise ImportError_("No product lines were found in this file.")
+        return doc
     fmt = FORMATS.get(suffix)
     if fmt is None:
         raise ImportError_(f"Unsupported file type {suffix or filename!r}. Use CSV, XLS, XLSX or a digital PDF.")
     doc = RawDocument(format=fmt, sha256=hashlib.sha256(content).hexdigest())
-    if fmt == "PDF":
+    if fmt == "PDF" and _is_scan(content):
+        from app.services import ocr
+
+        if not ocr.available():
+            raise ImportError_("This PDF is a scan (no text layer) and the local OCR engine (Tesseract) is not installed. "
+                               "Use the supplier's CSV/Excel file, a computer-generated PDF, or enter the invoice manually.")
+        _parse_scan(content, doc, is_pdf=True, learned=learned, vocab=vocab)
+    elif fmt == "PDF":
         _parse_pdf(content, doc, learned=learned, vocab=vocab, advisor=advisor)
     else:
         _parse_sheet(filename, content, doc, learned=learned, vocab=vocab, advisor=advisor)
     if not doc.lines:
         raise ImportError_("No product lines were found in this file.")
     return doc
+
+
+def _is_scan(content: bytes) -> bool:
+    """A PDF whose own text layer holds too little text per page to read (never OCR a text PDF).
+    The threshold is configurable: PHARMACY_PDF_TEXT_MIN_CHARS (characters per page, default 25)."""
+    import os
+
+    from app.services import ocr
+
+    try:
+        per_page = ocr.text_chars_per_page(content)
+    except Exception:
+        return False                                   # unreadable here: let the PDF readers report it
+    return per_page < float(os.environ.get("PHARMACY_PDF_TEXT_MIN_CHARS", "25"))
+
+
+def _parse_scan(content: bytes, doc: RawDocument, *, is_pdf: bool, learned=None, vocab=None) -> None:
+    """Scanned PDF or photo: OCR word boxes → table rebuilt from positions → the same column mapper.
+    Each row keeps its OCR confidence and whether qty × rate = amount reconciles."""
+    from app.services import ocr
+
+    words = []
+    try:
+        for n, image in enumerate(ocr.pages(content, is_pdf=is_pdf), start=1):
+            words += ocr.words(image, page=n)
+    except ocr.OcrUnavailable as exc:
+        raise ImportError_(f"OCR could not read this scan: {exc}") from exc
+    except Exception as exc:
+        raise ImportError_(f"The scan could not be opened: {exc}") from exc
+    grid, conf, text = ocr.grid(words)
+    if len(grid) < 2:
+        raise ImportError_("No product table was found in this scan (no QTY / RATE / AMOUNT header). Use the supplier's "
+                           "file or enter the invoice manually.")
+    _read_grids([grid], doc, learned=learned, vocab=vocab)
+    reconciled = 0
+    for part in doc.parts or [doc]:
+        for line in part.lines:
+            ok, how = ocr.reconcile_row(line.raw)
+            reconciled += ok
+            line.raw["_ocr"] = {"confidence": conf.get(line.row, 0.0), "reconciled": ok, **({"corrected": how} if how else {})}
+    facts = ocr.header_facts(text)
+    doc.invoice_no = doc.invoice_no or facts.get("invoice_no", "")
+    doc.invoice_date = doc.invoice_date or facts.get("date", "")
+    doc.supplier_gstin = doc.supplier_gstin or facts.get("gstin", "")
+    doc.supplier_name = doc.supplier_name or facts.get("supplier_name", "")
+    rows = sum(len(p.lines) for p in (doc.parts or [doc]))
+    mean = round(sum(conf.values()) / len(conf), 3) if conf else 0.0
+    doc.charges = {**doc.charges, "_ocr_confidence": str(mean)}
+    doc.method = "ocr"
+    doc.warnings.append(f"Read by OCR from a scan: {reconciled} of {rows} rows reconcile (qty × rate = amount); "
+                        "the others are marked for checking against the paper")
 
 
 def _parse_sheet(filename: str, content: bytes, doc: RawDocument, *, learned=None, vocab=None, advisor=None) -> None:

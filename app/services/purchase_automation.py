@@ -466,6 +466,9 @@ def prepare(db, purchase, *, user=None):
     from app.services import purchasing
     if (purchase.charges or {}).get("_auto_post_error"):
         purchase.charges = {k:v for k,v in purchase.charges.items() if k != "_auto_post_error"}
+    if purchase.supplier_id is None and purchase.status == "DRAFT":
+        from app.services import supplier_profiles
+        supplier_profiles.recognize(db, purchase)
     for line in purchase.items:
         purchasing.refresh_line(db, purchase, line)
     if enabled(db) and identify_posted_copy(db, purchase, user=user):

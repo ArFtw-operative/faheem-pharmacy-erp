@@ -33,9 +33,11 @@ REPORT = LOG_DIR / "purchase-engine-bootstrap.json"
 def bootstrap(db: Session) -> dict:
     from app.services import mapping_store, packaging_store
 
+    from app.services import supplier_profiles
+
     packaging = packaging_store.bootstrap(db)
     aliases = mapping_store.bootstrap(db)
-    report = {"product_packaging": packaging, "aliases": aliases}
+    report = {"product_packaging": packaging, "aliases": aliases, "supplier_profiles": supplier_profiles.bootstrap(db)}
     try:
         REPORT.write_text(json.dumps(report, indent=1, default=str), encoding="utf-8")
     except OSError:
@@ -54,7 +56,8 @@ def summary(report: dict) -> str:
     p, a = report["product_packaging"], report["aliases"]
     return (f"{p['created']} product packs recorded, {len(p['skipped'])} left for review (pack text ambiguous or "
             f"disagreeing with the product); {a['created']} supplier aliases created, {a['confirmed']} confirmed from history, "
-            f"{len(a['ambiguous'])} ambiguous pairs listed, {a['packaging_aliases']} packaging aliases from reviewed receipts")
+            f"{len(a['ambiguous'])} ambiguous pairs listed, {a['packaging_aliases']} packaging aliases from reviewed receipts, "
+            f"{report.get('supplier_profiles', 0)} supplier invoice profiles")
 
 
 # --------------------------------------------------------------------------- metrics

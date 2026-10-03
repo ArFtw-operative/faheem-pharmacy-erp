@@ -67,7 +67,7 @@ export function create(ctx, params, root) {
     const out = await modal({
       title: "Import supplier invoice", wide: true, submitLabel: "Import invoice",
       body: `<div class="form-grid">
-        <label class="full">Supplier file — CSV, XLS, XLSX or computer-generated PDF<input type="file" name="file" accept=".csv,.tsv,.txt,.xls,.xlsx,.xlsm,.pdf" required autofocus></label>
+        <label class="full">Supplier file — CSV, XLS, XLSX, PDF, or a scan / photo (read by OCR, checked line by line)<input type="file" name="file" accept=".csv,.tsv,.txt,.xls,.xlsx,.xlsm,.pdf,.jpg,.jpeg,.png,.webp,.tif,.tiff,.bmp" required autofocus></label>
         <label class="full">Supplier<select name="supplier_id"><option value="">Choose…</option>${active.map((s) => `<option value="${s.id}">${esc(s.name)}${s.gst_number ? " · " + esc(s.gst_number) : ""}</option>`).join("")}</select></label>
         <label>Supplier invoice no.<input name="invoice_no" maxlength="60" placeholder="read from the file when present"></label>
         <label>Invoice date<input name="invoice_date" type="date"></label>

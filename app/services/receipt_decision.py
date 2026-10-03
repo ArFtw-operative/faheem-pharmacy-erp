@@ -315,7 +315,7 @@ def mrp_per_master_pack(line):
 
 def remember(db, purchase, line):
     stamp = (line.corrections or {}).get("_invoice_unit")
-    if stamp and stamp.get('operator_counts'):
+    if stamp and (stamp.get('operator_counts') or stamp.get('invoice_only')):
         return
     if not stamp or (line.receipt_decision or {}).get("scope") != stamp.get("scope"):
         return

@@ -94,6 +94,8 @@ def fields(line) -> tuple[dict, dict]:
     conf["mrp"] = 0.9 if codes & {"mrp_below_rate"} else 1.0
     if ocr:
         factor = Decimal(str(ocr.get("confidence", 0.9)))
+        if not ocr.get("reconciled") and not set(line.corrections or {}) & {"quantity", "free", "rate", "amount", "mrp"}:
+            factor = min(factor, Decimal("0.6"))
         for k in ("quantity", "batch", "expiry"):
             conf[k] = float(min(Decimal(str(conf[k])), factor))
     return conf, prov

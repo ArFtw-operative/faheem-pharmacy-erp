@@ -99,6 +99,8 @@ def _line_view(l: PurchaseItem, gst_ctx: tuple | None = None, limits: dict | Non
     except ValueError:
         paid = free = None
     stock = packaging_conversion.receipt_view(receipt, physical, pack_text=l.pack_size, item=it, paid=paid, free=free)
+    stock["hierarchy"] = packaging_conversion.hierarchy_text(l.pack_size, form=physical.get("dosage_form") or "",
+                                                             description=l.product_name)
     view = {
         "id": l.id, "line_no": l.line_no, "status": l.status, "name": l.product_name, "stock": stock,
         "supplier_code": l.supplier_code, "batch": l.batch_no, "expiry": _iso(l.expiry_date), "expiry_raw": l.expiry_raw,
@@ -362,6 +364,43 @@ def purchase_suggestions(purchase_id: int, line_id: int, db: Session = Depends(g
                          user: User = Depends(require_permission("purchase.view"))):
     p = _doc(db, purchase_id)
     return {"suggestions": purchasing.suggestions(db, _line(p, line_id))}
+
+
+@router.get("/api/erp/purchases/{purchase_id}/lines/{line_id}/packaging")
+def purchase_line_packaging(purchase_id: int, line_id: int, db: Session = Depends(get_db),
+                            user: User = Depends(require_permission("purchase.view"))):
+    from app.services import packaging_correction
+
+    p = _doc(db, purchase_id)
+    return packaging_correction.proposal(_line(p, line_id))
+
+
+@router.put("/api/erp/purchases/{purchase_id}/lines/{line_id}/packaging")
+async def purchase_line_packaging_save(purchase_id: int, line_id: int, request: Request, db: Session = Depends(get_db),
+                                       user: User = Depends(require_permission("purchase.create"))):
+    """Correction dialog: what one invoice Qty is, saved for this invoice, the product or the supplier."""
+    from app.services import packaging_correction
+
+    data = await request.json()
+    p = _doc(db, purchase_id)
+    _run(db, packaging_correction.apply, p, _line(p, line_id), data, user=user)
+    return _document(_doc(db, purchase_id))
+
+
+@router.get("/api/erp/purchases/{purchase_id}/lines/{line_id}/inspect")
+def purchase_line_inspect(purchase_id: int, line_id: int, db: Session = Depends(get_db),
+                          user: User = Depends(require_permission("purchase.view"))):
+    """Match Inspector: the signals behind the line's product and pack decisions."""
+    from app.services import confidence_gate, packaging_parser, product_matcher
+
+    p = _doc(db, purchase_id)
+    line = _line(p, line_id)
+    out = product_matcher.inspect(db, p, line)
+    parsed = packaging_parser.parse(line.pack_size, master_form=(line.item.dosage_form if line.item else ""),
+                                    description=line.product_name)
+    out["packaging"] = {**parsed.as_dict(), "decision": line.receipt_decision or {}}
+    out["gate"] = confidence_gate.assess(line, confidence_gate.thresholds(db)) if line.status not in purchasing.DONE else None
+    return out
 
 
 @router.put("/api/erp/purchases/{purchase_id}/lines/{line_id}/invoice-unit")

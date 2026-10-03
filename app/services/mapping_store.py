@@ -130,8 +130,8 @@ def remember_posted_line(db: Session, purchase: Purchase, line: PurchaseItem, *,
     decision = line.receipt_decision or {}
     if not purchase.supplier_id or line.item is None or not decision.get("resolved") or not line.pack_size:
         return
-    if stamp.get("source", "CONFIRMED") != "CONFIRMED" or stamp.get("operator_counts") or not stamp:
-        return                                     # counts for one delivery are not a supplier convention
+    if stamp.get("source", "CONFIRMED") != "CONFIRMED" or stamp.get("operator_counts") or not stamp or stamp.get("invoice_only"):
+        return                                     # counts for one delivery / "this invoice only" are not a convention
     factor = decision.get("units_per_invoice_unit")
     if not isinstance(factor, int) or factor < 1:
         return

@@ -140,6 +140,9 @@ ACTIONS: list[dict] = [
     {"id": "purchase.removeLine", "scope": "purchase", "group": "Purchase document", "label": "Remove unreceived line", "key": "Alt+D"},
     {"id": "purchase.category", "scope": "purchase", "group": "Purchase document", "label": "Change category only (selected lines, one click)", "key": "F7", "bar": 10},
     {"id": "purchase.rollback", "scope": "purchase", "group": "Purchase document", "label": "Roll back posted lines to draft (stock taken out again)", "key": "Alt+B"},
+    {"id": "purchase.packaging", "scope": "purchase", "group": "Purchase document", "label": "Correct packing: what one invoice Qty is (saved for invoice, product or supplier)", "key": "Alt+K"},
+    {"id": "purchase.inspect", "scope": "purchase", "group": "Purchase document", "label": "Match inspector: why this product and pack", "key": "Alt+J"},
+    {"id": "purchase.inbox", "scope": "purchase", "group": "Purchase document", "label": "Show only lines needing attention / all lines", "key": "Alt+V"},
     # ---- Ledger
     {"id": "ledger.refresh", "scope": "ledger", "group": "Stock ledger", "label": "Refresh", "key": "F5", "bar": 1},
 ]

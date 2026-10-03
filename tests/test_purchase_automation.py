@@ -261,6 +261,9 @@ def test_cross_format_copy_identifies_supplier_only_when_every_row_agrees(db):
     p=draft(db,*rows,total='30')
     purchasing.post(db,p)
     enable(db)
+    # This checks the row fingerprint alone; layout-profile recognition is tested in test_supplier_profiles.
+    from app.models import SupplierInvoiceProfile
+    db.query(SupplierInvoiceProfile).delete()
     # Different file bytes/layout but identical invoice identity and line values.
     other=purchasing.create_from_file(db,'copy.csv',csv_bytes(*rows)+b'\n',invoice_no=p.invoice_no,supplier_total='30')
     assert other.supplier_id is None

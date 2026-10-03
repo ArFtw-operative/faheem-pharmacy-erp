@@ -204,6 +204,14 @@ def import_file(db: Session, filename: str, content: bytes, *, supplier_id: int 
             source_format=doc.format, user=user)
         purchase.source_file, purchase.source_sha256 = str(path), doc.sha256
         _stage(db, purchase, part)
+        if purchase.supplier_id is None:
+            from app.services import supplier_profiles
+
+            found = supplier_profiles.recognize(db, purchase)
+            if found and found.get("assigned"):          # layout + invoice-number shape agree on one supplier
+                for line in purchase.items:
+                    refresh_line(db, purchase, line)
+                _refresh_totals(purchase)
         audit.record(db, action=audit.A_CREATE, entity_type="purchase", entity_id=purchase.id, user=user,
                      after={"file": filename, "lines": len(part.lines), "format": doc.format, "invoice": purchase.invoice_no},
                      details=f"Purchase draft imported from {filename}: {len(part.lines)} line(s)")
@@ -351,6 +359,16 @@ def _normalise(db: Session, purchase: Purchase, line: PurchaseItem) -> list[dict
         _issue(issues, "hsn_invalid", "hsn", "review", "HSN is not a 4, 6 or 8 digit code. Verify the column mapping or clear the incorrect value; it will not be saved as product HSN.")
     line.pack_size = (v.get("pack") or "").strip()[:60]
     line.manufacturer = (v.get("manufacturer") or "").strip()[:150]
+    from app.services import barcode_service
+
+    gs1 = barcode_service.parse(v.get("barcode") or "")
+    if gs1 is not None:                         # a GS1 code fills only what the invoice left blank
+        if gs1.batch and not (v.get("batch") or "").strip():
+            v["batch"] = gs1.batch
+            _issue(issues, "batch_from_gs1", "batch", "info", f"Batch {gs1.batch} read from the GS1 barcode")
+        if gs1.expiry and not (v.get("expiry") or "").strip():
+            v["expiry"] = gs1.expiry.strftime("%m/%Y")
+            _issue(issues, "expiry_from_gs1", "expiry", "info", f"Expiry {gs1.expiry:%b-%Y} read from the GS1 barcode")
 
     batch = (v.get("batch") or "").strip()
     line.batch_no = batch[:60]
@@ -406,6 +424,13 @@ def _normalise(db: Session, purchase: Purchase, line: PurchaseItem) -> list[dict
                    f"“{qraw}{'+' + fraw if fraw else ''}” = {_n(received)} packs = {_n(units.base_quantity(received, upp))} units — not a whole number of units; "
                    "correct the quantity from the invoice")
     paid = paid_x
+    ocr = v.get("_ocr") if isinstance(v.get("_ocr"), dict) else None
+    if ocr and not ocr.get("reconciled") and not set(line.corrections or {}) & {"quantity", "free", "rate", "amount", "mrp"}:
+        _issue(issues, "ocr_unverified", "quantity", "review",
+               "Read by OCR from a scan and qty × rate does not equal the amount — compare this line with the paper and "
+               "correct it (Enter)")
+    elif ocr and ocr.get("corrected"):
+        _issue(issues, "ocr_reconciled", "quantity", "info", f"OCR value corrected by arithmetic: {ocr['corrected']}")
     if received <= 0:
         _issue(issues, "qty_missing", "quantity", "review", "Paid plus free quantity must be greater than zero")
 
@@ -640,6 +665,15 @@ def _match(db: Session, purchase: Purchase, line: PurchaseItem) -> None:
         if mapping_store.usable(m):              # an alias a person overruled is only suggested
             line.item, line.match_method = m.item, "SUPPLIER_MAP"
             return
+    from app.services import barcode_service
+
+    gs1 = barcode_service.parse(effective(line).get("barcode") or "")
+    if gs1 is not None and gs1.gtin:
+        found = list(db.scalars(select(Item).where(Item.deleted_at.is_(None),
+                                                   Item.barcode.in_(barcode_service.gtin_keys(gs1.gtin))).limit(2)))
+        if len(found) == 1:
+            line.item, line.match_method = found[0], "GS1"
+            return
     if line.supplier_code:
         found = list(db.scalars(select(Item).where(Item.deleted_at.is_(None),
                                             (Item.article_id == line.supplier_code) | (Item.barcode == line.supplier_code)).limit(2)))
@@ -657,6 +691,14 @@ def _match(db: Session, purchase: Purchase, line: PurchaseItem) -> None:
                           and line.manufacturer and i.manufacturer.casefold() == line.manufacturer.casefold()]
             if len(compatible) == 1:
                 line.item, line.match_method = compatible[0], "EXACT_NAME"
+        if not found:
+            # names that differ only superficially (ROSUBEST 10 TAB = ROSUBEST-10 TABLET); strengths and
+            # formulation markers are part of the key, and only a unique product is taken
+            from app.services import product_matcher
+
+            item, _why = product_matcher.normalized_match(db, line.product_name, line.pack_size)
+            if item is not None:
+                line.item, line.match_method = item, "NORMALIZED_NAME"
 
 
 def _product_issues(db: Session, line: PurchaseItem) -> list[dict]:
@@ -1156,6 +1198,8 @@ def post(db: Session, purchase: Purchase, *, user: User | None = None, accept_di
             if first or purchase.posted_at is None:         # first receipt, or again after a roll back
                 purchase.posted_at, purchase.posted_by = utcnow(), user.id if user else None
                 purchase.purchase_date = purchase.posted_at
+                from app.services import supplier_profiles
+                supplier_profiles.learn(db, purchase)       # a confirmed invoice teaches the supplier's layout
             _refresh_totals(purchase)
             db.flush()
     except stock_ledger.BatchConflict as exc:
@@ -1336,7 +1380,7 @@ def close_remaining(db: Session, purchase: Purchase, *, reason: str, user: User 
 
 def _remember_mapping(db: Session, purchase: Purchase, line: PurchaseItem, user: User | None) -> None:
     """A posted deterministic identity teaches the supplier mapping for next time."""
-    if not purchase.supplier_id or line.item is None or (line.match_method not in ("MANUAL", "NEW_PRODUCT", "SUPPLIER_MAP", "EXACT_NAME", "CODE", "CANONICAL_NAME_PACK") and not (line.corrections or {}).get("_invoice_unit")):
+    if not purchase.supplier_id or line.item is None or (line.match_method not in ("MANUAL", "NEW_PRODUCT", "SUPPLIER_MAP", "EXACT_NAME", "CODE", "CANONICAL_NAME_PACK", "NORMALIZED_NAME", "GS1") and not (line.corrections or {}).get("_invoice_unit")):
         return
     code = line.supplier_code or ""
     key = "" if code else description_key(line.description_raw or line.product_name)
