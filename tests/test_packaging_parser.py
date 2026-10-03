@@ -138,3 +138,9 @@ def test_content_is_metadata_never_stock(qty, unit):
     if p.base is not None:
         assert p.base.quantity == 1
         assert p.content[0] == qty
+
+
+def test_bare_one_is_a_doubtful_count_only_for_strip_forms():
+    assert pp.parse("1", description="FLUMET 200 TAB").ambiguous_count
+    assert not pp.parse("1", description="I V FLOW REGULATOR").ambiguous_count
+    assert pp.parse("10X1", description="X TABLET").ambiguous_count and pp.parse("18 NO", description="IV CANNULA").ambiguous_count

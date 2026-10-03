@@ -456,7 +456,9 @@ def score_confidence(p: Packaging, form: str, ctx: dict) -> None:
         p.confidence = min(p.confidence, LOW, key=RANK.get)
         p.issues.append("The dosage form is not known, so the stock unit of this pack cannot be decided")
     if ctx.get("bare_single") and (form in SOLID or not form):
-        p.confidence, p.ambiguous_count = min(p.confidence, LOW, key=RANK.get), True
+        p.confidence = min(p.confidence, LOW, key=RANK.get)
+        # a bare 1 is a doubtful count only for forms that come in strips; for anything else it is one unit
+        p.ambiguous_count = form in SOLID
         p.issues.append("A bare '1' does not say how many tablets or capsules one pack holds")
     if p.handler == "CountPackHandler" and not form and not ctx.get("unit_hint") and p.base and p.base.quantity > 1:
         p.confidence = min(p.confidence, MEDIUM, key=RANK.get)
