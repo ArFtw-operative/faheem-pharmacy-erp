@@ -5,11 +5,14 @@
 //                      database enforces that every product's category exists.
 //   Units of measure   how each product is counted (detected automatically from
 //                      its pack and form; Enter corrects an exception).
+//   Item forms         the form master (tablets, syrup bottles, cannulas …): built-in
+//                      forms plus the pharmacy's own (F3 adds one, Space hides one).
 //
-// F6 switches between the two lists.
+// F6 switches between the lists.
 import * as keys from "erp/keys";
 import { $, $$, BOOT, api, debounce, esc, h, modal, toBase, unitName } from "erp/core";
 import { Grid } from "erp/grid";
+import { createForm } from "erp/physical-units";
 
 const t = (s) => (s ? s.charAt(0) + s.slice(1).toLowerCase() : "—");
 
@@ -19,16 +22,20 @@ export function create(ctx, params, root) {
     <div class="mtabs" role="tablist">
       <button type="button" data-panel="categories" role="tab">Categories</button>
       <button type="button" data-panel="uom" role="tab">Units of measure</button>
+      <button type="button" data-panel="forms" role="tab">Item forms</button>
       <span class="hint">F6 switches</span>
     </div>
     <section class="mpanel" data-panel="categories"></section>
     <section class="mpanel" data-panel="uom" hidden></section>
+    <section class="mpanel" data-panel="forms" hidden></section>
   </div>`;
   const panels = {
     categories: categoriesPanel(ctx, $('.mpanel[data-panel="categories"]', root), CAN),
     uom: uomPanel(ctx, $('.mpanel[data-panel="uom"]', root), CAN),
+    forms: formsPanel(ctx, $('.mpanel[data-panel="forms"]', root), CAN),
   };
-  let current = params.panel === "uom" ? "uom" : "categories";
+  const ORDER = ["categories", "uom", "forms"];
+  let current = ORDER.includes(params.panel) ? params.panel : "categories";
   function show(name, focus = true) {
     current = name;
     $$(".mtabs [data-panel]", root).forEach((b) => b.classList.toggle("on", b.dataset.panel === name));
@@ -41,7 +48,7 @@ export function create(ctx, params, root) {
   return {
     get keys() { return keys.bar("masters"); },
     onKey(e, name) {
-      if (keys.matches("masters.panel", name)) { show(current === "categories" ? "uom" : "categories"); return true; }
+      if (keys.matches("masters.panel", name)) { show(ORDER[(ORDER.indexOf(current) + 1) % ORDER.length]); return true; }
       return panels[current].onKey(name);
     },
     onShow({ focus }) { if (focus) setTimeout(() => panels[current].shown(true), 0); },
@@ -235,6 +242,71 @@ function uomPanel(ctx, el, CAN) {
     onKey(name) {
       if (keys.matches("masters.refresh", name)) { load(); return true; }
       if (keys.matches("masters.search", name)) { q.focus(); return true; }
+      return false;
+    },
+  };
+}
+
+// ---------------------------------------------------------------------- item forms
+function formsPanel(ctx, el, CAN) {
+  let rows = [];
+  const canAdd = CAN["inventory.edit"] || CAN["purchase.create"];
+  el.innerHTML = `
+    <div class="filters">
+      <b>Item forms</b>
+      <span class="hint">How each kind of product is counted. Every form list (purchases, inventory) shows these, with “Create new form…” at the bottom.</span>
+      <span class="spacer"></span>
+      ${canAdd ? '<button type="button" class="btn primary f-new">New item form <kbd>F3</kbd></button>' : ""}
+      <span class="f-count muted"></span>
+    </div>
+    <p class="m-help"><kbd>F3</kbd> new form · <kbd>Space</kbd> show / hide a form in the lists. Hidden forms stay on existing products.</p>`;
+  const grid = new Grid({
+    label: "Item forms", storageKey: "masters-forms", empty: "No forms.",
+    columns: [
+      { key: "name", label: "Form", width: 260, render: (r) => `<b>${esc(r.name)}</b>` },
+      { key: "code", label: "Code", width: 120, render: (r) => `<span class="mono">${esc(r.code)}</span>` },
+      { key: "base_unit", label: "Stock counted in", width: 120, render: (r) => esc(unitName(r.base_unit, 2)) },
+      { key: "pack_unit", label: "Retail pack", width: 110, render: (r) => esc(unitName(r.pack_unit, 1)) },
+      { key: "counted", label: "Pack holds", width: 150, render: (r) => (r.counted ? `several ${esc(unitName(r.base_unit, 2))}` : "one whole container") },
+      { key: "content_unit", label: "Content", width: 70, render: (r) => esc(r.content_unit ? r.content_unit.replace("ML", "mL").replace("G", "g") : "—") },
+      { key: "builtin", label: "Source", width: 80, render: (r) => (r.builtin ? "Built-in" : "Pharmacy") },
+      { key: "active", label: "Status", width: 80, cellClass: (r) => (r.active ? "st-ok" : "st-out"), render: (r) => (r.active ? "Shown" : "Hidden") },
+    ],
+    rowClass: (r) => (r.active ? "" : "dim"),
+    contextMenu: () => [
+      ...(canAdd ? [{ label: "New item form", key: keys.keyFor("masters.new"), action: () => add() }] : []),
+      ...(CAN["inventory.edit"] ? [{ label: "Show / hide", key: "Space", action: () => toggle(grid.selected) }] : []),
+    ],
+  });
+  el.append(grid.el);
+  const count = () => { $(".f-count", el).textContent = `${rows.length} forms · ${rows.filter((r) => !r.builtin).length} added by the pharmacy`; };
+  const set = (list, keep = true) => { rows = list; grid.setRows(rows, { keep }); count(); BOOT.item_forms = rows.filter((r) => r.active); };
+  const load = async () => { try { set((await api("/api/erp/item-forms?all=1")).forms); } catch (err) { ctx.status(err.message, "error"); } };
+  async function add() {
+    if (!canAdd) { ctx.status("Adding item forms needs inventory or purchase rights", "warn"); return; }
+    const made = await createForm();
+    if (made) { await load(); grid.select(rows.findIndex((r) => r.code === made.code)); ctx.status(`Item form ${made.name} created`, "ok"); }
+    grid.focus();
+  }
+  async function toggle(r) {
+    if (!r) return;
+    if (!CAN["inventory.edit"]) { ctx.status("Hiding item forms needs inventory edit rights", "warn"); return; }
+    try { set((await api(`/api/erp/item-forms/${encodeURIComponent(r.code)}`, { method: "PUT", body: { active: !r.active } })).forms); ctx.status(`${r.name} ${r.active ? "hidden" : "shown"}`, "ok"); }
+    catch (err) { ctx.status(err.message, "error"); }
+  }
+  grid.el.addEventListener("keydown", (e) => {
+    if (e.target !== grid.el) return;
+    if (e.key === " ") { e.preventDefault(); toggle(grid.selected); }
+  });
+  const btn = $(".f-new", el);
+  if (btn) btn.onclick = add;
+  load();
+  return {
+    shown(focus) { if (focus) grid.focus(); },
+    onKey(name) {
+      if (keys.matches("masters.new", name)) { add(); return true; }
+      if (keys.matches("masters.refresh", name)) { load(); return true; }
+      if (keys.matches("masters.search", name)) { grid.focus(); return true; }
       return false;
     },
   };

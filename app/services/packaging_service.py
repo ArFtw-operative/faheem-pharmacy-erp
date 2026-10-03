@@ -224,9 +224,9 @@ def convert(
     if content_unit is not None:
         item.content_unit = content_unit
     if dosage_form:
-        item.dosage_form = units.normalize_unit(dosage_form, units.DOSAGE_FORMS, item.dosage_form or "")
+        item.dosage_form = units.normalize_unit(dosage_form, units.known_forms(), item.dosage_form or "")
     elif not item.dosage_form:
-        item.dosage_form = detect_form(item) if detect_form(item) in units.DOSAGE_FORMS else ""
+        item.dosage_form = detect_form(item) if detect_form(item) in units.known_forms() else ""
     item.packaging_source = source
     db.flush()
     after = {"base_unit": base_unit, "pack_unit": pack_unit, "units_per_pack": upp, "loose_sale": bool(item.loose_sale),
@@ -289,6 +289,6 @@ def defaults_for_new(name: str, pack: str, fields: dict) -> dict:
            "packaging_source": "AUTO"}
     if uom.content_qty is not None:
         out["content_qty"], out["content_unit"] = uom.content_qty, uom.content_unit
-    if uom.dosage_form and not fields.get("dosage_form") and uom.dosage_form in units.DOSAGE_FORMS:
+    if uom.dosage_form and not fields.get("dosage_form") and uom.dosage_form in units.known_forms():
         out["dosage_form"] = uom.dosage_form
     return out

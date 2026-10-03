@@ -64,7 +64,7 @@ def clean_packaging(fields: dict[str, Any], current: Item | None = None) -> dict
     if fields.get("pack_unit"):
         out["pack_unit"] = units.normalize_unit(fields["pack_unit"], units.PACK_UNITS, "PACK")
     if "dosage_form" in fields and fields["dosage_form"] is not None:
-        form = units.normalize_unit(fields["dosage_form"], units.DOSAGE_FORMS, "")
+        form = units.normalize_unit(fields["dosage_form"], units.known_forms(), "")
         out["dosage_form"] = form
     if fields.get("loose_sale") not in (None, "", "auto"):
         value = fields["loose_sale"]
@@ -347,6 +347,7 @@ def add_or_update_batch(
     reason: str = "",
     user: User | None = None,
     ip_address: str = "",
+    levels: tuple[dict | None, dict | None] | None = None,
 ) -> Batch:
     """Receive stock into the matching batch (created on first receipt).
 
@@ -365,7 +366,7 @@ def add_or_update_batch(
         batch_no=batch_no, expiry_date=expiry_date, mrp=mrp, purchase_rate=purchase_rate,
         selling_rate=selling_rate, supplier_id=supplier_id, purchase_id=purchase_id,
         reference_type=reference_type, reference_id=reference_id, reference_no=reference_no,
-        reason=reason, user=user, ip_address=ip_address,
+        reason=reason, user=user, ip_address=ip_address, levels=levels,
     )
     # Receiving stock re-enables a *disabled* item, but it must never resurrect
     # an item the user deleted to the recycle bin. Recycle-bin items are

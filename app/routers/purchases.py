@@ -81,7 +81,7 @@ def _header(p: Purchase) -> dict:
     }
 
 
-def _line_view(l: PurchaseItem, gst_ctx: tuple | None = None) -> dict:
+def _line_view(l: PurchaseItem, gst_ctx: tuple | None = None, limits: dict | None = None) -> dict:
     it = l.item
     from app.services import receipt_decision, packaging_service, units
     physical = receipt_decision.definition(l)
@@ -129,6 +129,9 @@ def _line_view(l: PurchaseItem, gst_ctx: tuple | None = None) -> dict:
         view.update(taxable=str(b["taxable"]), gst_amount=str(b["gst"]), cgst=str(b["cgst"]), sgst=str(b["sgst"]),
                     igst=str(b["igst"]), landed=str(b["landed"]), rate_incl=str(b["rate_incl"]), gst_worked_out=True)
     view["cost"] = packaging_conversion.unit_costs(view["landed"] or None, stock, receipt, physical)
+    from app.services import confidence_gate
+    view["gate"] = (confidence_gate.assess(l, limits) if l.status not in purchasing.DONE
+                    else {"state": confidence_gate.line_state(l), "confidence": None, "fields": {}, "provenance": {}})
     return view
 
 
@@ -147,8 +150,15 @@ def _document(p: Purchase) -> dict:
     from app.services import purchase_automation
     summary["automation"] = purchase_automation.assessment(db, p)
     ctx = (G.bill_discount_factor(p), summary["gst"]["mode"])
-    return {"purchase": _header(p), "summary": summary,
-            "lines": [_line_view(l, ctx) for l in sorted(p.items, key=lambda l: l.line_no)]}
+    from app.services import confidence_gate
+    limits = confidence_gate.thresholds(db)
+    lines = [_line_view(l, ctx, limits) for l in sorted(p.items, key=lambda l: l.line_no)]
+    gate = {s: 0 for s in (confidence_gate.AUTO_ACCEPT, confidence_gate.WARNING, confidence_gate.REVIEW, confidence_gate.BLOCK)}
+    for l in lines:
+        if l["status"] not in purchasing.DONE:
+            gate[l["gate"]["state"]] += 1
+    summary["gate"] = {**gate, "thresholds": limits}
+    return {"purchase": _header(p), "summary": summary, "lines": lines}
 
 
 # --------------------------------------------------------------------------- register

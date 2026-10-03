@@ -18,7 +18,7 @@ from types import SimpleNamespace
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
-from app.models import Item, Purchase, PurchaseItem, SupplierProductMap
+from app.models import ImportMetric, Item, Purchase, PurchaseItem, SupplierProductMap
 from app.services import medicine_reference as reference, packaging_service, receipt_decision as rd, settings_service, units
 from app.utils import money
 
@@ -476,9 +476,11 @@ def prepare(db, purchase, *, user=None):
 
 
 def import_file(db, filename, content, *, user=None, **kwargs):
+    import time
     from app import audit
     from app.permissions import has_permission
-    from app.services import purchasing
+    from app.services import purchase_engine, purchasing
+    started = time.perf_counter()
     # A retry returns the original document; it never replays stock movements.
     try:
         drafts = purchasing.import_file(db, filename, content, user=user, **kwargs)
@@ -504,4 +506,8 @@ def import_file(db, filename, content, *, user=None, **kwargs):
         purchase.charges = {**(purchase.charges or {}), "_automation": report}
         audit.record(db, action=audit.A_UPDATE, entity_type="purchase_automation", entity_id=purchase.id,
                      user=user, after=report, details=f"Automatic intake: {report['resolved_rows']}/{report['total_rows']} rows resolved; {purchase.status}")
+    for purchase in drafts:
+        if not db.scalar(select(func.count()).select_from(ImportMetric).where(ImportMetric.purchase_id == purchase.id)):
+            purchase_engine.record(db, purchase, route=purchase_engine.route_of(purchase), started=started,
+                                   ocr_confidence=(purchase.charges or {}).get("_ocr_confidence"))
     return drafts

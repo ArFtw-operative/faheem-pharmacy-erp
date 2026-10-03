@@ -76,8 +76,8 @@ ACTIONS: list[dict] = [
     # ---- Masters
     {"id": "masters.search", "scope": "masters", "group": "Masters", "label": "Search", "key": "F2", "bar": 1},
     {"id": "masters.refresh", "scope": "masters", "group": "Masters", "label": "Refresh", "key": "F5", "bar": 2},
-    {"id": "masters.panel", "scope": "masters", "group": "Masters", "label": "Switch list (Categories / Units of measure)", "key": "F6", "bar": 3},
-    {"id": "masters.new", "scope": "masters", "group": "Masters", "label": "New category", "key": "F3", "bar": 4},
+    {"id": "masters.panel", "scope": "masters", "group": "Masters", "label": "Switch list (Categories / Units of measure / Item forms)", "key": "F6", "bar": 3},
+    {"id": "masters.new", "scope": "masters", "group": "Masters", "label": "New category / item form", "key": "F3", "bar": 4},
     {"id": "masters.merge", "scope": "masters", "group": "Masters", "label": "Merge category into another", "key": "F4", "bar": 5},
     {"id": "masters.up", "scope": "masters", "group": "Masters", "label": "Move category up", "key": "Alt+ArrowUp"},
     {"id": "masters.down", "scope": "masters", "group": "Masters", "label": "Move category down", "key": "Alt+ArrowDown"},

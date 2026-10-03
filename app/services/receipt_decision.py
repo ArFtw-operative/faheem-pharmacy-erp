@@ -141,7 +141,7 @@ def decide(line, confirmation=None, *, validate_master=False):
     item = line.item
     master = definition(line)['units_per_pack']
     pack = units.parse_pack(v.get("pack"))
-    if validate_master and not (confirmation and confirmation.get('source') in {'CONFIRMED','SUPPLIER_MEMORY'}):
+    if validate_master and not (confirmation and confirmation.get('source') in {'CONFIRMED','SUPPLIER_MEMORY','SUPPLIER_PACKING_ALIAS'}):
         problems = master_problems(line)
         if problems:
             issues.extend(problems)
@@ -241,6 +241,14 @@ def resolve(db, purchase, line):
         entry = (learned.receipt_conventions or {}).get(scope) if learned else None
         if entry:
             confirmed = {**entry, "source": "SUPPLIER_MEMORY"}
+    if confirmed is None and not re.search(r"[a-z]", str(effective(line).get("quantity", "")), re.I):
+        from app.services import mapping_store
+        alias = mapping_store.packaging_alias(db, purchase.supplier_id, line.pack_size, line.item)
+        if alias is not None:
+            confirmed = {"units_per_invoice_unit": alias.units_per_invoice_unit, "mrp_basis": alias.mrp_basis,
+                         "source": "SUPPLIER_PACKING_ALIAS",
+                         "evidence": [f"Supplier packing alias: {alias.raw_pack!r} from this supplier counts {alias.units_per_invoice_unit} "
+                                      f"{(alias.base_unit or 'unit').lower()}s per invoice Qty (confirmed {alias.occurrences}×)"]}
     if confirmed is None:
         from app.services import purchase_automation
         if purchase_automation.enabled(db):

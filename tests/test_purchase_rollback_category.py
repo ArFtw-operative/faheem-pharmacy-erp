@@ -144,3 +144,19 @@ def test_rollback_and_category_api(client, db):
     db.expire_all()
     assert _stock(db, item) == 0
     assert db.query(AuditLog).filter(AuditLog.details.like("%returned to review%")).count() == 1
+
+
+def test_receipt_movements_keep_purchase_retail_and_base_levels(db):
+    from decimal import Decimal
+    dolo(db)
+    p = draft(db, "D650,DOLO 650MG TAB,15S,DB1,May-2028,10,2,24.00,33.60,240.00")
+    purchasing.post(db, p)
+    moves = {m.movement_type: m for m in db.query(InventoryMovement)}
+    paid, free = moves["PURCHASE_RECEIPT"], moves["FREE_STOCK"]
+    assert (paid.quantity, paid.purchase_quantity, paid.purchase_uom, paid.retail_quantity, paid.retail_uom, paid.base_uom) == (
+        150, Decimal("10"), "STRIP", Decimal("10"), "STRIP", "TABLET")
+    assert (free.quantity, free.purchase_quantity, free.retail_quantity) == (30, Decimal("2"), Decimal("2"))
+    purchasing.rollback(db, p, reason="Entered twice by mistake")
+    back = db.query(InventoryMovement).filter_by(movement_type="RECEIPT_REVERSAL").all()
+    assert sorted(m.purchase_quantity for m in back) == [Decimal("-10"), Decimal("-2")]
+    assert all(m.base_uom == "TABLET" for m in back)

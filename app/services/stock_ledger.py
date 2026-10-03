@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import func, select, update
@@ -70,8 +71,12 @@ def post(
     reason: str = "",
     user: User | None = None,
     reversal_of: InventoryMovement | None = None,
+    levels: dict | None = None,
 ) -> InventoryMovement:
-    """Post one movement of ``quantity`` base units (a positive magnitude)."""
+    """Post one movement of ``quantity`` base units (a positive magnitude).
+
+    ``levels`` optionally records the document's packaging levels beside the base quantity
+    (purchase_quantity / purchase_uom / retail_quantity / retail_uom / base_uom)."""
     if movement_type not in MOVEMENT_TYPES:
         raise StockError(f"Unknown movement type {movement_type!r}")
     if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0:
@@ -121,6 +126,20 @@ def post(
         reversal_of_id=reversal_of.id if reversal_of is not None else None,
         user_id=user.id if user else None,
     )
+    sign = 1 if delta > 0 else -1
+    if levels:
+        movement.purchase_quantity = sign * levels["purchase_quantity"] if levels.get("purchase_quantity") is not None else None
+        movement.purchase_uom = levels.get("purchase_uom")
+        movement.retail_quantity = sign * levels["retail_quantity"] if levels.get("retail_quantity") is not None else None
+        movement.retail_uom = levels.get("retail_uom")
+        movement.base_uom = levels.get("base_uom")
+    elif reversal_of is not None and reversal_of.purchase_uom:
+        share = Decimal(quantity) / abs(reversal_of.quantity)        # a reversal mirrors the levels it undoes
+        movement.purchase_uom, movement.retail_uom, movement.base_uom = reversal_of.purchase_uom, reversal_of.retail_uom, reversal_of.base_uom
+        if reversal_of.purchase_quantity is not None:
+            movement.purchase_quantity = -Decimal(reversal_of.purchase_quantity) * share
+        if reversal_of.retail_quantity is not None:
+            movement.retail_quantity = -Decimal(reversal_of.retail_quantity) * share
     if reversal_of is not None and reversal_of.cost_amount is not None:
         previous = reversed_quantity(db, reversal_of)
         original = abs(reversal_of.cost_amount)
@@ -292,9 +311,11 @@ def receive(
     reason: str = "",
     user: User | None = None,
     ip_address: str = "",
+    levels: tuple[dict | None, dict | None] | None = None,
 ) -> Batch:
     """Receive stock into a batch: paid quantity and free quantity post
-    separately (``FREE_STOCK``) so free goods are never lost."""
+    separately (``FREE_STOCK``) so free goods are never lost. ``levels`` (paid, free)
+    records each movement's packaging levels."""
     if movement_type not in INBOUND:
         raise StockError(f"{movement_type} does not add stock")
     if quantity < 0 or free < 0:
@@ -307,12 +328,13 @@ def receive(
     upp = batch.units_per_pack or 1
     refs = dict(reference_type=reference_type, reference_id=reference_id, reference_no=reference_no,
                 reason=reason, user=user)
+    paid_levels, free_levels = levels or (None, None)
     if quantity:
         post(db, batch, movement_type, units.to_base(quantity, upp, unit),
-             txn_quantity=quantity, txn_unit=unit.upper(), **refs)
+             txn_quantity=quantity, txn_unit=unit.upper(), levels=paid_levels, **refs)
     if free:
         post(db, batch, "FREE_STOCK", units.to_base(free, upp, unit),
-             txn_quantity=free, txn_unit=unit.upper(), **refs)
+             txn_quantity=free, txn_unit=unit.upper(), levels=free_levels, **refs)
     if item.mrp in (None, 0) and batch.mrp:
         item.mrp = batch.mrp
     return batch

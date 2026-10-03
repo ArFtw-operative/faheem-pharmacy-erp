@@ -27,11 +27,24 @@ from typing import Any
 # Vocabulary
 # ---------------------------------------------------------------------------
 BASE_UNITS = ("UNIT", "TABLET", "CAPSULE", "BOTTLE", "TUBE", "PIECE", "PACK", "STRIP",
-              "VIAL", "AMPOULE", "SACHET", "JAR", "BOX", "KIT", "PAIR")
-PACK_UNITS = ("PACK", "STRIP", "BOX", "BOTTLE", "TUBE", "PIECE", "VIAL", "SACHET", "KIT", "JAR", "UNIT")
-DOSAGE_FORMS = ("", "TABLET", "CAPSULE", "SYRUP", "SUSPENSION", "DROPS", "INJECTION", "CREAM",
-                "OINTMENT", "GEL", "LOTION", "POWDER", "SACHET", "INHALER", "SPRAY", "SOAP",
-                "DEVICE", "KIT", "SUPPOSITORY", "OTHER")
+              "VIAL", "AMPOULE", "SACHET", "JAR", "BOX", "KIT", "PAIR", "BAG")
+PACK_UNITS = ("PACK", "STRIP", "BOX", "BOTTLE", "TUBE", "PIECE", "VIAL", "AMPOULE", "SACHET", "KIT", "JAR", "UNIT",
+              "BAG", "CARTON", "PAIR")
+DOSAGE_FORMS = ("", "TABLET", "CAPSULE", "SOFTGEL", "SYRUP", "SUSPENSION", "DROPS", "INJECTION", "VIAL", "AMPOULE",
+                "IV_FLUID", "CREAM", "OINTMENT", "GEL", "LOTION", "POWDER", "SACHET", "INHALER", "ROTACAP", "RESPULE",
+                "SPRAY", "SOAP", "DEVICE", "SYRINGE", "NEEDLE", "CANNULA", "TEST_STRIP", "BANDAGE", "PAIR", "KIT",
+                "SUPPOSITORY", "OTHER")
+_EXTRA_FORMS: set[str] = set()     # the pharmacy's own forms (item_forms master), registered at start-up
+
+
+def register_forms(codes) -> None:
+    """Accept the pharmacy's own item-form codes as dosage forms (see form_service)."""
+    _EXTRA_FORMS.clear()
+    _EXTRA_FORMS.update(c for c in codes if c)
+
+
+def known_forms() -> tuple[str, ...]:
+    return DOSAGE_FORMS + tuple(sorted(_EXTRA_FORMS - set(DOSAGE_FORMS)))
 
 _PLURAL = {"BOX": "boxes", "PIECE": "pieces", "PAIR": "pairs"}
 
@@ -45,7 +58,7 @@ def unit_label(unit: str, qty: int | None = None) -> str:
 
 
 def normalize_unit(value: Any, allowed: tuple[str, ...], default: str) -> str:
-    text = re.sub(r"[^A-Z]", "", str(value or "").upper())
+    text = re.sub(r"[^A-Z_]", "", re.sub(r"[\s-]+", "_", str(value or "").strip().upper())).strip("_")
     aliases = {"TAB": "TABLET", "TABS": "TABLET", "TABLETS": "TABLET", "CAP": "CAPSULE",
                "CAPS": "CAPSULE", "CAPSULES": "CAPSULE", "BTL": "BOTTLE", "BOTTLES": "BOTTLE",
                "PCS": "PIECE", "PC": "PIECE", "PIECES": "PIECE", "NOS": "PIECE", "STRIPS": "STRIP",

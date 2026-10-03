@@ -259,6 +259,13 @@ class SupplierProductMap(Base):
     confirmed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     uses: Mapped[int] = mapped_column(Integer, default=0)
     receipt_conventions: Mapped[dict | None] = mapped_column(JSON)
+    # Mapping store: how far the alias is trusted. A person overruling it lowers trust and marks it
+    # AMBIGUOUS, after which it is only suggested, never applied (history in mapping_history).
+    trust: Mapped[Decimal | None] = mapped_column(Numeric(4, 3))
+    corrections: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str | None] = mapped_column(String(12))          # ACTIVE · AMBIGUOUS
+    source: Mapped[str | None] = mapped_column(String(20))          # CONFIRMED · POSTED · BOOTSTRAP · USER_CORRECTION
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     item: Mapped["Item"] = relationship()
 
@@ -675,6 +682,13 @@ class InventoryMovement(Base):
     reversal_of_id: Mapped[int | None] = mapped_column(ForeignKey("inventory_movements.id"), index=True)
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # The three packaging levels of a receipt (purchase → retail → base), kept beside the base
+    # quantity above so a receipt is never flattened to one number. Null on older movements.
+    purchase_quantity: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    purchase_uom: Mapped[str | None] = mapped_column(String(20))
+    retail_quantity: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    retail_uom: Mapped[str | None] = mapped_column(String(20))
+    base_uom: Mapped[str | None] = mapped_column(String(20))
 
     item: Mapped[Item] = relationship()
     batch: Mapped[Batch] = relationship()
@@ -875,3 +889,142 @@ class WorkspaceSnapshot(Base):
     terminal: Mapped[str] = mapped_column(String(64), default="")
     data: Mapped[str] = mapped_column(Text, default="{}")
     saved_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ItemForm(Base):
+    """Item form master: how a kind of product is counted (Tablets: tablets in strips;
+    Syrup bottles: whole bottles). Built-in forms ship with the ERP; the pharmacy adds its own.
+    The list is data, not code."""
+
+    __tablename__ = "item_forms"
+
+    code: Mapped[str] = mapped_column(String(20), primary_key=True)      # also the product's dosage form
+    name: Mapped[str] = mapped_column(String(60), default="")
+    base_unit: Mapped[str] = mapped_column(String(20), default="UNIT")   # what stock is counted in
+    pack_unit: Mapped[str] = mapped_column(String(20), default="PACK")   # the retail pack it comes in
+    counted: Mapped[bool] = mapped_column(Boolean, default=False)        # True: N base units per pack (tablets per strip)
+    content_unit: Mapped[str] = mapped_column(String(10), default="")    # ML / G when the container holds content
+    sort_order: Mapped[int] = mapped_column(Integer, default=100)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    builtin: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ProductPackaging(Base):
+    """A valid pack of a product: purchase unit → retail unit → base unit, with content.
+    A product may have several (1X10, 10X10, 10X1X10); one is preferred. Raw supplier text is
+    kept unchanged beside the normalised reading."""
+
+    __tablename__ = "product_packagings"
+    __table_args__ = (UniqueConstraint("item_id", "normalized_packing", "purchase_to_retail", name="uq_product_packaging"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("items.id", ondelete="CASCADE"), index=True)
+    dosage_form: Mapped[str] = mapped_column(String(20), default="")
+    raw_supplier_packing: Mapped[str] = mapped_column(String(60), default="")
+    normalized_packing: Mapped[str] = mapped_column(String(60), default="")
+    purchase_unit: Mapped[str] = mapped_column(String(20), default="")
+    retail_unit: Mapped[str] = mapped_column(String(20), default="")
+    base_unit: Mapped[str] = mapped_column(String(20), default="")
+    purchase_to_retail: Mapped[int] = mapped_column(Integer, default=1)
+    retail_to_base: Mapped[int] = mapped_column(Integer, default=1)
+    container_size: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    container_size_unit: Mapped[str] = mapped_column(String(10), default="")
+    allow_loose_sale: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_preferred: Mapped[bool] = mapped_column(Boolean, default=False)
+    source: Mapped[str] = mapped_column(String(20), default="")          # PRODUCT_MASTER · USER_CORRECTION · PURCHASE
+    confidence: Mapped[str] = mapped_column(String(12), default="")      # HIGH · MEDIUM · LOW · UNRESOLVED
+    verified_by_user: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class SupplierPackagingAlias(Base):
+    """What one supplier's printed pack text means: supplier + raw pack (+ product) → units one
+    invoice Qty counts. Saved when a person confirms it; the next invoice resolves without review."""
+
+    __tablename__ = "supplier_packaging_aliases"
+    __table_args__ = (UniqueConstraint("supplier_id", "pack_key", "item_id", name="uq_supplier_packaging_alias"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id", ondelete="CASCADE"), index=True)
+    pack_key: Mapped[str] = mapped_column(String(60), default="")       # normalised pack text
+    raw_pack: Mapped[str] = mapped_column(String(60), default="")
+    item_id: Mapped[int | None] = mapped_column(ForeignKey("items.id", ondelete="CASCADE"))
+    base_unit: Mapped[str] = mapped_column(String(20), default="")
+    units_per_invoice_unit: Mapped[int] = mapped_column(Integer, default=1)
+    retail_units: Mapped[int | None] = mapped_column(Integer)           # base units in the retail pack at the time
+    mrp_basis: Mapped[str] = mapped_column(String(12), default="MASTER_PACK")
+    occurrences: Mapped[int] = mapped_column(Integer, default=0)
+    corrections: Mapped[int] = mapped_column(Integer, default=0)
+    trust: Mapped[Decimal] = mapped_column(Numeric(4, 3), default=Decimal("1"))
+    status: Mapped[str] = mapped_column(String(12), default="ACTIVE")    # ACTIVE · AMBIGUOUS
+    source: Mapped[str] = mapped_column(String(20), default="USER_CORRECTION")
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class SupplierInvoiceProfile(Base):
+    """A supplier's invoice layout as learned from confirmed imports: header tokens, column roles,
+    invoice-number shape and the parser that worked. Recognises the supplier when the file carries
+    no GSTIN, and is applied first next time."""
+
+    __tablename__ = "supplier_invoice_profiles"
+    __table_args__ = (UniqueConstraint("supplier_id", "layout_key", name="uq_supplier_invoice_profile"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id", ondelete="CASCADE"), index=True)
+    layout_key: Mapped[str] = mapped_column(String(64), default="", index=True)   # hash of the header tokens
+    source_format: Mapped[str] = mapped_column(String(10), default="")
+    header_tokens: Mapped[list | None] = mapped_column(JSON)
+    column_roles: Mapped[list | None] = mapped_column(JSON)
+    invoice_patterns: Mapped[list | None] = mapped_column(JSON)          # shapes such as "NR#####"
+    parser: Mapped[str] = mapped_column(String(30), default="")
+    invoices: Mapped[int] = mapped_column(Integer, default=0)
+    confidence: Mapped[Decimal] = mapped_column(Numeric(4, 3), default=Decimal("0.9"))
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class MappingHistory(Base):
+    """Every change to the mapping store (product aliases, packaging aliases, column roles,
+    packaging definitions, supplier recognitions), so a bad mapping can be traced and undone."""
+
+    __tablename__ = "mapping_history"
+    __table_args__ = (Index("ix_mapping_history_kind_key", "kind", "supplier_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(24))          # PRODUCT_ALIAS · PACKAGING_ALIAS · COLUMN_ROLE · PACKAGING · SUPPLIER
+    action: Mapped[str] = mapped_column(String(16))        # CREATE · CONFIRM · OVERRULE · DISABLE · BOOTSTRAP
+    supplier_id: Mapped[int | None] = mapped_column(ForeignKey("suppliers.id", ondelete="SET NULL"))
+    key: Mapped[str] = mapped_column(String(250), default="")
+    before: Mapped[dict | None] = mapped_column(JSON)
+    after: Mapped[dict | None] = mapped_column(JSON)
+    purchase_id: Mapped[int | None] = mapped_column(Integer)
+    line_id: Mapped[int | None] = mapped_column(Integer)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class ImportMetric(Base):
+    """One row per processed supplier invoice: how much went straight through."""
+
+    __tablename__ = "import_metrics"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    purchase_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    supplier_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    source_format: Mapped[str] = mapped_column(String(10), default="")
+    route: Mapped[str] = mapped_column(String(20), default="")          # STRUCTURED · PDF_TEXT · OCR
+    lines: Mapped[int] = mapped_column(Integer, default=0)
+    auto_accepted: Mapped[int] = mapped_column(Integer, default=0)
+    with_warning: Mapped[int] = mapped_column(Integer, default=0)
+    review: Mapped[int] = mapped_column(Integer, default=0)
+    blocked: Mapped[int] = mapped_column(Integer, default=0)
+    corrected: Mapped[int] = mapped_column(Integer, default=0)
+    packaging_resolved: Mapped[int] = mapped_column(Integer, default=0)
+    ocr_confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    processing_ms: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)

@@ -34,7 +34,7 @@ from app import audit
 from app.config import UPLOAD_DIR
 from app.models import Batch, PurchaseReturn, Item, Purchase, PurchaseItem, Supplier, SupplierProductMap, User
 from app.sequences import next_number
-from app.services import purchase_import, sheet_import, stock_ledger, units, receipt_decision
+from app.services import packaging_conversion, purchase_import, sheet_import, stock_ledger, units, receipt_decision
 from app.utils import money, utcnow
 
 READY, CORRECTED, REVIEW, MATCH, INVALID, POSTED, CLOSED = (
@@ -244,7 +244,12 @@ def remap(db: Session, purchase: Purchase, changes: dict[str, str], *, user: Use
             if v == fld and fld != "ignore":
                 profile.pop(k)
         profile[key] = fld
+    from app.services import mapping_store
+
+    before_profile = dict(supplier.column_profile or {})
     supplier.column_profile = profile
+    mapping_store.history(db, "COLUMN_ROLE", "CREATE", supplier_id=supplier.id, key="column_profile",
+                          before=before_profile, after=changes, purchase_id=purchase.id, user=user)
     content = Path(purchase.source_file).read_bytes()
     doc = _parse(db, purchase.source_file, content, supplier)
     part = next((p for p in (doc.parts or [doc]) if p.invoice_no == purchase.invoice_no), (doc.parts or [doc])[0])
@@ -630,7 +635,9 @@ def _match(db: Session, purchase: Purchase, line: PurchaseItem) -> None:
             m = db.scalar(select(SupplierProductMap).where(SupplierProductMap.supplier_id == purchase.supplier_id,
                                                            SupplierProductMap.supplier_code == "",
                                                            SupplierProductMap.description_key == key))
-        if m is not None and m.item and m.item.deleted_at is None:
+        from app.services import mapping_store
+
+        if mapping_store.usable(m):              # an alias a person overruled is only suggested
             line.item, line.match_method = m.item, "SUPPLIER_MAP"
             return
     if line.supplier_code:
@@ -1133,12 +1140,14 @@ def post(db: Session, purchase: Purchase, *, user: User | None = None, accept_di
                     mrp=money(receipt_decision.mrp_per_master_pack(line)), supplier_id=purchase.supplier_id, purchase_id=purchase.id, reference_type="PURCHASE",
                     reference_id=purchase.id, reference_no=reference,
                     reason=f"Purchase {reference} · {purchase.supplier.name if purchase.supplier else ''} inv {purchase.invoice_no}",
-                    user=user)
+                    user=user, levels=packaging_conversion.receipt_levels(receipt, receipt_decision.definition(line)))
                 batch.rate_basis = "INCL_GST" if cost_incl else "EXCL_GST"
                 line.batch_id, line.status = batch.id, POSTED
                 _remember_mapping(db, purchase, line, user)
                 db.flush()
                 receipt_decision.remember(db, purchase, line)
+                from app.services import mapping_store
+                mapping_store.remember_posted_line(db, purchase, line, user=user)
             if differs and accept_difference:
                 purchase.difference_ack = True
             purchase.reference_no = reference
@@ -1334,15 +1343,22 @@ def _remember_mapping(db: Session, purchase: Purchase, line: PurchaseItem, user:
     m = db.scalar(select(SupplierProductMap).where(SupplierProductMap.supplier_id == purchase.supplier_id,
                                                    SupplierProductMap.supplier_code == code,
                                                    SupplierProductMap.description_key == key))
+    from app.services import mapping_store
+
     if m is None:
         db.add(SupplierProductMap(supplier_id=purchase.supplier_id, supplier_code=code, description_key=key,
                                   description_raw=(line.description_raw or line.product_name)[:250], item_id=line.item.id,
-                                  confirmed_by=user.id if user else None, uses=1))
+                                  confirmed_by=user.id if user else None, uses=1, status=mapping_store.ACTIVE,
+                                  trust=mapping_store.TRUST_CONFIRMED if line.match_method in ("MANUAL", "NEW_PRODUCT") else mapping_store.TRUST_BOOTSTRAP,
+                                  source="USER_CORRECTION" if line.match_method in ("MANUAL", "NEW_PRODUCT") else "POSTED",
+                                  last_used_at=utcnow()))
+        mapping_store.history(db, "PRODUCT_ALIAS", "CREATE", supplier_id=purchase.supplier_id, key=code or key,
+                              after={"item_id": line.item.id, "method": line.match_method}, purchase_id=purchase.id,
+                              line_id=line.id, user=user)
     else:
         m.uses = (m.uses or 0) + 1
-        if m.item_id != line.item.id and line.match_method == "MANUAL":
-            m.item_id, m.confirmed_by, m.confirmed_at = line.item.id, user.id if user else None, utcnow()
-            m.receipt_conventions = None
+        mapping_store.confirm_product(db, m, line.item.id, manual=line.match_method == "MANUAL", purchase=purchase,
+                                      line=line, user=user)
         if line.match_method == "MANUAL":
             m.description_raw = (line.description_raw or line.product_name)[:250]
 

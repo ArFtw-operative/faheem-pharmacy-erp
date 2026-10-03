@@ -23,7 +23,7 @@ UNRESOLVED = "Pack conversion unresolved"
 PURCHASE_PACK = "purchase pack"
 # count units: an equivalent in these is a number of separate things, not content
 _COUNTED = {"TABLET", "CAPSULE", "PIECE", "SACHET", "VIAL", "AMPOULE", "STRIP", "UNIT", "PAIR"}
-_CONTENT_LABEL = {"ML": "mL", "L": "L", "G": "g", "KG": "kg", "MG": "mg", "MCG": "mcg"}
+_CONTENT_LABEL = {"ML": "mL", "L": "L", "G": "g", "GRAM": "g", "KG": "kg", "MG": "mg", "MCG": "mcg", "DOSE": "doses"}
 
 
 def _dec(value: Any) -> Decimal | None:
@@ -160,3 +160,24 @@ def unit_costs(value: Any, view: dict, decision: dict | None, definition: dict) 
     if base and (definition.get("units_per_pack") or 1) > 1:
         out["per_base"] = str(money(total / base))
     return out
+
+
+def receipt_levels(decision: dict, definition: dict) -> tuple[dict | None, dict | None]:
+    """Purchase / retail / base levels of a receipt's paid and free ledger movements."""
+    d = decision or {}
+    if not d.get("resolved"):
+        return None, None
+    upp = max(int(definition.get("units_per_pack") or 1), 1)
+    unit = invoice_unit(d, definition)
+    paid, free = _dec(d.get("paid")) or Decimal(0), _dec(d.get("free")) or Decimal(0)
+    split = bool(d.get("financial_split_only"))
+
+    def level(invoice_qty: Decimal, base_units: int) -> dict | None:
+        if not base_units:
+            return None
+        return {"purchase_quantity": invoice_qty, "purchase_uom": unit if unit != PURCHASE_PACK else "PACK",
+                "retail_quantity": Decimal(base_units) / upp, "retail_uom": definition.get("pack_unit") or "PACK",
+                "base_uom": definition.get("base_unit") or "UNIT"}
+
+    paid_units, free_units = int(d.get("ledger_paid_units") or 0), int(d.get("ledger_free_units") or 0)
+    return (level(paid + free if split else paid, paid_units), None if split else level(free, free_units))

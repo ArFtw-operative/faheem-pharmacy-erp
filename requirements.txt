@@ -35,6 +35,8 @@ Pygments==2.21.0
 pymupdf==1.28.2
 pypdfium2==5.13.0
 pytest==9.1.1
+hypothesis==6.168.3
+sortedcontainers==2.4.0
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.3
 python-multipart==0.0.32

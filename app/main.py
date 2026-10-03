@@ -125,6 +125,23 @@ def _configure_units_of_measure() -> None:
         db.close()
 
 
+def _bootstrap_purchase_engine() -> None:
+    """Once per database: product packaging and supplier aliases from existing history (idempotent)."""
+    from app.services import purchase_engine
+
+    db = SessionLocal()
+    try:
+        report = purchase_engine.bootstrap_once(db)
+        db.commit()
+        if report:
+            logger.info("Purchase engine bootstrap: %s", purchase_engine.summary(report))
+    except Exception:  # pragma: no cover - never block start-up
+        db.rollback()
+        logger.exception("Purchase engine bootstrap failed")
+    finally:
+        db.close()
+
+
 def _snapshots_enabled() -> bool:
     return os.environ.get("PHARMACY_SKIP_MIGRATIONS") != "1" and os.environ.get("PHARMACY_BACKUPS", "1") != "0"
 
@@ -141,6 +158,7 @@ async def lifespan(_app: FastAPI):
         logger.critical("Start-up stopped — see the message above and docs/UPGRADES.md")
         raise
     _configure_units_of_measure()
+    _bootstrap_purchase_engine()
     if _snapshots_enabled():
         tasks.append(asyncio.create_task(_snapshot_loop()))
     if os.environ.get("PHARMACY_SKIP_MIGRATIONS") != "1" and os.environ.get("PHARMACY_EXTERNAL_WORKER") != "1":

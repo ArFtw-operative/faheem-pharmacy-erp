@@ -1,33 +1,21 @@
 """Operator-counted physical packaging, staged until a purchase is posted."""
 from app.services import purchasing, receipt_decision as rd, inventory_service as inv
 
-FORMS = {
-    'TABLET': ('TABLET','STRIP','TABLET'), 'CAPSULE': ('CAPSULE','STRIP','CAPSULE'),
-    'SYRUP': ('BOTTLE','BOTTLE','SYRUP'), 'DROPS': ('BOTTLE','BOTTLE','DROPS'),
-    'CREAM': ('TUBE','TUBE','CREAM'), 'OINTMENT': ('TUBE','TUBE','OINTMENT'),
-    'GEL': ('TUBE','TUBE','GEL'), 'POWDER': ('PACK','PACK','POWDER'),
-    'SOAP': ('PIECE','PIECE','SOAP'), 'INJECTION': ('VIAL','VIAL','INJECTION'),
-    'INHALER': ('PIECE','PIECE','INHALER'), 'SACHET': ('SACHET','SACHET','SACHET'),
-    'PIECE': ('PIECE','PIECE','DEVICE'), 'UNIT': ('UNIT','PACK',''),
-    'BOTTLE': ('BOTTLE','BOTTLE',''), 'TUBE': ('TUBE','TUBE',''), 'PACK': ('PACK','PACK',''),
-    'VIAL': ('VIAL','VIAL',''), 'AMPOULE': ('AMPOULE','BOX','INJECTION'),
-    'JAR': ('JAR','JAR',''), 'BOX': ('BOX','BOX',''), 'KIT': ('KIT','KIT','KIT'), 'PAIR': ('PAIR','PACK','DEVICE'),
-}
-
 def snapshot(item):
     return {k:getattr(item,k) for k in ('base_unit','pack_unit','units_per_pack','dosage_form')}
 
 def adjust(db, purchase, line, values, *, user=None):
     purchasing._open(purchase)
     purchasing._open_line(line)
-    form = values.get('form')
-    if form not in FORMS:
+    from app.services import form_service
+    spec = form_service.get(db, str(values.get('form') or ''))
+    if spec is None or not spec['active']:
         raise purchasing.PurchaseError('Choose the physical item form')
     n = values.get('units_per_pack')
     if isinstance(n,bool) or not str(n).isdigit() or not 1 <= int(n) <= 10000:
         raise purchasing.PurchaseError('Units per strip/container must be a whole number from 1 to 10000')
-    base, pack, dosage = FORMS[form]
-    if form not in {'TABLET','CAPSULE','UNIT'} and int(n)!=1:
+    base, pack, dosage = spec['base_unit'], spec['pack_unit'], spec['dosage_form']
+    if not spec['counted'] and int(n)!=1:
         raise purchasing.PurchaseError('Whole containers are counted individually; use one unit per container')
     quantity, free = values.get('quantity'), values.get('free', '0')
     try:

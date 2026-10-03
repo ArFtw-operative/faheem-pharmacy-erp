@@ -64,6 +64,11 @@ def seed_defaults() -> None:
                 db.add(Category(code=code, name=DEFAULT_NAMES.get(code, code.title()), sort_order=(i + 1) * 10))
         db.flush()
 
+        # Item form master (built-in forms; the pharmacy adds its own)
+        from app.services import form_service
+
+        form_service.seed(db)
+
         # Permissions
         existing = {p.code: p for p in db.scalars(select(Permission)).all()}
         introduced = set()          # permissions new in this release: default roles receive them once

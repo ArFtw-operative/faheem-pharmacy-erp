@@ -189,7 +189,19 @@ def cmd_upgrade(args) -> None:
 
 def cmd_purchases(args) -> None:
     from app.models import Purchase
-    from app.services import purchasing
+    from app.services import purchase_engine, purchasing
+
+    if args.action == "bootstrap":
+        with SessionLocal() as db:
+            report = purchase_engine.bootstrap(db)
+            db.commit()
+        print(purchase_engine.summary(report))
+        print(f"Report: {purchase_engine.REPORT}")
+        return
+    if args.action == "metrics":
+        with SessionLocal() as db:
+            print(purchase_engine.metrics_text(db))
+        return
 
     with SessionLocal() as db:
         docs = db.scalars(select(Purchase).where(Purchase.status.in_(("DRAFT", "PARTIAL")))).all()
@@ -250,7 +262,7 @@ def main() -> None:
     sub.add_parser("version").add_argument("--json", action="store_true")
     sub.add_parser("upgrade").add_argument("--check", action="store_true", help="rehearse on a copy; change nothing")
     sub.add_parser("deployments")
-    sub.add_parser("purchases").add_argument("action", choices=["revalidate"])
+    sub.add_parser("purchases").add_argument("action", choices=["revalidate", "bootstrap", "metrics"])
     sub.add_parser("reset-test-data").add_argument("--yes", action="store_true", help="actually remove (otherwise preview)")
     args = parser.parse_args()
     if args.cmd == "user" and args.action != "list" and not args.username:

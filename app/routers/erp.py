@@ -20,7 +20,7 @@ from app.deps import client_ip, require_login, require_permission
 from app.models import Batch, Item, User
 from app.permissions import has_permission
 from app.routing import OffloadRoute
-from app.services import search, category_service, keymap_service, parking_service, settings_service, units
+from app.services import search, category_service, keymap_service, parking_service, settings_service, units, form_service
 from app.services import inventory_service as inv, inventory_pricing
 from app.services.settings_service import get_int
 from app.web import render
@@ -63,7 +63,8 @@ def _boot(request: Request, db: Session, user: User) -> dict:
             "low_stock_threshold": get_int(db, "low_stock_threshold", 5),
             "max_discount_pct": float(_max_discount(db)),
         },
-        "units": {"base": units.BASE_UNITS, "pack": units.PACK_UNITS, "forms": units.DOSAGE_FORMS},
+        "units": {"base": units.BASE_UNITS, "pack": units.PACK_UNITS, "forms": units.known_forms()},
+        "item_forms": form_service.listing(db),
         "keymap": keymap_service.payload(db, user),
         "categories": inv.categories(db),
         "category_options": category_service.options(db),
@@ -130,6 +131,45 @@ def erp_category_delete(code: str, db: Session = Depends(get_db),
                         user: User = Depends(require_permission("inventory.edit"))):
     _cat_call(db, category_service.delete, code, user=user)
     return {"categories": category_service.listing(db)}
+
+
+# --------------------------------------------------------------------------- item form master
+def _form_writer(user: User) -> None:
+    if not (has_permission(user, "inventory.edit") or has_permission(user, "purchase.create")):
+        raise HTTPException(403, "Adding item forms needs inventory edit or purchase rights")
+
+
+@router.get("/api/erp/item-forms")
+def erp_item_forms(all: int = 0, db: Session = Depends(get_db), user: User = Depends(require_login)):
+    return {"forms": form_service.listing(db, include_inactive=bool(all))}
+
+
+@router.post("/api/erp/item-forms")
+async def erp_item_form_create(request: Request, db: Session = Depends(get_db), user: User = Depends(require_login)):
+    _form_writer(user)
+    data = await request.json()
+    try:
+        form = form_service.create(db, name=str(data.get("name") or ""), base_unit=str(data.get("base_unit") or ""),
+                                   pack_unit=str(data.get("pack_unit") or ""), counted=bool(data.get("counted")),
+                                   content_unit=str(data.get("content_unit") or ""), user=user)
+        db.commit()
+    except form_service.FormError as exc:
+        db.rollback()
+        raise HTTPException(400, str(exc))
+    return {"form": form, "forms": form_service.listing(db)}
+
+
+@router.put("/api/erp/item-forms/{code}")
+async def erp_item_form_update(code: str, request: Request, db: Session = Depends(get_db),
+                               user: User = Depends(require_permission("inventory.edit"))):
+    data = await request.json()
+    try:
+        form_service.set_active(db, code, bool(data.get("active")), user=user)
+        db.commit()
+    except form_service.FormError as exc:
+        db.rollback()
+        raise HTTPException(400, str(exc))
+    return {"forms": form_service.listing(db, include_inactive=True)}
 
 
 # --------------------------------------------------------------------------- keyboard shortcuts

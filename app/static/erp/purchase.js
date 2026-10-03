@@ -1,5 +1,5 @@
 import * as keys from "erp/keys";
-import { physicalEditor } from 'erp/physical-units';
+import { physicalEditor, formFor, formOptions, forms as itemForms, wireFormSelect } from 'erp/physical-units';
 // Purchase document — one supplier invoice, reviewed line by line before it
 // reaches stock. Every cell shows the corrected value; the supplier's original
 // stays visible in the side panel (and in the audit trail). Nothing is posted
@@ -466,7 +466,7 @@ export function create(ctx, params, root) {
       body: `${issues ? `<ul class="issues">${issues}</ul>` : ""}<div class="form-grid three">${fieldInputs(r)}</div>
         ${r.new_product ? newProductFields(r) : ""}
         <p class="hint">The supplier's original value is kept; your correction is recorded with your name and time.</p>`,
-      onOpen: (form) => { const f = (r.issues || []).find((i) => !i.accepted); focusField(form, f && form.elements[f.field]); },
+      onOpen: (form) => { wireNewProduct(form); const f = (r.issues || []).find((i) => !i.accepted); focusField(form, f && form.elements[f.field]); },
       onSubmit: (form) => {
         const body = { ...changed(form, r), ...(r.new_product ? newProductValues(form) : {}) };
         if (!Object.keys(body).length) return null;
@@ -482,14 +482,32 @@ export function create(ctx, params, root) {
     const opt = (list, v) => list.map((x) => `<option value="${esc(x)}" ${x === v ? "selected" : ""}>${esc(t(x) || "—")}</option>`).join("");
     return `<fieldset class="form-grid three np"><legend>New product</legend>
       <label>Category<select name="np_category"><option value="">General (default)</option>${cats.map((c) => `<option value="${esc(c.code)}" ${c.code === r.category ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
-      <label>Form<select name="np_dosage_form">${opt(["", ...(BOOT.units.forms || []).filter(Boolean)], r.dosage_form)}</select></label>
+      <label>Form<select name="np_form">${formOptions(r.dosage_form || r.base_unit ? formFor(r.dosage_form, r.base_unit) : "", { blank: true })}</select></label>
       <label>Units per pack<input name="np_units_per_pack" inputmode="numeric" value="${esc(r.units_per_pack ?? "")}"></label>
       <label>Sale unit (base)<select name="np_base_unit">${opt(BOOT.units.base || [], r.base_unit || "UNIT")}</select></label>
       <label>Purchase unit (pack)<select name="np_pack_unit">${opt(BOOT.units.pack || [], r.pack_unit || "PACK")}</select></label>
       <p class="hint">Detected from pack “${esc(r.pack || "—")}” — confirm before posting.</p></fieldset>`;
   }
-  const newProductValues = (form) => Object.fromEntries(["category", "dosage_form", "units_per_pack", "base_unit", "pack_unit"]
-    .map((k) => [k, form.elements["np_" + k] ? form.elements["np_" + k].value : undefined]).filter(([, v]) => v !== undefined));
+  const newProductValues = (form) => {
+    const out = Object.fromEntries(["category", "units_per_pack", "base_unit", "pack_unit"]
+      .map((k) => [k, form.elements["np_" + k] ? form.elements["np_" + k].value : undefined]).filter(([, v]) => v !== undefined));
+    if (form.elements.np_form) out.dosage_form = (itemForms().find((f) => f.code === form.elements.np_form.value) || {}).dosage_form ?? "";
+    return out;
+  };
+  /** Choosing a form fills the sale and purchase units it is stocked with. */
+  function wireNewProduct(form) {
+    const sel = form.elements.np_form;
+    if (!sel) return;
+    wireFormSelect(sel, () => {
+      const f = itemForms().find((x) => x.code === sel.value);
+      if (!f) return;
+      for (const [k, v] of [["np_base_unit", f.base_unit], ["np_pack_unit", f.pack_unit]]) {
+        const el = form.elements[k];
+        if (el && [...el.options].some((o) => o.value === v)) el.value = v;
+      }
+      if (!f.counted && form.elements.np_units_per_pack) form.elements.np_units_per_pack.value = "1";
+    });
+  }
 
   async function bulkMatch(marked) {
     let sug = {};
@@ -568,6 +586,7 @@ export function create(ctx, params, root) {
       title: `New product from line ${d.line_no}`, wide: true, submitLabel: "Save",
       body: `<div class="form-grid"><label class="full">Product name<input name="name" value="${esc(d.name)}" autofocus></label></div>${newProductFields(d)}
         <p class="hint">The product is created only when the purchase is posted.</p>`,
+      onOpen: wireNewProduct,
       onSubmit: (form) => {
         const body = newProductValues(form);
         if (form.elements.name.value.trim() !== d.name) body.name = form.elements.name.value.trim();
