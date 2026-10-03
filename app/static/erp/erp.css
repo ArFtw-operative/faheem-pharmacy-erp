@@ -680,3 +680,5 @@ button.linkish:focus-visible { outline: 2px solid var(--accent); }
 .pack-fix fieldset { border: 1px solid var(--line); padding: 6px 10px; }
 .pack-scope { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
 ul.inspect { margin: 4px 0 8px 18px; padding: 0; }
+.pack-fix fieldset label.chk { display: flex; align-items: center; gap: 8px; justify-content: flex-start; text-align: left; margin: 3px 0; }
+.pack-fix fieldset label.chk input { margin: 0; }

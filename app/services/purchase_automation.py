@@ -303,6 +303,12 @@ def prepare_line(db, purchase, line):
         supported = False  # 500 mg is a dose strength, not a count of tablets.
     if pack.kind in {"COUNT", "NESTED"} and uom and uom.base_unit in {"PACK", "UNIT"} and uom.pack_unit != "STRIP":
         supported = False
+    if supported and not ref and line.pack_size:
+        # never prepare a conversion the packaging parser itself calls ambiguous (10X1, a bare 1 for a tablet)
+        from app.services import packaging_parser
+        reading = packaging_parser.parse(line.pack_size, master_form=uom.dosage_form if uom else "", description=line.product_name)
+        if reading.ambiguous_count or reading.confidence == packaging_parser.UNRESOLVED:
+            supported = False
     if not supported:
         if c.get("_automation"):
             line.new_product, line.units_per_pack = False, None

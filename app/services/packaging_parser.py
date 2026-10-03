@@ -99,6 +99,7 @@ class Packaging:
     content: tuple[Decimal, str] | None = None   # what one container holds (60 ML, 20 GRAM)
     confidence: str = UNRESOLVED
     issues: list[str] = field(default_factory=list)
+    ambiguous_count: bool = False         # the count itself has two readings (10X1, a bare 1, "18 NO")
 
     @property
     def base_per_outer(self) -> int | None:
@@ -237,7 +238,7 @@ class TwoLevelPackHandler(PackagePatternHandler):
         elif inner == 1:                                # 10X1: ten packs of one, or a reversed strip of ten
             p.levels = [Level(outer, "STRIP"), Level(1, "")]
             p.purchase, p.retail, p.base, p.retail_to_base = Level(1, "BOX"), Level(outer, "STRIP"), Level(outer, ""), 1
-            p.confidence = LOW
+            p.confidence, p.ambiguous_count = LOW, True
             p.issues.append(f"{ctx['raw']!r} can mean {outer} packs of one or a strip of {outer}; confirm it once for this product")
         else:                                           # 20X10: a box of 20 strips of 10
             p.levels = [Level(outer, "STRIP"), Level(inner, "")]
@@ -289,6 +290,7 @@ class LiquidContainerHandler(PackagePatternHandler):
         p.retail_to_base = 1
         p.confidence = HIGH if count == 1 else MEDIUM
         if count > 1:
+            p.ambiguous_count = True
             p.issues.append(f"{ctx['raw']!r} is {count} containers of {format(qty.normalize(), 'f')} mL; confirm whether one invoice Qty is the box or one container")
         return p
 
@@ -334,7 +336,7 @@ class PiecePackHandler(PackagePatternHandler):
         p.base, p.retail_to_base = Level(n, "PIECE"), 1
         p.confidence = HIGH
         if n > 1 and m.group(2) in ("NO", "NOS", "N"):
-            p.confidence = LOW                          # "18 NO" is usually a size (gauge), not 18 pieces
+            p.confidence, p.ambiguous_count = LOW, True   # "18 NO" is usually a size (gauge), not 18 pieces
             p.issues.append(f"{ctx['raw']!r} may be a size number rather than a count of pieces; confirm it once")
         return p
 
@@ -454,7 +456,7 @@ def score_confidence(p: Packaging, form: str, ctx: dict) -> None:
         p.confidence = min(p.confidence, LOW, key=RANK.get)
         p.issues.append("The dosage form is not known, so the stock unit of this pack cannot be decided")
     if ctx.get("bare_single") and (form in SOLID or not form):
-        p.confidence = min(p.confidence, LOW, key=RANK.get)
+        p.confidence, p.ambiguous_count = min(p.confidence, LOW, key=RANK.get), True
         p.issues.append("A bare '1' does not say how many tablets or capsules one pack holds")
     if p.handler == "CountPackHandler" and not form and not ctx.get("unit_hint") and p.base and p.base.quantity > 1:
         p.confidence = min(p.confidence, MEDIUM, key=RANK.get)

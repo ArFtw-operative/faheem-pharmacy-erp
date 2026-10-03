@@ -4,12 +4,13 @@ from sqlalchemy import select, text
 
 from app.models import Batch, InventoryMovement, Purchase, User, Item
 from app.services import purchasing, purchase_automation as auto, settings_service as settings, gst, inventory_reset, stock_ledger
-from tests.test_purchase_automation import enable, zero_tax_csv, reviewed_history
+from tests.test_purchase_automation import auto_create, enable, zero_tax_csv, reviewed_history
 from tests.test_purchasing import supplier, draft
 from tests.test_receipt_decisions import product
 
 
 def test_unregistered_pharmacy_can_autopost_using_its_state(db):
+    auto_create(db)          # the invoice holds a new product; product creation is opt-in
     sup=supplier(db)
     sup.gst_number='27AAPFU0939F1ZV'
     settings.set_setting(db,'gst_number','')
@@ -36,6 +37,7 @@ def test_supplier_registration_notes_do_not_become_posting_problems(db):
 
 @pytest.mark.parametrize('store_gstin,seller_gstin', [('', ''), ('', '123'), ('INVALID', '27AAPFU0939F1ZX')])
 def test_registration_numbers_never_block_automatic_posting(db, store_gstin, seller_gstin):
+    auto_create(db)          # the invoice holds a new product; product creation is opt-in
     sup=supplier(db)
     sup.gst_number=seller_gstin
     settings.set_setting(db,'gst_number',store_gstin)

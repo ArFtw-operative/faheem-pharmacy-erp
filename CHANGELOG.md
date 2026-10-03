@@ -3,6 +3,41 @@
 Release notes for Faheem Pharmacy. Versions follow semantic versioning; every release
 lists its database migrations. Upgrades keep all business history (see docs/UPGRADES.md).
 
+## Unreleased (next: 1.9.0)
+
+- **Purchases — received stock always shown:** billed + free is shown for every line, in the unit the
+  supplier billed ("3 purchase packs" until the pack is known, then "3 strips", "2 bottles", "6 boxes").
+  "Quantity not confirmed" is gone; only the **Stock equivalent** column waits for the pack conversion
+  ("20 strips, 200 capsules", "2 × 60 mL", or "Pack conversion unresolved").
+- **Purchases — exception inbox:** a document opens on the lines that need attention; auto-accepted and
+  warning lines are one click away (Alt+V). A Confidence column shows each line's decision (Auto / Warning /
+  Review / Blocked) with per-field confidence and where each value came from.
+- **Purchases — Roll back to draft (Alt+B):** posted lines (selected, or the whole invoice) are taken out of
+  stock with linked reversal movements and return to review with every correction kept. Refused, with the
+  reason, if the stock was already sold, returned or adjusted.
+- **Purchases — Change category only (F7):** one click (or a number key) sets the category of the selected
+  lines' products, on open or received lines; stock is not touched.
+- **Item forms:** 36 built-in forms (softgels, IV fluids, ampoules, vials, syringes, needles, cannulas, test
+  strips, respules, suppositories …) and the pharmacy's own: every form list ends with "Create new form…";
+  Masters → Item forms lists and hides them.
+- **Packing correction (Alt+K):** say what one invoice Qty is (retail pack, outer box or base unit) and save it
+  for this invoice, as product packaging, or as a supplier alias — the next invoice resolves on its own.
+- **Match inspector (Alt+J):** why a line got its product and pack: signals, reasons, other candidates.
+- **Automatic intake:** supplier recognised from its learned layout + invoice-number shape; names that
+  differ only superficially match (strengths and SR/DS/… markers never ignored); supplier packing aliases,
+  product packaging store and a mapping store with trust and history; GS1 barcodes fill a blank batch/expiry.
+  New products the automation prepares wait in a **new-product queue** ("Confirm N new products…", one
+  click for the category); `purchase_auto_create_products=on` restores automatic creation.
+- **Scans and photos** are read by the bundled OCR (Tesseract) and every row is checked by arithmetic;
+  rows that do not reconcile wait for a person. Text PDFs are never OCR'd.
+- **Ledger:** purchase receipts record purchase, retail and base quantities beside base units.
+- **Regression corpus** in the build (zero wrong auto-accepts), `scripts/purchase_corpus.py` report,
+  `manage.py purchases bootstrap|metrics`.
+
+**Migrations:** `d4f6a8c0e2b5` adds `item_forms`, `product_packagings`, `supplier_packaging_aliases`,
+`supplier_invoice_profiles`, `mapping_history`, `import_metrics`, nullable trust columns on
+`supplier_product_maps` and level columns on `inventory_movements` (additive only).
+
 ## 1.8.0 — 2026-10-02
 
 - **Purchases:** receipt decisions and supplier unit verification are kept per line and learned per

@@ -140,8 +140,8 @@ export function create(ctx, params, root) {
       { key: "pack", label: "Packing", width: 82, render: (r) => cell(r, "pack", `<span class="mono">${esc(r.pack || "—")}</span>`) },
       { key: "qty", label: "Billed", width: 50, align: "num", render: (r) => cell(r, "quantity", esc(r.receipt?.paid ?? r.qty)) },
       { key: "free", label: "Free", width: 46, align: "num", render: (r) => cell(r, "free", esc(r.receipt?.free ?? r.free ?? "")) },
-      { key: 'received_stock', label: 'Received stock', width: 120, render: r => esc(r.stock?.stock || '') },
-      { key: 'equivalent', label: 'Stock equivalent', width: 170, render: r => r.stock?.resolved || DONE.includes(r.status) || !canEdit()
+      { key: 'received_stock', label: 'Received stock', width: 138, render: r => esc(r.stock?.stock || '') },
+      { key: 'equivalent', label: 'Stock equivalent', width: 205, render: r => r.stock?.resolved || DONE.includes(r.status) || !canEdit()
         ? `<span title="${esc(r.stock?.hierarchy || '')}">${esc(r.stock?.equivalent || '')}</span>`
         : `<button type="button" class="linkish" data-pack-fix="${r.id}" title="${esc(r.stock?.hierarchy || 'Confirm what one invoice Qty is')}">${esc(r.stock?.equivalent || '')} ✎</button>` },
       { key: 'gate', label: 'Confidence', width: 104, cellClass: r => 'gate-' + (GATE[r.gate?.state]?.[1] || 'muted'),
@@ -291,6 +291,7 @@ export function create(ctx, params, root) {
       ${s.gst && (s.gst.problems.length || s.gst.missing_rate_lines) ? `<button type="button" class="chip warn gst-chip" title="GST details (${esc(keys.keyFor("purchase.gst"))})">GST ⚠ ${s.gst.problems.length + (s.gst.missing_rate_lines ? 1 : 0)}</button>` : ""}
       ${p.warnings ? `<span class="hint" title="${esc(p.warnings)}">⚠ file notes</span>` : ""}
       ${s.automation?.mode !== "off" && s.automation && isOpen() ? `<button type="button" class="chip automation-chip">Automatic ${s.automation.resolved_rows}/${s.automation.total_rows} · ${s.automation.exceptions.length} exceptions</button>` : ""}
+      ${isOpen() && CAN["purchase.create"] && queued().length ? `<button type="button" class="btn p-queue" title="Products prepared from the invoice that are not in the catalogue yet">Confirm ${queued().length} new product${queued().length === 1 ? "" : "s"}…</button>` : ""}
       ${["POSTED", "PARTIAL"].includes(p.status) && CAN["purchase.post"] && c.POSTED ? `<button type="button" class="btn p-rollback" title="Take posted lines out of stock and back to review">Roll back to draft <kbd>${esc(keys.keyFor("purchase.rollback"))}</kbd></button>` : ""}
       ${postBtn}`;
     const automation = $(".automation-chip", bar);
@@ -311,6 +312,8 @@ export function create(ctx, params, root) {
     if (cat) cat.onclick = () => changeCategory();
     const back = $(".p-rollback", bar);
     if (back) back.onclick = () => rollback();
+    const queue = $(".p-queue", bar);
+    if (queue) queue.onclick = () => confirmNewProducts();
     const gchip = $(".gst-chip", bar);
     if (gchip) gchip.onclick = () => gstPanel();
     bar.querySelectorAll("[data-view]").forEach((b) => { b.onclick = () => setView(b.dataset.view); });
@@ -777,6 +780,33 @@ export function create(ctx, params, root) {
     grid.focus();
   }
 
+  /** The new-product queue: products prepared from the invoice (units read from the pack) waiting for a person. */
+  const queued = () => lines.filter((l) => !DONE.includes(l.status) && (l.issues || []).some((i) => i.code === "new_product_unconfirmed" && !i.accepted));
+  async function confirmNewProducts() {
+    const rows = markedRows().filter((r) => queued().includes(r)).length ? markedRows().filter((r) => queued().includes(r)) : queued();
+    if (!rows.length) { ctx.status("No new products are waiting", "ok"); return; }
+    const cats = BOOT.category_options || [];
+    let pick = null;
+    const body = h(`<div><p>${rows.length} product(s) are not in the catalogue as printed. Each keeps the units read from its pack
+        (shown below); the products are created when the purchase is posted. Click a category (or press its number) to confirm them.</p>
+      <div class="cat-pick">${cats.map((c, i) => `<button type="button" class="chip" data-code="${esc(c.code)}">${i < 9 ? `<kbd>${i + 1}</kbd> ` : ""}${esc(c.name)}</button>`).join("")}</div>
+      <table class="rawtab"><thead><tr><th>#</th><th>Product</th><th>Pack</th><th>Units</th></tr></thead><tbody>
+      ${rows.slice(0, 300).map((r) => `<tr><td>${r.line_no}</td><td>${esc(r.name)}</td><td class="mono">${esc(r.pack || "—")}</td>
+        <td>${r.units_per_pack ? `1 ${esc(t(r.pack_unit || "pack").toLowerCase())} = ${r.units_per_pack} ${esc(t(r.base_unit || "unit").toLowerCase())}` : "—"}</td></tr>`).join("")}</tbody></table>
+      <p class="hint">A product that already exists under another name should be matched instead (F4) — matching is remembered for this supplier.</p></div>`);
+    const apply = (code) => { pick = code; body.closest("form")?.requestSubmit(); };
+    body.querySelectorAll("[data-code]").forEach((b) => { b.onclick = () => apply(b.dataset.code); });
+    body.addEventListener("keydown", (e) => { const n = Number(e.key); if (Number.isInteger(n) && n >= 1 && n <= Math.min(9, cats.length)) { e.preventDefault(); apply(cats[n - 1].code); } });
+    const out = await modal({ title: `Confirm ${rows.length} new product(s)`, body, wide: true, submitLabel: "Confirm",
+      onOpen: () => body.querySelector("[data-code]")?.focus(),
+      onSubmit: () => {
+        if (!pick) throw new Error("Click a category for the new products");
+        return api(`/api/erp/purchases/${id}/lines/bulk`, { method: "POST", body: { line_ids: rows.map((r) => r.id), changes: { new_product: true, category: pick } } });
+      } });
+    if (out) { grid.clearMarks(); render(out); ctx.status(`${out.result.changed} new product(s) confirmed`, "ok"); }
+    grid.focus();
+  }
+
   /** Change only the category of the selected lines (or the current one): one click on a category applies it. */
   async function changeCategory() {
     if (CAN["purchase.create"] === false) { ctx.status("Changing categories needs purchase rights", "warn"); return; }
@@ -886,7 +916,7 @@ export function create(ctx, params, root) {
           <ul class="inspect">${m.reasons.map((x) => `<li>${esc(x)}</li>`).join("")}</ul><p>${sig(m)}</p>` : '<p class="warn">No product matched.</p>'}
         ${d.candidates.length ? `<h4>Other candidates</h4><table class="grid-lite"><tbody>${d.candidates.map((c) => `<tr><td>${esc(c.name)}</td><td class="num">${Math.round(c.score * 100)}%${c.capped ? " ⚠" : ""}</td><td>${esc(c.reasons.join("; "))}</td></tr>`).join("")}</tbody></table>` : ""}
         <h4>Packing</h4><p>${esc(pk.raw || "—")} → ${esc(pk.handler || "")}: ${(pk.levels || []).map((l) => `${l.quantity} ${esc((l.unit || "").toLowerCase())}`).join(" × ") || "not read"} · ${esc(pk.confidence || "")}
-          ${pk.decision?.source ? ` · conversion from ${esc(pk.decision.source.toLowerCase().replaceAll("_", " "))}` : ""}</p>
+          ${pk.decision?.resolved ? ` · conversion from ${esc(pk.decision.source.toLowerCase().replaceAll("_", " "))}` : " · conversion not confirmed yet"}</p>
         ${(pk.decision?.evidence || []).length ? `<ul class="inspect">${pk.decision.evidence.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
         ${d.gate ? `<h4>Confidence</h4><p>${esc(GATE[d.gate.state][0])} · ${Object.entries(d.gate.fields).map(([k, v]) => `${esc(FIELD_NAMES[k] || k)} ${Math.round(v * 100)}% <small class="muted">${esc(d.gate.provenance[k] || "")}</small>`).join(" · ")}</p>` : ""}` });
     grid.focus();

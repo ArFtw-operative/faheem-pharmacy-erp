@@ -104,11 +104,30 @@ consistent reading wins. Photos and scanned PDFs are refused.
 
 **Reconciliation** is taxable value − item discount − scheme − bill discount + GST + charges ± round off.
 
+**Exception inbox.** A purchase opens on the lines that need a person (Review / Blocked). The confidence
+gate (`confidence_gate.py`) scores product, quantity, batch, expiry and the pack conversion separately; a
+weak pack never hides the received quantity. Auto-accepted and warning lines are one click away (Alt+V).
+Thresholds: `manage.py setting set purchase_gate_thresholds '{"auto":0.97,"warn":0.90,"review":0.75}'`.
+New products prepared from the invoice wait in the queue ("Confirm N new products…") unless
+`purchase_auto_create_products` is `on`.
+
+**What is learned** (mapping store, `mapping_history` keeps every change): supplier product aliases with
+trust (an overruled alias is only suggested), supplier packing aliases (Alt+K, "Save supplier alias"),
+product packs (`product_packagings`), supplier invoice profiles (layout + invoice-number shape recognise
+the supplier when the file has no GSTIN), column roles (F9). `manage.py purchases bootstrap` rebuilds
+them from history; `manage.py purchases metrics` prints straight-through per supplier.
+
+**Scans and photos** go through the bundled OCR (`tools/tesseract`; on Windows set `PHARMACY_TESSERACT`);
+rows whose qty × rate ≠ amount wait for a person.
+
 **Review screen keys:**
 - **Enter** corrects a line; the supplier's value is kept, with who and when.
 - **F4** matches a product; **Shift+F4** creates it as new.
 - **Shift+↑/↓**, Space or Ctrl+A select lines. Then **F12** posts only those lines (partial receipt, status PARTIAL); **Shift+F4** creates them all as new products with one category (units detected per pack; ambiguous packs pre-filled, confirmed with **F6**); **F4** confirms matches from ranked suggestions.
 - **Alt+X** cancels a draft, or on a partly received invoice closes the remaining lines as not received.
+- **F7** changes only the category of the selected lines (one click per category); works on received lines.
+- **Alt+B** rolls posted lines (selected, or all) back to draft: stock is reversed through the ledger.
+- **Alt+K** packing correction; **Alt+J** match inspector; **Alt+V** inbox / all lines.
 
 Optional **AI invoice reader**: when the built-in reader cannot find the core columns,
 and only if `invoice_ai_enabled=1` with a key, the column headers and at most 8 sample

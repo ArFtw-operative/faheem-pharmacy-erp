@@ -360,3 +360,11 @@ def test_new_products_wait_for_a_person_by_default(db):
     assert 'new_product_unconfirmed' in {i['code'] for i in line.issues}
     purchasing.correct(db,p,line,{'new_product':True})              # Shift+F4: a person confirms it
     assert line.status=='READY'
+
+
+def test_ambiguous_count_is_not_prepared_as_a_new_product(db):
+    enable(db)
+    p=draft(db,',BEGROEASE-50 TABLET,10X1,B1,May-2028,1,,150,320,150')
+    line=p.items[0]
+    assert not line.new_product and line.units_per_pack is None     # 10X1: ten packs of one, or a strip of ten?
+    assert line.status=='PRODUCT_MATCH_REQUIRED'
