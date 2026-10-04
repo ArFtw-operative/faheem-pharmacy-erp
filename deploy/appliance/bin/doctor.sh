@@ -180,6 +180,19 @@ if flag LAN_ACCESS; then
     || finding WARN "Network address changed: ${ip_now:-none} (ERP certificate is for $(env_get FAHEEM_LAN_IP))" "other devices cannot connect at the old address" lan-address
 fi
 
+# ---- remote support (a separate package: checked here, repaired by faheem-support repair) ------------
+if [ -x /usr/local/bin/faheem-support ]; then
+  rs="$(/usr/local/bin/faheem-support status --brief 2>/dev/null)"
+  case "$rs" in
+    "Not installed"|"") finding WARN "Remote support not set up" "sudo faheem-support install --enroll-url URL --name HYD-FAHEEM-PHARMACY" ;;
+    Disabled|"Support expired") finding PASS "Remote support installed, off ($(/usr/local/bin/faheem-support version | sed 's/^Faheem Remote Support //'))" ;;
+    Connected|Connecting*) finding PASS "Remote support ON: $rs" ;;
+    *) finding WARN "Remote support: $rs" "the support agent cannot reach the support server" support-repair ;;
+  esac
+  systemctl is-enabled --quiet faheem-support-agent.service 2>/dev/null \
+    && finding WARN "Remote support agent starts at boot" "it must start only from the shortcut" support-repair
+fi
+
 # ---- fixes ----------------------------------------------------------------------------------------
 apply_fix() {
   case "$1" in
@@ -198,6 +211,7 @@ apply_fix() {
     backup) "$here/backup.sh" --reason manual --note "doctor" --locked >/dev/null ;;
     update) "$here/update.sh" --yes ;;
     enable-timers) systemctl enable --now faheem-erp-maintenance.timer faheem-erp-boot-check.timer ;;
+    support-repair) /usr/local/bin/faheem-support repair ;;
     enable-boot) systemctl enable faheem-erp.service ;;
     firewall) systemctl restart faheem-erp-firewall.service || "$here/firewall.sh" ;;
     lan-address) "$here/network.sh" lan enable --yes ;;

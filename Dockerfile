@@ -26,6 +26,8 @@ COPY app ./app
 COPY scripts ./scripts
 COPY compose.yaml compose.prod.yaml ./
 COPY deploy/appliance ./deploy/appliance
+# the remote support package travels with each release but is installed / upgraded only on request
+COPY deploy/support ./deploy/support
 
 ARG APP_VERSION=dev
 ARG GIT_COMMIT=unknown

@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Stand-in for systemctl in the remote-support tests: units are files in $FAKE_STATE; the agent unit
+# really starts / stops $SUPPORT_HOME/meshagent/meshagent so connections can be observed.
+st="${FAKE_STATE:?}"; mkdir -p "$st/units"
+quiet=0; args=()
+for a in "$@"; do case "$a" in --quiet|-q|--no-block) quiet=1 ;; *) args+=("$a") ;; esac; done
+verb="${args[0]:-}"; units=("${args[@]:1}")
+echo "$verb ${units[*]}" >> "$st/systemctl.log"
+pidof_unit() { cat "$st/units/$1.pid" 2>/dev/null; }
+alive() { local p; p="$(pidof_unit "$1")"; [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
+case "$verb" in
+  start|restart)
+    for u in "${units[@]}"; do
+      [ -f "$st/units/$u.fail" ] && exit 1
+      if [ "$u" = faheem-support-agent.service ]; then
+        alive "$u" && [ "$verb" = start ] && continue
+        alive "$u" && kill "$(pidof_unit "$u")" 2>/dev/null
+        ( cd "$SUPPORT_HOME/meshagent" && exec setsid "$SUPPORT_HOME/meshagent/meshagent" >> "$st/agent.out" 2>&1 < /dev/null ) &
+        echo $! > "$st/units/$u.pid"
+      fi
+      touch "$st/units/$u.active"
+    done ;;
+  stop)
+    for u in "${units[@]}"; do
+      p="$(pidof_unit "$u")"; [ -n "$p" ] && { kill "$p" 2>/dev/null; pkill -P "$p" 2>/dev/null; }
+      rm -f "$st/units/$u.pid" "$st/units/$u.active" "$st/units/$u.timer" "$st/units/$u"
+    done ;;
+  is-active)
+    u="${units[0]}"
+    if [ -f "$st/units/$u.active" ] && { [ "$u" != faheem-support-agent.service ] || alive "$u"; }; then
+      [ "$quiet" = 1 ] || echo active; exit 0; fi
+    [ "$quiet" = 1 ] || echo inactive; exit 3 ;;
+  cat) [ -f "$SUPPORT_SYSTEMD/${units[0]}" ] ;;
+  *) exit 0 ;;
+esac

@@ -1,0 +1,43 @@
+{
+  "__comment__": "Faheem Remote Support server (MeshCentral). Rendered by install-server.sh; values in {{ }} are filled in.",
+  "settings": {
+    "cert": "{{DOMAIN}}",
+    "port": 443,
+    "redirPort": 80,
+    "WANonly": true,
+    "selfUpdate": false,
+    "agentPong": 60,
+    "mpsPort": 0,
+    "authLog": "/var/log/meshcentral/auth.log",
+    "maxInvalidLogin": { "time": 10, "count": 5, "coolofftime": 30 },
+    "maxInvalid2fa": { "time": 10, "count": 5, "coolofftime": 30 },
+    "autoBackup": {
+      "backupIntervalHours": 24,
+      "keepLastDaysBackup": 30,
+      "backupPath": "/var/backups/meshcentral",
+      "zipPassword": "{{BACKUP_ZIP_PASSWORD}}"
+    }
+  },
+  "domains": {
+    "": {
+      "title": "Faheem Support",
+      "title2": "Remote assistance for Faheem Pharmacy ERP",
+      "newAccounts": false,
+      "userSessionIdleTimeout": 30,
+      "passwordRequirements": {
+        "min": 12, "max": 128, "upper": 1, "lower": 1, "numeric": 1, "nonalpha": 1,
+        "force2factor": true, "oldPasswordBan": 5, "banCommonPasswords": true
+      },
+      "terminal": { "linuxshell": "login" },
+      "terminalUserVariable": "username",
+      "userConsentFlags": { "desktopnotify": true, "terminalnotify": true, "filenotify": true, "desktopprivacybar": true },
+      "agentConfig": [ "coreDumpEnabled=0" ]
+    }
+  },
+  "letsencrypt": {
+    "email": "{{ACME_EMAIL}}",
+    "names": "{{DOMAIN}}",
+    "production": true,
+    "rsaKeySize": 3072
+  }
+}

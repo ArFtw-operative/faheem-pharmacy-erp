@@ -1,0 +1,4 @@
+Faheem Remote Support — support package (version in VERSION).
+Installed to /opt/faheem-erp/support by: sudo faheem-support install --enroll-url URL --name HYD-FAHEEM-PHARMACY
+Upgraded only on purpose: sudo faheem-support upgrade. ERP updates never touch it.
+Documentation: docs/REMOTE-SUPPORT.md in the Faheem Pharmacy ERP repository.

@@ -1,0 +1,20 @@
+[Unit]
+Description=Faheem Remote Support agent (MeshCentral) — runs only during a support window
+Documentation=file:///opt/faheem-erp/support/README
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/faheem-erp/support/meshagent
+ExecStart=/opt/faheem-erp/support/meshagent/meshagent
+# reconnects by itself after an internet drop; restarted if it crashes, never started at boot
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=15
+StandardOutput=append:/var/log/faheem-erp/support/agent.log
+StandardError=append:/var/log/faheem-erp/support/agent.log
+
+# No [Install] section on purpose: the agent is OFF after every restart. faheem-support enable starts
+# it for a support window; faheem-support-resume.service restores a window a reboot interrupted.

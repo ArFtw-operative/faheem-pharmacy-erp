@@ -5,6 +5,18 @@ lists its database migrations. Upgrades keep all business history (see docs/UPGR
 
 ## Unreleased (next: 1.9.0)
 
+- **Faheem Remote Support (MeshCentral, Apache-2.0):** the pharmacy double-clicks *Faheem Remote Support*;
+  the PC connects outbound to `remote.faheemerp.in` and shows online under its readable name
+  (HYD-FAHEEM-PHARMACY) for 60 minutes (configurable), then the agent stops by a systemd timer; *End Remote
+  Support* ends it at once. No codes, IPs or open ports. A separate, versioned support package
+  (`deploy/support`, 1.0.0 in `/opt/faheem-erp/support`) never touched by ERP updates; installed by the
+  appliance installer (`--support-enroll-url`, `--support-name`) or `faheem-support install`. `faheem-support
+  enable|disable|status|repair|upgrade`, `faheem-health`, doctor checks, terminal login as `faheem-support` with
+  one checked root helper (works with sudo-rs), restore after a reboot for the time left, Xorg for remote
+  desktop. Server kit (`deploy/support-server`): installer, hardened config (forced 2FA, lock-outs, no sign-up,
+  terminal login prompt, daily encrypted backups), fail2ban, firewall rate limit, `faheem-mc` (groups,
+  enrollment links, technician roles, 2FA audit). docs/REMOTE-SUPPORT.md.
+
 - **Racks and boxes (new Racks tab, Alt+Shift+K):** racks with optional boxes, every product's place,
   its history and rack inventory on any past day (docs/LOCATIONS.md, DECISIONS D25–D30). Inventory:
   Rack / Box columns, Location filter (unassigned, no box, any rack or box), sort by rack, F8 moves the

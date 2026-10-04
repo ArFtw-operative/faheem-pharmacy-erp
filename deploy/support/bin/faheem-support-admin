@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# faheem-support-admin — what a support technician may do as root, signed in as faheem-support in the
+# remote terminal:  sudo faheem-support-admin <command>
+#
+#   status [erp|postgres|docker|network|all]   service state (systemctl status, the ERP containers)
+#   logs erp|worker|postgres|migrate|whatsapp [LINES]   ERP container logs
+#   journal faheem-erp|docker|network|support [LINES]    systemd journal of a service
+#   ps                                          docker ps (the ERP containers)
+#   restart erp|docker|network|proxy            restart a service
+#   erp status|doctor|health|version|backup|backups|update|update --check|logs|restart|start|stop
+#   doctor [--fix]   health   disk   memory   reboot
+#
+# Works the same with sudo and sudo-rs (one command allowed in sudoers, its arguments checked here).
+# Every use is logged with the technician's name in /var/log/faheem-erp/support/support.log and the journal.
+set -uo pipefail
+SCRIPT_NAME=faheem-support-admin
+. "$(dirname "$(readlink -f "$0")")/../lib.sh"
+set +e
+[ "$(id -u)" -eq 0 ] || [ "${FAHEEM_TEST:-0}" = 1 ] || { echo "use: sudo faheem-support-admin …" >&2; exit 1; }
+
+who="${SUDO_USER:-$(id -un)}"
+slog "admin by $who: $*"
+logger -t faheem-support-admin "by $who: $*" 2>/dev/null || true
+export SYSTEMD_PAGER=cat PAGER=cat          # never a pager (a pager can open a shell)
+lines() { [[ "${1:-}" =~ ^[0-9]{1,5}$ ]] && echo "$1" || echo 200; }
+erp() { /usr/local/bin/faheem-erp "$@"; }
+unit_of() {
+  case "$1" in
+    erp|faheem-erp) echo faheem-erp.service ;; docker) echo docker.service ;; network) echo NetworkManager.service ;;
+    support) echo faheem-support-agent.service ;; postgres) echo "" ;; *) return 1 ;;
+  esac
+}
+no() { echo "not allowed: $*  (see: faheem-support-admin help)" >&2; slog "admin refused for $who: $*"; exit 2; }
+
+cmd="${1:-help}"; [ $# -gt 0 ] && shift
+case "$cmd" in
+  status)
+    case "${1:-all}" in
+      erp) systemctl status --no-pager faheem-erp.service; erp status ;;
+      postgres) erp status | grep -i postgres ;;
+      docker) systemctl status --no-pager docker.service ;;
+      network) systemctl status --no-pager NetworkManager.service; ip -br address ;;
+      all) systemctl status --no-pager faheem-erp.service docker.service; erp status ;;
+      *) no status "$@" ;;
+    esac ;;
+  logs)
+    case "${1:-}" in web|erp) erp logs web | tail -n "$(lines "${2:-}")" ;;
+      worker|postgres|migrate|whatsapp) erp logs "$1" | tail -n "$(lines "${2:-}")" ;;
+      *) no logs "$@" ;; esac ;;
+  journal)
+    u="$(unit_of "${1:-}")" && [ -n "$u" ] || no journal "$@"
+    journalctl -u "$u" -n "$(lines "${2:-}")" --no-pager ;;
+  ps) docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}' ;;
+  restart)
+    case "${1:-}" in
+      erp) erp restart ;; docker) systemctl restart docker.service ;;
+      network) systemctl restart NetworkManager.service ;; proxy) erp lan status >/dev/null && docker restart faheem-erp-proxy-1 ;;
+      *) no restart "$@" ;;
+    esac ;;
+  erp)
+    case "${1:-}" in
+      status|doctor|health|version|backup|backups|logs|restart|start|stop|whatsapp-status) erp "$@" ;;
+      update) [ "${2:-}" = --check ] || [ $# -eq 1 ] || no erp "$@"; erp "$@" ;;
+      *) no erp "$@" ;;
+    esac ;;
+  doctor) [ $# -eq 0 ] || [ "$1" = --fix ] || no doctor "$@"; erp doctor "$@" ;;
+  health) /usr/local/bin/faheem-health ;;
+  disk) df -h / /var 2>/dev/null; du -sh /var/lib/faheem-erp/* /var/backups/faheem-erp 2>/dev/null ;;
+  memory) free -h; ps -eo pid,pcpu,pmem,comm --sort=-pmem | head -12 ;;
+  reboot) slog "reboot requested by $who"; erp power reboot ;;
+  help|-h|--help) sed -n '2,15p' "$0" ;;
+  *) no "$cmd" "$@" ;;
+esac

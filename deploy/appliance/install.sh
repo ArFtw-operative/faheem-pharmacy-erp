@@ -23,6 +23,10 @@
 #                                 release has been published yet)
 #    --port N                     local port of the ERP (default 8000, bound to 127.0.0.1)
 #    --no-daily-reboot            DAILY_HOST_REBOOT=false
+#    --support-enroll-url URL     Faheem Remote Support: enroll this PC into the support server's device group
+#    --support-enroll-file FILE     (from the server: faheem-mc enroll-url GROUP; a secret — never put it in Git)
+#    --support-name NAME          the readable support name (default HYD-FAHEEM-PHARMACY)
+#    --no-support                 do not set up remote support
 #    --yes                        do not ask; take the defaults above
 #
 #  Running it again repairs an installation (tooling, services, permissions) and never touches the
@@ -39,7 +43,7 @@ main() {
   ENV_FILE="$FAHEEM_ETC/faheem.env" TOKEN_FILE="$FAHEEM_ETC/registry.token"
 
   local counter_user="" token_file="" version="" owner_user="syed.faheem" owner_name="Syed Faheem" import="" lan="" static="" whatsapp=""
-  local kiosk=1 port=8000 reboot=true yes=0 build_source=0
+  local kiosk=1 port=8000 reboot=true yes=0 build_source=0 support_url="" support_file="" support_name="" support=1
   while [ $# -gt 0 ]; do
     case "$1" in
       --registry-token-file) token_file="$2"; shift 2 ;;
@@ -55,6 +59,10 @@ main() {
       --build-from-source) build_source=1; shift ;;
       --port) port="$2"; shift 2 ;;
       --no-daily-reboot) reboot=false; shift ;;
+      --support-enroll-url) support_url="$2"; shift 2 ;;
+      --support-enroll-file) support_file="$(readlink -f "$2")"; shift 2 ;;
+      --support-name) support_name="$2"; shift 2 ;;
+      --no-support) support=0; shift ;;
       --yes) yes=1; shift ;;
       -h|--help) sed -n '2,30p' "${BASH_SOURCE[0]}" 2>/dev/null || true; exit 0 ;;
       *) die "unknown option $1" ;;
@@ -93,6 +101,7 @@ main() {
   apt-get update -qq
   apt-get install -y -qq ca-certificates curl gnupg iptables python3 avahi-daemon whiptail policykit-1 >/dev/null 2>&1 \
     || apt-get install -y -qq ca-certificates curl gnupg iptables python3 avahi-daemon whiptail polkitd pkexec >/dev/null
+  apt-get install -y -qq zenity iproute2 >/dev/null 2>&1 || true      # the remote support window; ss
   if ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; then
     install -m 0755 -d /etc/apt/keyrings
     curl -fsSL "https://download.docker.com/linux/$ID/gpg" -o /etc/apt/keyrings/docker.asc
@@ -277,6 +286,8 @@ EOF
 
   if [ "$kiosk" = 1 ]; then step "ERP at login"; setup_kiosk "$desk"; fi
 
+  if [ "$support" = 1 ]; then step "Remote support"; setup_support; fi
+
   step "First backup"
   "$FAHEEM_HOME/current/bin/backup.sh" --reason manual --note "after install" >/dev/null && ok "Backup written to $FAHEEM_BACKUPS/snapshots"
   "$FAHEEM_HOME/current/bin/doctor.sh" || warn "doctor reported problems (see above)"
@@ -294,6 +305,29 @@ EOF
     echo "   Turn either off in ERP Control Center → Settings (auto-login, app-at-login)."
   fi
   open_app_now
+}
+
+setup_support() {   # Faheem Remote Support: installed once, then only "faheem-support upgrade" changes it
+  local pkg="$FAHEEM_HOME/current/support-package" args=()
+  if [ -x /usr/local/bin/faheem-support ] && [ -f /etc/faheem-support/support.env ]; then
+    ok "Remote support already set up ($(/usr/local/bin/faheem-support version)) — kept as it is"
+    /usr/local/bin/faheem-support repair >/dev/null 2>&1 && ok "Remote support checked" || warn "remote support needs attention: sudo faheem-support repair"
+    return 0
+  fi
+  [ -x "$pkg/bin/faheem-support" ] || { warn "this release carries no remote support package"; return 0; }
+  if [ -z "$support_url" ] && [ -z "$support_file" ] && [ "$interactive" = 1 ]; then
+    printf 'Remote support enrollment URL (from the support server; Enter to skip): ' > /dev/tty
+    IFS= read -r support_url < /dev/tty
+  fi
+  if [ -z "$support_url" ] && [ -z "$support_file" ]; then
+    warn "remote support not set up (later: sudo faheem-support install --enroll-url URL --name HYD-FAHEEM-PHARMACY)"
+    ln -sfn "$pkg/bin/faheem-support" /usr/local/bin/faheem-support
+    return 0
+  fi
+  [ -n "$support_file" ] && args+=(--enroll-file "$support_file") || args+=(--enroll-url "$support_url")
+  args+=(--name "${support_name:-HYD-FAHEEM-PHARMACY}")
+  "$pkg/bin/faheem-support" install "${args[@]}" || warn "remote support could not be set up — sudo faheem-support repair"
+  unset support_url
 }
 
 open_app_now() {   # open the app in the installing administrator's desktop session, if there is one
@@ -365,6 +399,7 @@ extract() {
   docker cp "$cid:/app/compose.yaml" "$tmp/compose.yaml" >/dev/null
   docker cp "$cid:/app/compose.prod.yaml" "$tmp/compose.prod.yaml" >/dev/null
   docker cp "$cid:/app/deploy/appliance/." "$tmp/" >/dev/null
+  docker cp "$cid:/app/deploy/support/." "$tmp/support-package/" >/dev/null 2>&1 || true   # older images have none
   docker rm "$cid" >/dev/null
   chmod -R a+rX,go-w "$tmp"; chmod 755 "$tmp"/bin/*
   echo "$v" > "$tmp/VERSION"; touch "$tmp/.complete"

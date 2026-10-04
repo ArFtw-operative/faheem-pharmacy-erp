@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# The "Faheem Remote Support" shortcut: turns remote support on (no password; polkit action
+# com.faheem.erp.support) and shows a small window: status, time left, [End Remote Support].
+# The end of the window is enforced by a systemd timer, not by this window: closing it, logging out
+# or a crash of this program never leaves support on beyond its time.
+set -uo pipefail
+SUPPORT="${FAHEEM_SUPPORT_CMD:-/usr/local/bin/faheem-support}"
+TITLE="Faheem Remote Support"
+ICON="/opt/faheem-erp/support/icons/faheem-remote-support.svg"
+
+have() { command -v "$1" >/dev/null 2>&1; }
+message() {   # message info|error TEXT
+  if have zenity; then zenity --"$1" --title="$TITLE" --width=380 --window-icon="$ICON" --text="$2" 2>/dev/null
+  elif have notify-send; then notify-send -i "$ICON" "$TITLE" "$2"
+  else echo "$TITLE: $2"; fi
+}
+json() { "$SUPPORT" status --json 2>/dev/null; }
+field() { python3 -c 'import json,sys
+try: print(json.loads(sys.argv[1]).get(sys.argv[2], ""))
+except Exception: print("")' "$1" "$2"; }
+
+# one window at a time (a second double-click just leaves the first window open)
+lock="${XDG_RUNTIME_DIR:-/tmp}/faheem-remote-support.lock"
+exec 8>"$lock"
+flock -n 8 || { message info "Remote support is already open on this computer."; exit 0; }
+
+if ! out="$(pkexec "$SUPPORT" enable --from-shortcut 2>&1)"; then
+  reason="$(printf '%s\n' "$out" | sed -n 's/^✘ //p' | tail -1)"
+  message error "Remote support could not be turned on.\n\n${reason:-Please try again.}\n\nPlease call Faheem Support."
+  exit 1
+fi
+
+render() {    # status JSON → zenity progress lines (percentage, then "# text")
+  local j="$1" s label left total pct ref
+  s="$(field "$j" state)"; label="$(field "$j" label)"; left="$(field "$j" seconds_left)"; ref="$(field "$j" reference)"
+  total="${TOTAL:-3600}"; [ "${left:-0}" -gt 0 ] 2>/dev/null || left=0
+  pct=$(( (total - left) * 100 / total )); [ "$pct" -lt 1 ] && pct=1; [ "$pct" -gt 99 ] && pct=99
+  echo "$pct"
+  local head="Remote assistance is <b>ENABLED</b>.\nFaheem Support can now connect to this computer."
+  [ "$s" = CONNECTED ] || head="Remote assistance is <b>ON</b> — connecting to Faheem Support…"
+  case "$s" in OFFLINE|SERVER_UNAVAILABLE|AGENT_ERROR) head="Remote assistance is <b>ON</b>, but:" ;; esac
+  printf '# %s\n\nStatus: <b>%s</b>\nTime remaining: <b>%02d:%02d:%02d</b>\nSupport access ends by itself when the time is up.%s\n' \
+    "$head" "$label" $((left / 3600)) $((left % 3600 / 60)) $((left % 60)) "${ref:+\n\nSupport reference: <b>$ref</b>}"
+}
+
+first="$(json)"
+TOTAL=$(( $(field "$first" seconds_left || echo 3600) + 1 ))
+[ "$TOTAL" -gt 60 ] || TOTAL=3600
+
+if have zenity; then
+  (
+    while :; do
+      j="$(json)"; s="$(field "$j" state)"
+      case "$s" in EXPIRED|DISABLED|NOT_INSTALLED) echo 100; echo "# Remote support has ended."; exit 0 ;; esac
+      render "$j"
+      sleep 2
+    done
+  ) | zenity --progress --title="$TITLE" --width=440 --window-icon="$ICON" --auto-close \
+        --cancel-label="End Remote Support" --text="Turning on remote support…" 2>/dev/null
+  rc=$?
+  if [ "$rc" -ne 0 ]; then          # [End Remote Support] (or the window was closed)
+    pkexec "$SUPPORT" disable >/dev/null 2>&1
+    message info "Remote support has ended.\nFaheem Support can no longer connect to this computer."
+  else
+    message info "Support access has ended (time limit reached).\nDouble-click Faheem Remote Support if you need help again."
+  fi
+else
+  # no window toolkit: a terminal-free notice; the timer still ends support on time
+  message info "Remote support is ON for $(( TOTAL / 60 )) minutes. Faheem Support can now connect.\nTo end it now: double-click Faheem Remote Support again and choose End."
+fi

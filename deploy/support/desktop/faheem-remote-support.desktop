@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Faheem Remote Support
+Comment=Let Faheem Support connect to this computer (ends by itself after 60 minutes)
+Exec=/opt/faheem-erp/support/bin/support-window
+Icon=/opt/faheem-erp/support/icons/faheem-remote-support.svg
+Terminal=false
+Categories=Utility;
+StartupNotify=true

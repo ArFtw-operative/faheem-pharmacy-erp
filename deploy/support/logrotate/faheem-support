@@ -1,0 +1,10 @@
+/var/log/faheem-erp/support/*.log {
+    weekly
+    rotate 12
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su root root
+}

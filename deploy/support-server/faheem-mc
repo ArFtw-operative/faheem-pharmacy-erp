@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# faheem-mc — day-to-day administration of the Faheem Remote Support server (wraps MeshCentral's meshctrl)
+#
+#   faheem-mc group list | group add NAME
+#   faheem-mc enroll-url GROUP            the enrollment link for a pharmacy installer (a secret: share privately)
+#   faheem-mc devices [GROUP]             readable names, online / offline, group
+#   faheem-mc rename DEVICE-NAME NEW-NAME
+#   faheem-mc tech list
+#   faheem-mc tech audit                  accounts that have not set up two-step sign-in yet
+#   faheem-mc tech add USER --role owner|admin|technician|readonly [--groups G1,G2] [--name "Real Name"]
+#   faheem-mc tech remove USER
+#
+# Sign-in: you are asked for your MeshCentral user, password and current two-step code
+# (or MC_USER / MC_PASS / MC_TOKEN in the environment). Server: from the local MeshCentral
+# configuration, or MC_URL=wss://remote.faheemerp.in when run elsewhere (needs meshctrl: MC_CTRL=path).
+set -Eeuo pipefail
+MC_HOME="${MC_HOME:-/opt/meshcentral}"
+CTRL="${MC_CTRL:-$MC_HOME/node_modules/meshcentral/meshctrl.js}"
+die() { echo "✘ $*" >&2; exit 1; }
+[ -f "$CTRL" ] || die "meshctrl not found at $CTRL (set MC_CTRL)"
+if [ -z "${MC_URL:-}" ]; then
+  host="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["settings"]["cert"])' "$MC_HOME/meshcentral-data/config.json" 2>/dev/null)" \
+    || die "set MC_URL=wss://your-server"
+  MC_URL="wss://$host"
+fi
+WEB="https://$(echo "$MC_URL" | sed -E 's#^wss?://##; s#/.*$##')"
+
+ask() {   # ask VAR "prompt" [hidden]
+  local v="${!1:-}"
+  if [ -z "$v" ]; then
+    [ -r /dev/tty ] || die "$1 is needed"
+    printf '%s' "$2" > /dev/tty
+    if [ "${3:-}" = hidden ]; then IFS= read -rs v < /dev/tty; echo > /dev/tty; else IFS= read -r v < /dev/tty; fi
+  fi
+  printf -v "$1" '%s' "$v"
+}
+signin() {
+  [ -n "${_SIGNED:-}" ] && return
+  ask MC_USER "MeshCentral user: "; ask MC_PASS "Password: " hidden
+  [ -n "${MC_NO2FA:-}" ] || ask MC_TOKEN "Two-step code: "
+  _SIGNED=1
+}
+mc() {   # mc <meshctrl command> [args…]
+  signin
+  local args=(--url "$MC_URL" --loginuser "$MC_USER" --loginpass "$MC_PASS")
+  [ -n "${MC_TOKEN:-}" ] && args+=(--token "$MC_TOKEN")
+  node "$CTRL" "$@" "${args[@]}"
+}
+group_id() {
+  mc listdevicegroups --json | python3 -c 'import json,sys
+name = sys.argv[1].lower()
+hit = [g["_id"] for g in json.load(sys.stdin) if g["name"].lower() == name]
+print(hit[0] if hit else "")' "$1"
+}
+
+cmd="${1:-help}"; [ $# -gt 0 ] && shift
+case "$cmd" in
+  group)
+    case "${1:-list}" in
+      list) mc listdevicegroups --json | python3 -c 'import json,sys
+for g in json.load(sys.stdin): print(g["name"])' ;;
+      add) [ -n "${2:-}" ] || die "faheem-mc group add NAME"; mc adddevicegroup --name "$2" ;;
+      *) die "faheem-mc group list|add NAME" ;;
+    esac ;;
+  enroll-url)
+    [ -n "${1:-}" ] || die "faheem-mc enroll-url GROUP"
+    id="$(group_id "$1")"; [ -n "$id" ] || die "no device group named $1 (faheem-mc group add $1)"
+    echo "$WEB/meshsettings?id=${id#mesh//}"
+    echo "(Give this link only to the person installing the pharmacy PC: it enrolls devices into \"$1\".)" >&2 ;;
+  devices)
+    gid=""; [ -n "${1:-}" ] && { gid="$(group_id "$1")"; [ -n "$gid" ] || die "no device group named $1"; }
+    groups="$(mc listdevicegroups --json)"
+    mc listdevices --json | python3 -c 'import json,sys
+groups = {g["_id"]: g["name"] for g in json.loads(sys.argv[1])}
+want = sys.argv[2]
+row = "{:34} {:8} {}"
+print(row.format("DEVICE", "STATE", "GROUP"))
+for d in sorted(json.load(sys.stdin), key=lambda d: d["name"]):
+    if want and d.get("meshid") != want: continue
+    print(row.format(d["name"], "ONLINE" if d.get("conn") else "offline", groups.get(d.get("meshid"), "?")))' "$groups" "$gid" ;;
+  rename)
+    [ -n "${1:-}" ] && [ -n "${2:-}" ] || die "faheem-mc rename DEVICE-NAME NEW-NAME"
+    id="$(mc listdevices --json | python3 -c 'import json,sys
+hit = [d["_id"] for d in json.load(sys.stdin) if d["name"].lower() == sys.argv[1].lower()]
+print(hit[0] if len(hit) == 1 else "")' "$1")"
+    [ -n "$id" ] || die "no single device named $1"
+    mc editdevice --id "$id" --name "$2" ;;
+  tech)
+    sub="${1:-list}"; [ $# -gt 0 ] && shift
+    case "$sub" in
+      list) mc listusers ;;
+      audit)   # two-step sign-in is forced at the first web sign-in; until then a password alone works — find those accounts
+        mc listusers --json | python3 -c 'import json,sys
+bad = [u for u in json.load(sys.stdin) if not any(u.get(k) for k in ("otpsecret", "otphkeys", "otpkeys", "otpdev"))]
+for u in bad: print("NO TWO-STEP SIGN-IN YET:", u["name"], "(created", u.get("creation"), ")")
+print("All accounts have two-step sign-in." if not bad else "→ have them sign in now (they are made to set it up), or remove them: faheem-mc tech remove USER")
+sys.exit(1 if bad else 0)' ;;
+      remove) [ -n "${1:-}" ] || die "faheem-mc tech remove USER"; mc removeuser --userid "user//$1" ;;
+      add)
+        user="${1:-}"; shift || true; role="" groups="" real=""
+        while [ $# -gt 0 ]; do case "$1" in --role) role="$2"; shift 2 ;; --groups) groups="$2"; shift 2 ;; --name) real="$2"; shift 2 ;; *) die "unknown option $1" ;; esac; done
+        [[ "$user" =~ ^[A-Za-z0-9._-]{3,40}$ ]] || die "faheem-mc tech add USER --role …"
+        case "$role" in
+          owner) server_rights=full; group_rights=(--fullrights) ;;                                   # full MeshCentral administration
+          admin) server_rights=nonewgroups; group_rights=(--fullrights) ;;                            # full device support
+          technician) server_rights=nonewgroups,notools; group_rights=(--remotecontrol --notes --chatnotify --limitedevents) ;;  # desktop/terminal/files on assigned groups
+          readonly) server_rights=nonewgroups,notools; group_rights=(--noterminal --nofiles --limitedevents) ;;                 # monitoring only
+          *) die "--role owner|admin|technician|readonly" ;;
+        esac
+        TMP_PASS="${TMP_PASS:-}"; ask TMP_PASS "Temporary password for $user (they change it at first sign-in; 12+ chars): " hidden
+        extra=(); [ -n "$real" ] && extra+=(--realname "$real")
+        mc adduser --user "$user" --pass "$TMP_PASS" --resetpass --rights "$server_rights" "${extra[@]}"
+        if [ "$role" != owner ] || [ -n "$groups" ]; then
+          IFS=, read -ra gl <<< "$groups"
+          [ ${#gl[@]} -gt 0 ] || [ "$role" = owner ] || die "--groups G1,G2: the device groups this person may support"
+          for g in "${gl[@]}"; do
+            gid="$(group_id "$g")"; [ -n "$gid" ] || die "no device group named $g"
+            mc addusertodevicegroup --id "$gid" --userid "user//${user,,}" "${group_rights[@]}"
+          done
+        fi
+        echo "✔ $user ($role)${groups:+ on $groups}: two-step sign-in is required at the first login" ;;
+      *) die "faheem-mc tech list|add|remove" ;;
+    esac ;;
+  help|-h|--help) sed -n '2,15p' "$0" ;;
+  *) die "unknown command $cmd (faheem-mc help)" ;;
+esac

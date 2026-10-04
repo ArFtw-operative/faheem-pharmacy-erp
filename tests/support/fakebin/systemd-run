@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Stand-in: records a transient timer (unit, delay, command) instead of scheduling it.
+st="${FAKE_STATE:?}"; mkdir -p "$st/units"; unit=""; delay=""; cmd=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --unit=*) unit="${1#--unit=}" ;; --on-active=*) delay="${1#--on-active=}" ;;
+    --quiet|--timer-property=*|--description=*) ;; --*) ;; *) cmd=("$@"); break ;;
+  esac; shift
+done
+printf '%s\n' "$delay" "${cmd[*]}" > "$st/units/$unit.timer"
+touch "$st/units/$unit.timer.active"
+echo "systemd-run $unit $delay" >> "$st/systemctl.log"

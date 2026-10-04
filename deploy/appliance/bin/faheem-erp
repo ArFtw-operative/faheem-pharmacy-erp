@@ -23,6 +23,8 @@ Faheem Pharmacy ERP — appliance control
   faheem-erp restore ID|--latest    put a snapshot back (asks for confirmation)
   faheem-erp drill [ID]             prove a snapshot restores (scratch database; live data untouched)
   faheem-erp doctor [--fix [ID…]]   diagnose from live state and propose fixes; --fix applies them
+  faheem-erp health                 one-screen health: ERP, database, kiosk, backup, updater, remote support (= faheem-health)
+  faheem-erp support …              remote support: enable [--duration MIN] | disable | status | repair (= faheem-support)
   faheem-erp logs [SERVICE] [-f]    web, worker, migrate, postgres, whatsapp
   faheem-erp version
   faheem-erp whatsapp-status
@@ -75,6 +77,10 @@ case "$cmd" in
   restore) exec "$here/restore.sh" "$@" ;;
   drill) require_root; dc run --rm --no-TTY tools python -m app.snapshot drill "$@" ;;
   doctor) exec "$here/doctor.sh" "$@" ;;
+  health) exec "$here/health.sh" "$@" ;;
+  support)
+    [ -x /usr/local/bin/faheem-support ] || die "remote support is not installed (sudo faheem-support install …)"
+    exec /usr/local/bin/faheem-support "$@" ;;
   maintenance) exec "$here/maintenance.sh" "$@" ;;
   logs)
     require_root

@@ -144,6 +144,8 @@ extract_release() {
   docker cp "$cid:/app/compose.yaml" "$tmp/compose.yaml" >/dev/null
   docker cp "$cid:/app/compose.prod.yaml" "$tmp/compose.prod.yaml" >/dev/null
   docker cp "$cid:/app/deploy/appliance/." "$tmp/" >/dev/null
+  # carried along for "faheem-support upgrade"; an ERP update never installs or touches remote support
+  docker cp "$cid:/app/deploy/support/." "$tmp/support-package/" >/dev/null 2>&1 || true
   docker rm "$cid" >/dev/null
   chmod -R a+rX,go-w "$tmp"; chmod 755 "$tmp"/bin/* 2>/dev/null || true     # the desktop user runs the kiosk from here
   echo "$version" > "$tmp/VERSION"; touch "$tmp/.complete"
@@ -170,6 +172,7 @@ install_host_files() {
   systemctl daemon-reload
   install -m 644 "$rel/logrotate/faheem-erp" /etc/logrotate.d/faheem-erp
   ln -sfn "$rel/bin/faheem-erp" /usr/local/bin/faheem-erp
+  ln -sfn "$rel/bin/health.sh" /usr/local/bin/faheem-health
   install -d /usr/share/polkit-1/actions
   install -m 644 "$rel/polkit-com.faheem.erp.policy" /usr/share/polkit-1/actions/com.faheem.erp.policy
   for f in "$rel"/desktop/*.desktop; do install -m 644 "$f" /usr/share/applications/; done

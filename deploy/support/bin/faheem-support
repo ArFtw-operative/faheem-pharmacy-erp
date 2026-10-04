@@ -1,0 +1,398 @@
+#!/usr/bin/env bash
+# faheem-support — Faheem Remote Support (MeshCentral agent under the pharmacy's control).
+#
+#   faheem-support enable [--duration MIN]   start the agent for MIN minutes (default SUPPORT_DURATION_MIN, 60)
+#   faheem-support disable                   end remote support now (agent stopped, timer removed)
+#   faheem-support status [--json|--brief]   Connected · Connecting… · Offline · Server unavailable · Agent error · Disabled
+#   faheem-support repair                    check and fix the agent installation, report diagnostics
+#   faheem-support install --enroll-file F | --enroll-url URL  [--name HYD-FAHEEM-PHARMACY] [--server URL]
+#                          [--duration 60] [--agent-binary FILE] [--sudo limited|full] [--keep-wayland]
+#   faheem-support upgrade [--from DIR]      install a newer support package (agent identity kept)
+#   faheem-support resume                    (boot) restore a window interrupted by a reboot, for the time left
+#   faheem-support uninstall [--purge]       remove the agent and the shortcut (--purge: its identity too)
+#   faheem-support version
+#
+# The desktop shortcut "Faheem Remote Support" runs enable / status / disable through pkexec without a
+# password (polkit action com.faheem.erp.support); every other command needs root (sudo).
+SCRIPT_NAME=faheem-support
+here="$(dirname "$(readlink -f "$0")")"
+# shellcheck source=../lib.sh
+. "$here/../lib.sh"
+
+# Called through pkexec by the desktop user: only the three counter actions, the default duration.
+if [ -n "${PKEXEC_UID:-}" ]; then
+  case "${1:-}" in enable|disable|status) ;; *) fail "only enable, disable and status are allowed from the desktop" ;; esac
+  BY="$(getent passwd "$PKEXEC_UID" | cut -d: -f1 || echo "uid $PKEXEC_UID") (desktop shortcut)"
+else
+  BY="${SUDO_USER:-$(id -un 2>/dev/null || echo root)}"
+fi
+need_root() { is_root || fail "run as root: sudo faheem-support ${1:-}"; }
+
+# --- enable / disable / status ----------------------------------------------------------------------
+cmd_enable() {
+  need_root enable
+  local minutes; minutes="$(duration_default)"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --duration) [ -z "${PKEXEC_UID:-}" ] || fail "the duration is fixed from the desktop"; minutes="$2"; shift 2 ;;
+      --from-shortcut) shift ;;
+      *) fail "unknown option $1" ;;
+    esac
+  done
+  [[ "$minutes" =~ ^[0-9]+$ ]] && [ "$minutes" -ge 5 ] && [ "$minutes" -le 1440 ] || fail "duration: 5 to 1440 minutes"
+  installed || fail "remote support is not installed on this PC (sudo faheem-support install …)"
+  internet_ok || { slog "enable refused: no internet"; fail "this PC is not connected to the internet"; }
+  # one window at a time: a new click restarts the clock
+  systemctl stop "$EXPIRY_UNIT.timer" "$EXPIRY_UNIT.service" >/dev/null 2>&1 || true
+  systemctl reset-failed "$EXPIRY_UNIT.timer" "$EXPIRY_UNIT.service" >/dev/null 2>&1 || true
+  systemctl start "$AGENT_UNIT" || { slog "agent did not start"; fail "the support agent did not start (sudo faheem-support repair)"; }
+  systemd-run --quiet --unit="$EXPIRY_UNIT" --description="Faheem Remote Support: end of the support window" \
+    --on-active="${minutes}m" --timer-property=AccuracySec=15s \
+    "$SUPPORT_BIN_DIR/faheem-support" disable --reason expired >/dev/null \
+    || { systemctl stop "$AGENT_UNIT" || true; fail "could not set the end of the support window"; }
+  local now; now="$(now_epoch)"
+  session_write "$now" $(( now + minutes * 60 )) "$minutes" "$BY"
+  slog "support enabled for ${minutes} min by $BY (until $(iso $(( now + minutes * 60 ))))"
+  # wait briefly for the connection, so the window can say Connected
+  local i
+  for i in $(seq 1 "${SUPPORT_CONNECT_WAIT:-20}"); do agent_connected && break; sleep 1; done
+  agent_connected && slog "agent connected to $(server_host)" || slog "agent started; not connected yet"
+  status_text
+}
+
+cmd_disable() {
+  need_root disable
+  local reason="manual"
+  while [ $# -gt 0 ]; do case "$1" in --reason) reason="$2"; shift 2 ;; *) shift ;; esac; done
+  systemctl stop "$AGENT_UNIT" >/dev/null 2>&1 || true
+  if [ "$reason" != expired ]; then        # (when the timer itself runs this, it is ending already)
+    systemctl stop "$EXPIRY_UNIT.timer" >/dev/null 2>&1 || true
+  fi
+  rm -f "$SESSION"
+  case "$reason" in
+    expired) slog "support window expired: agent stopped" ;;
+    boot)    slog "support off after restart (no window to restore)" ;;
+    *)       slog "support disabled ($reason) by $BY" ;;
+  esac
+  say "Remote support is OFF."
+}
+
+state() {   # the one word the window and the health check show
+  if ! installed; then echo "NOT_INSTALLED"; return; fi
+  local left; left="$(remaining)"
+  if ! agent_active; then
+    [ "$left" -gt 0 ] && { echo "AGENT_ERROR"; return; }
+    [ -n "$(session_get expires)" ] && { echo "EXPIRED"; return; }
+    echo "DISABLED"; return
+  fi
+  [ "$left" -gt 0 ] || { echo "EXPIRED"; return; }
+  agent_running || { echo "AGENT_ERROR"; return; }
+  if agent_connected; then echo "CONNECTED"; return; fi
+  internet_ok || { echo "OFFLINE"; return; }
+  server_ok || { echo "SERVER_UNAVAILABLE"; return; }
+  echo "CONNECTING"
+}
+label() {
+  case "$1" in
+    CONNECTED) echo "Connected" ;; CONNECTING) echo "Connecting…" ;; OFFLINE) echo "Offline (no internet)" ;;
+    SERVER_UNAVAILABLE) echo "Support server unavailable" ;; AGENT_ERROR) echo "Agent error" ;;
+    EXPIRED) echo "Support expired" ;; DISABLED) echo "Disabled" ;; NOT_INSTALLED) echo "Not installed" ;; *) echo "$1" ;;
+  esac
+}
+status_text() {
+  local s left; s="$(state)"; left="$(remaining)"
+  echo "Faheem Remote Support"
+  echo "Status:     $(label "$s")"
+  [ "$left" -gt 0 ] && printf 'Time left:  %02d:%02d:%02d\n' $((left / 3600)) $((left % 3600 / 60)) $((left % 60))
+  [ -n "$(support_name)" ] && echo "Reference:  $(support_name)"
+  return 0
+}
+cmd_status() {
+  case "${1:-}" in
+    --json)
+      local s; s="$(state)"
+      python3 - "$s" "$(label "$s")" "$(remaining)" "$(support_name)" "$(server_host)" "$(package_version)" "$(session_get expires)" <<'PY'
+import json, sys
+s, label, left, name, host, ver, exp = sys.argv[1:8]
+print(json.dumps({"state": s, "label": label, "seconds_left": int(left), "reference": name, "server": host,
+                  "package": ver, "expires": int(exp) if exp.isdigit() else None}))
+PY
+      ;;
+    --brief) label "$(state)" ;;
+    *) status_text ;;
+  esac
+}
+
+# --- resume after a restart ---------------------------------------------------------------------------
+cmd_resume() {
+  need_root resume
+  local left; left="$(remaining)"
+  if [ "$left" -gt 60 ] && conf_flag SUPPORT_RESUME_AFTER_REBOOT && installed; then
+    systemctl start "$AGENT_UNIT" || { slog "resume: agent did not start"; exit 1; }
+    systemd-run --quiet --unit="$EXPIRY_UNIT" --on-active="${left}s" --timer-property=AccuracySec=15s \
+      "$SUPPORT_BIN_DIR/faheem-support" disable --reason expired >/dev/null || true
+    slog "support window restored after a restart: $((left / 60)) min left"
+  else
+    systemctl stop "$AGENT_UNIT" >/dev/null 2>&1 || true
+    [ -f "$SESSION" ] && cmd_disable --reason boot >/dev/null
+  fi
+}
+
+# --- install / upgrade --------------------------------------------------------------------------------
+pkg_root() { readlink -f "$here/.."; }       # the package this script belongs to (release copy or installed)
+
+install_files() {   # copy the package (from $1) into SUPPORT_HOME and register units, polkit, shortcut, logs
+  local src="$1" f
+  install -d -m 755 "$SUPPORT_HOME" "$SUPPORT_HOME/bin" "$AGENT_DIR"
+  install -d -m 700 "$AGENT_DIR"                           # the agent's identity (meshagent.db) lives here
+  if [ "$src" != "$(readlink -f "$SUPPORT_HOME")" ]; then
+    install -m 644 "$src/VERSION" "$src/lib.sh" "$SUPPORT_HOME/"
+    for f in "$src"/bin/*; do install -m 755 "$f" "$SUPPORT_HOME/bin/"; done
+    install -m 644 "$src/README" "$SUPPORT_HOME/" 2>/dev/null || true
+    for d in systemd polkit desktop icons logrotate; do rm -rf "$SUPPORT_HOME/${d:?}"; cp -r "$src/$d" "$SUPPORT_HOME/$d"; done
+    chmod -R a+rX,go-w "$SUPPORT_HOME/systemd" "$SUPPORT_HOME/polkit" "$SUPPORT_HOME/desktop" "$SUPPORT_HOME/icons" "$SUPPORT_HOME/logrotate"
+  fi
+  install -d -m 750 "$SUPPORT_LOGS"; install -d -m 755 "$SUPPORT_STATE"
+  install -d -m 755 "$SUPPORT_SYSTEMD"
+  for f in "$SUPPORT_HOME"/systemd/*; do install -m 644 "$f" "$SUPPORT_SYSTEMD/"; done
+  ln -sfn "$SUPPORT_HOME/bin/faheem-support" "$SUPPORT_BIN_DIR/faheem-support"
+  ln -sfn "$SUPPORT_HOME/bin/faheem-support-admin" "$SUPPORT_BIN_DIR/faheem-support-admin"
+  [ "${FAHEEM_TEST:-0}" = 1 ] && return 0
+  systemctl daemon-reload
+  systemctl disable "$AGENT_UNIT" >/dev/null 2>&1 || true       # never on at boot
+  systemctl enable faheem-support-resume.service >/dev/null 2>&1 || true
+  install -d /usr/share/polkit-1/actions
+  install -m 644 "$SUPPORT_HOME/polkit/com.faheem.erp.support.policy" /usr/share/polkit-1/actions/
+  install -m 644 "$SUPPORT_HOME/logrotate/faheem-support" /etc/logrotate.d/faheem-support
+  install -m 644 "$SUPPORT_HOME/desktop/faheem-remote-support.desktop" /usr/share/applications/
+  install_shortcuts
+}
+
+install_shortcuts() {   # on the desktop of the counter account and the administrator (from the ERP's settings)
+  local env=/etc/faheem-erp/faheem.env people u d home uid
+  people="$(sed -n 's/^FAHEEM_\(DESK\|ADMIN\)_USER=//p' "$env" 2>/dev/null | grep . | sort -u | tr '\n' ' ')"
+  for u in $people; do
+    id "$u" >/dev/null 2>&1 || continue
+    home="$(getent passwd "$u" | cut -d: -f6)"
+    d="$(runuser -u "$u" -- xdg-user-dir DESKTOP 2>/dev/null || true)"; [ -n "$d" ] && [ "$d" != "$home" ] || d="$home/Desktop"
+    install -d -o "$u" -g "$(id -gn "$u")" "$d"
+    install -m 755 -o "$u" -g "$(id -gn "$u")" "$SUPPORT_HOME/desktop/faheem-remote-support.desktop" "$d/faheem-remote-support.desktop"
+    uid="$(id -u "$u")"
+    [ -S "/run/user/$uid/bus" ] && runuser -u "$u" -- env DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+      gio set "$d/faheem-remote-support.desktop" metadata::trusted true 2>/dev/null || true
+  done
+}
+
+write_msh() {   # write_msh <enrollment text file> <name>: the agent's settings, with its readable name
+  local src="$1" name="$2" tmp
+  grep -q '^MeshID=' "$src" && grep -q '^MeshServer=' "$src" && grep -q '^ServerID=' "$src" \
+    || fail "the enrollment file is not a MeshCentral agent settings (.msh) file"
+  tmp="$(mktemp "$AGENT_DIR/.msh.XXXXXX")"
+  grep -vE '^(translation|agentName|displayName|meshServiceName|companyName)=' "$src" | grep -E '^[A-Za-z]+=' > "$tmp"
+  {
+    echo "agentName=$name"
+    echo "displayName=Faheem Remote Support"
+    echo "companyName=Faheem Pharmacy ERP"
+    echo "meshServiceName=faheem-support-agent"
+  } >> "$tmp"
+  chmod 600 "$tmp"; mv -f "$tmp" "$AGENT_MSH"
+  touch "$SUPPORT_HOME/.enrolled"; chmod 644 "$SUPPORT_HOME/.enrolled"
+}
+
+sudoers_text() {   # the sudo rules of the faheem-support account (limited | full); valid for sudo and sudo-rs
+  if [ "$1" = full ]; then
+    cat <<EOF
+# Faheem Remote Support: full administration (chosen with --sudo full). Password required for every
+# sudo; each command is recorded in the system journal.
+faheem-support ALL=(ALL:ALL) ALL
+EOF
+  else
+    cat <<EOF
+# Faheem Remote Support: one root command holding the allowed troubleshooting actions (it checks its own
+# arguments and logs every use with the technician's name) and the health summary. No shell, editor,
+# pager or docker run/exec: never a way to an unrestricted root shell.
+faheem-support ALL=(root) NOPASSWD: $SUPPORT_BIN_DIR/faheem-support-admin, $SUPPORT_BIN_DIR/faheem-health
+EOF
+  fi
+}
+
+support_account() {   # the account the technician signs in to in the remote terminal (login prompt)
+  local mode="$1" pw sudoers=/etc/sudoers.d/faheem-support tmp
+  [ "${FAHEEM_TEST:-0}" = 1 ] && return 0
+  if ! id faheem-support >/dev/null 2>&1; then
+    useradd --create-home --shell /bin/bash --comment "Faheem remote support (technicians)" faheem-support
+    pw="$(head -c 18 /dev/urandom | base64 | tr -d '/+=' | cut -c1-20)"
+    echo "faheem-support:$pw" | chpasswd
+    (umask 077; printf 'faheem-support terminal password (set %s): %s\n' "$(date -I)" "$pw" > "$SUPPORT_ETC/support-account")
+    unset pw
+    slog "support account faheem-support created (password stored root-only in $SUPPORT_ETC/support-account)"
+  fi
+  tmp="$(mktemp)"
+  sudoers_text "$mode" > "$tmp"
+  if visudo -cf "$tmp" >/dev/null 2>&1; then install -m 440 -o root -g root "$tmp" "$sudoers"; else warn_sudo=1; fi
+  rm -f "$tmp"
+  [ -z "${warn_sudo:-}" ] || slog "sudo rules for faheem-support were not valid on this system; not installed"
+  conf_set SUPPORT_SUDO "$mode"
+}
+
+x11_for_remote_desktop() {   # MeshCentral's Linux remote desktop captures X11 sessions only (Wayland → black screen)
+  local f=/etc/gdm3/custom.conf
+  [ "${FAHEEM_TEST:-0}" = 1 ] && return 0
+  [ -f "$f" ] || f=/etc/gdm3/daemon.conf
+  [ -f "$f" ] || { slog "no GDM configuration found; check the session type for remote desktop (needs Xorg)"; return 0; }
+  if grep -qE '^\s*WaylandEnable\s*=\s*false' "$f"; then return 0; fi
+  cp -a "$f" "$f.faheem-before-support"
+  if grep -qE '^\s*#?\s*WaylandEnable' "$f"; then sed -i -E 's/^\s*#?\s*WaylandEnable\s*=.*/WaylandEnable=false/' "$f"
+  else sed -i '/^\[daemon\]/a WaylandEnable=false' "$f"; fi
+  grep -q '^\[daemon\]' "$f" || printf '[daemon]\nWaylandEnable=false\n' >> "$f"
+  slog "login sessions switched to Xorg (WaylandEnable=false) for remote desktop; takes effect at the next login"
+  say "Remote desktop needs Xorg: the desktop switches from Wayland at the next login (or restart)."
+}
+
+cmd_install() {
+  need_root install
+  [ -z "${PKEXEC_UID:-}" ] || fail "install needs sudo"
+  local enroll_file="" enroll_url="" name="" server="" minutes="" agent_bin="" sudo_mode="limited" keep_wayland=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --enroll-file) enroll_file="$(readlink -f "$2")"; shift 2 ;;
+      --enroll-url) enroll_url="$2"; shift 2 ;;
+      --name) name="$2"; shift 2 ;;
+      --server) server="${2%/}"; shift 2 ;;
+      --duration) minutes="$2"; shift 2 ;;
+      --agent-binary) agent_bin="$(readlink -f "$2")"; shift 2 ;;
+      --sudo) sudo_mode="$2"; shift 2 ;;
+      --keep-wayland) keep_wayland=1; shift ;;
+      *) fail "unknown option $1" ;;
+    esac
+  done
+  [[ "$sudo_mode" =~ ^(limited|full)$ ]] || fail "--sudo limited|full"
+  name="${name:-$(support_name)}"; name="${name:-HYD-FAHEEM-PHARMACY}"
+  name="$(echo "$name" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9\n-' '-' | sed 's/--*/-/g; s/^-//; s/-$//')"
+  [[ "$name" =~ ^[A-Z0-9][A-Z0-9-]{2,62}$ ]] || fail "--name: letters, digits and dashes (e.g. HYD-FAHEEM-PHARMACY)"
+  install -d -m 750 "$SUPPORT_LOGS"
+  install_files "$(pkg_root)"
+
+  # the enrollment file identifies the device group; it is a secret given at install time, never stored in Git
+  local msh_src
+  msh_src="$(mktemp)"
+  if [ -n "$enroll_file" ]; then cp "$enroll_file" "$msh_src"
+  elif [ -n "$enroll_url" ]; then curl -fsS -m 30 ${SUPPORT_CURL_INSECURE:+-k} "$enroll_url" -o "$msh_src" || { rm -f "$msh_src"; fail "could not download the enrollment file"; }
+  elif [ -s "$AGENT_MSH" ]; then cp "$AGENT_MSH" "$msh_src"            # re-install: keep the enrollment
+  else rm -f "$msh_src"; fail "give --enroll-file FILE or --enroll-url URL (from the MeshCentral server: faheem-mc enroll-file GROUP)"; fi
+  grep -q '^MeshID=' "$msh_src" && grep -q '^MeshServer=' "$msh_src" && grep -q '^ServerID=' "$msh_src" \
+    || { rm -f "$msh_src"; fail "the enrollment file is not a MeshCentral agent settings (.msh) file"; }
+  if [ -z "$server" ]; then
+    server="$(sed -n 's/^MeshServer=//p' "$msh_src" | head -1 | sed -E 's#^wss://#https://#; s#/agent\.ashx.*$##')"
+  fi
+  [ -n "$server" ] || { rm -f "$msh_src"; fail "no server address in the enrollment file; give --server https://remote.faheemerp.in"; }
+  conf_set SUPPORT_SERVER "$server"
+  conf_set SUPPORT_NAME "$name"
+  conf_set SUPPORT_DURATION_MIN "${minutes:-$(duration_default)}"
+  [ -n "$(conf_get SUPPORT_RESUME_AFTER_REBOOT)" ] || conf_set SUPPORT_RESUME_AFTER_REBOOT true
+  write_msh "$msh_src" "$name"; rm -f "$msh_src"
+
+  # the agent the server itself publishes for 64-bit Linux, so agent and server always match
+  if [ -n "$agent_bin" ]; then install -m 755 "$agent_bin" "$AGENT_BIN.new"
+  elif [ ! -x "$AGENT_BIN" ]; then
+    curl -fsS -m 300 ${SUPPORT_CURL_INSECURE:+-k} "$server/meshagents?id=6" -o "$AGENT_BIN.new" || fail "could not download the agent from $server"
+  fi
+  if [ -f "$AGENT_BIN.new" ]; then
+    head -c 4 "$AGENT_BIN.new" | grep -q $'\x7fELF' || { rm -f "$AGENT_BIN.new"; fail "the downloaded agent is not a Linux program"; }
+    [ "$(stat -c %s "$AGENT_BIN.new")" -gt 500000 ] || { rm -f "$AGENT_BIN.new"; fail "the downloaded agent is incomplete"; }
+    chmod 755 "$AGENT_BIN.new"; mv -f "$AGENT_BIN.new" "$AGENT_BIN"
+  fi
+  support_account "$sudo_mode"
+  [ "$keep_wayland" = 1 ] || x11_for_remote_desktop
+  slog "installed support package $(package_version) as $name for $(echo "$server" | sed -E 's#^https?://##')"
+  echo "✔ Faheem Remote Support $(package_version) installed as $name (off until the shortcut is used)"
+  if dns_ok && server_ok; then echo "✔ Support server $(server_host) reachable"; slog "server reachable"
+  else echo "! Support server $(server_host) not reachable now (DNS / internet / server); the shortcut will retry"; slog "server not reachable at install"; fi
+  [ -f "$SUPPORT_ETC/support-account" ] && echo "  Terminal sign-in: faheem-support — password in $SUPPORT_ETC/support-account (root only); record it in the support vault"
+  return 0
+}
+
+cmd_upgrade() {
+  need_root upgrade
+  # by default: the package shipped with the installed ERP release (an ERP update itself never upgrades it)
+  local from; from="$(readlink -f /opt/faheem-erp/current/support-package 2>/dev/null || pkg_root)"
+  while [ $# -gt 0 ]; do case "$1" in --from) from="$(readlink -f "$2")"; shift 2 ;; *) fail "unknown option $1" ;; esac; done
+  [ -f "$from/VERSION" ] || fail "no support package at $from"
+  local new old; new="$(cat "$from/VERSION")"; old="$(package_version)"
+  if [ "$old" = "$new" ]; then echo "Support package $old is current"; return 0; fi
+  [ "$(printf '%s\n%s\n' "$old" "$new" | sort -V | tail -1)" = "$new" ] || fail "$new is older than the installed $old"
+  local was_on=0; agent_active && was_on=1
+  install_files "$from"
+  [ "$was_on" = 1 ] && systemctl restart "$AGENT_UNIT"
+  slog "support package upgraded $old → $new (agent identity and enrollment kept)"
+  echo "✔ Support package $old → $new"
+}
+
+# --- repair -------------------------------------------------------------------------------------------
+cmd_repair() {
+  need_root repair
+  [ -z "${PKEXEC_UID:-}" ] || fail "repair needs sudo"
+  local problems=0
+  check() { if eval "$2"; then echo "  ✔ $1"; else echo "  ✘ $1${3:+ — $3}"; problems=$((problems + 1)); fi; }
+  echo "Faheem Remote Support $(package_version) — diagnostics"
+  slog "repair started"
+  check "agent program present" '[ -x "$AGENT_BIN" ]' "reinstall: sudo faheem-support install"
+  check "agent settings (.msh) present" '[ -s "$AGENT_MSH" ] && grep -q "^MeshServer=" "$AGENT_MSH"' "reinstall with --enroll-file"
+  check "agent identity folder private" '[ "$(stat -c %a "$AGENT_DIR" 2>/dev/null)" = 700 ]' "fixed"
+  chmod 700 "$AGENT_DIR" 2>/dev/null || true; [ -f "$AGENT_MSH" ] && chmod 600 "$AGENT_MSH"
+  check "settings file" '[ -n "$(server_url)" ] && [ -n "$(support_name)" ]' "missing $SUPPORT_CONF values"
+  # the service registration: units back from the package, never enabled at boot
+  for f in "$SUPPORT_HOME"/systemd/*; do cmp -s "$f" "$SUPPORT_SYSTEMD/$(basename "$f")" || { install -m 644 "$f" "$SUPPORT_SYSTEMD/"; echo "  ↻ restored $(basename "$f")"; }; done
+  systemctl daemon-reload 2>/dev/null || true
+  systemctl disable "$AGENT_UNIT" >/dev/null 2>&1 || true
+  check "agent service registered" 'systemctl cat "$AGENT_UNIT" >/dev/null 2>&1'
+  check "command link" '[ "$(readlink -f "$SUPPORT_BIN_DIR/faheem-support")" = "$(readlink -f "$SUPPORT_HOME/bin/faheem-support")" ]' "restored"
+  ln -sfn "$SUPPORT_HOME/bin/faheem-support" "$SUPPORT_BIN_DIR/faheem-support"
+  check "internet" 'internet_ok'
+  check "server name $(server_host) resolves" 'dns_ok' "DNS: check the router / internet"
+  check "server $(server_host) answers over TLS (certificate valid)" 'server_ok' "server down, firewall, or certificate problem"
+  if [ "$(remaining)" -gt 0 ]; then
+    agent_active || { systemctl restart "$AGENT_UNIT" && echo "  ↻ agent restarted (a support window is open)"; }
+    sleep 3
+    check "agent connected to the server" 'agent_connected' "see $SUPPORT_LOG and: journalctl -u $AGENT_UNIT"
+  else
+    echo "  · support is off (no window open) — the connection is tested when the shortcut is used"
+  fi
+  slog "repair finished: $problems problem(s)"
+  echo; status_text
+  [ "$problems" = 0 ]
+}
+
+cmd_uninstall() {
+  need_root uninstall
+  [ -z "${PKEXEC_UID:-}" ] || fail "uninstall needs sudo"
+  cmd_disable --reason uninstall >/dev/null
+  systemctl disable faheem-support-resume.service >/dev/null 2>&1 || true
+  # every path below is a fixed file name inside a folder that lib.sh always sets (the :? guards make an
+  # unset folder an error instead of a path at the top of the file system)
+  rm -f "${SUPPORT_SYSTEMD:?}/faheem-support-agent.service" "${SUPPORT_SYSTEMD:?}/faheem-support-resume.service" \
+        "${SUPPORT_BIN_DIR:?}/faheem-support" "${SUPPORT_BIN_DIR:?}/faheem-support-admin" \
+        /usr/share/polkit-1/actions/com.faheem.erp.support.policy /etc/logrotate.d/faheem-support \
+        /usr/share/applications/faheem-remote-support.desktop /etc/sudoers.d/faheem-support
+  find /home -maxdepth 3 -name faheem-remote-support.desktop -delete 2>/dev/null || true
+  if [ "${1:-}" = --purge ]; then rm -rf "${SUPPORT_HOME:?}/bin" "${SUPPORT_HOME:?}/meshagent" "${SUPPORT_STATE:?}/session.json"; slog "uninstalled (identity removed)"
+  else rm -rf "${SUPPORT_HOME:?}/bin"; slog "uninstalled (agent identity kept in $AGENT_DIR)"; fi
+  systemctl daemon-reload 2>/dev/null || true
+  echo "✔ Remote support removed${1:+ (purged)}"
+}
+
+cmd="${1:-status}"; [ $# -gt 0 ] && shift
+case "$cmd" in
+  enable) cmd_enable "$@" ;;
+  disable) cmd_disable "$@" ;;
+  status) cmd_status "$@" ;;
+  resume) cmd_resume "$@" ;;
+  install) cmd_install "$@" ;;
+  upgrade) cmd_upgrade "$@" ;;
+  repair) cmd_repair "$@" ;;
+  uninstall) cmd_uninstall "$@" ;;
+  version) echo "Faheem Remote Support $(package_version)" ;;
+  sudoers-text) sudoers_text "${1:-limited}" ;;           # (tests and review: the rules that would be installed)
+  -h|--help|help) sed -n '2,20p' "$0" ;;
+  *) fail "unknown command $cmd (enable | disable | status | repair | install | upgrade | resume | uninstall)" ;;
+esac

@@ -34,6 +34,16 @@ project's own package metadata (`pip show`, PyPI project page).
 | zxing-cpp | Apache-2.0 | Barcodes are not read from images in this workflow. |
 | invoice2data | unclear in some listings | Reference only; `supplier_invoice_profiles` implements the per-supplier template idea. |
 
+## Remote support (deploy/support, deploy/support-server)
+
+| Component | Version | Licence | Where | Notes |
+|---|---|---|---|---|
+| MeshCentral (server, `meshctrl`) | 1.2.5 (pinned) | Apache-2.0 | support VPS (`/opt/meshcentral`, npm `meshcentral`) | Official project github.com/Ylianst/MeshCentral; no fork. Not part of the ERP image. |
+| MeshCentral agent (Linux x86-64) | served by the server | Apache-2.0 | pharmacy PC `/opt/faheem-erp/support/meshagent` | Downloaded from our own server at install, so it always matches it. |
+| Node.js | 18+ (distribution package) | MIT | support VPS | |
+| fail2ban | distribution | GPL-2.0 | support VPS | A separate system service configured by files; not linked or distributed with the ERP. |
+| zenity | distribution | LGPL-2.1 | pharmacy PC | Runs the support window as a separate program; not linked. |
+
 ## Licence conflict to resolve (pre-existing)
 
 | Package | Version | Licence | Where | Status |
