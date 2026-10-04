@@ -5,7 +5,7 @@ from app.models import Item, Batch, InventoryMovement, SupplierProductMap
 from app.services import inventory_service as inv, purchasing, receipt_decision as rd, units
 from app.services.medicine_reference import Catalog
 from tests.test_purchasing import draft, supplier, stock, csv_bytes
-from tests.conftest import login
+from tests.conftest import certain, login
 
 
 def product(db, name="EXAMPLE 40MG TAB", pack="15S", upp=15):
@@ -61,7 +61,7 @@ def test_nested_box_confirmation_scales_stock_cost_and_mrp(db):
     item = product(db, pack="10S", upp=10)
     p = draft(db, ",EXAMPLE 40MG TAB,20X10S,B1,May-2028,2,,1000,1400,2000")
     line = p.items[0]
-    assert not line.receipt_decision["resolved"]
+    assert not certain(line.receipt_decision)
     with pytest.raises(purchasing.PurchaseError):
         purchasing.post(db, p)
     rd.confirm(db, p, line, factor=200, mrp_basis="INVOICE_UNIT", reason="Supplier confirmed 20 strips in each box")
@@ -88,7 +88,7 @@ def test_supplier_memory_is_scoped_to_pack_and_schema(db):
     assert p2.items[0].receipt_decision["source"] == "SUPPLIER_MEMORY"
     assert p2.items[0].receipt_decision["received_base_units"] == 20
     purchasing.correct(db, p2, p2.items[0], {"pack": "30X10S"})
-    assert not p2.items[0].receipt_decision["resolved"]
+    assert not certain(p2.items[0].receipt_decision)
 
 
 def test_pack_size_conflict_with_matched_product_blocks(db):
@@ -104,7 +104,7 @@ def test_content_size_variant_cannot_be_overridden_by_conversion(db):
     p = draft(db, ",EXAMPLE SYRUP,200ML,B1,May-2028,2,,10,20,20")
     line = p.items[0]
     rd.confirm(db, p, line, factor=1, mrp_basis="MASTER_PACK", reason="Bottles are counted individually")
-    assert not line.receipt_decision["resolved"]
+    assert not certain(line.receipt_decision)
     assert "content_conflict" in {i["code"] for i in line.issues}
 
 
@@ -188,7 +188,7 @@ def test_catalog_resolves_missing_tablet_pack_without_creating_reference_product
 def test_missing_tablet_pack_without_reference_requires_definition(db):
     p = draft(db, ",Unknown Brand Tablet,,B1,May-2028,2,,10,20,20")
     purchasing.correct(db, p, p.items[0], {"new_product": True})
-    assert not p.items[0].receipt_decision["resolved"]
+    assert not certain(p.items[0].receipt_decision)
 
 
 def test_pdf_incomplete_extraction_cannot_be_acknowledged_as_money_difference(db):

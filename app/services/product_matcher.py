@@ -33,6 +33,10 @@ FORM_TOKENS = {"TAB", "CAP", "SYP", "SUSP", "INJ", "OINT", "DROP", "CREAM", "GEL
                "SPRAY", "VIAL", "AMP", "INHALER", "SOFTGEL", "SG", "DT", "MD"}
 MARKERS = {"SR", "CR", "ER", "XR", "XL", "MR", "OD", "DS", "FORTE", "PLUS", "M", "H", "CV", "D", "D3", "LS", "AM", "AT",
            "MAX", "KID", "KIDS", "JUNIOR", "PAED", "NEO", "NEW", "TRIO", "MF", "LC", "AZ", "OZ"}
+# words that describe the form or container, never the medicine: a name differing only by these
+# (and agreeing on every number) names the same product
+DESCRIPTIVE = FORM_TOKENS | {"TABLET", "CAPSULE", "IV", "FLUID", "BALM", "SOLUTION", "LIQUID", "ORAL", "TOPICAL",
+                             "BOTTLE", "TUBE", "STRIP", "BOX", "PACK", "JAR", "SACHET", "AMPOULE", "PIECE", "PCS"}
 DEFAULT_WEIGHTS = {"supplierAlias": 0.30, "name": 0.30, "strength": 0.12, "dosageForm": 0.08, "suffix": 0.08,
                    "packaging": 0.05, "mrp": 0.04, "history": 0.03}
 
@@ -50,6 +54,11 @@ def tokens(text: str) -> list[str]:
 def key(text: str) -> str:
     """Compact comparison key: OMNI GEL 20 GMS → OMNIGEL20G."""
     return "".join(tokens(text))
+
+
+def sorted_key(text: str) -> str:
+    """The same words in any order: DISPOVAN 5ML SYRINGE = DISPOVAN SYRINGE 5ML."""
+    return " ".join(sorted(tokens(text)))
 
 
 def core_key(text: str) -> str:
@@ -90,20 +99,24 @@ def form_conflict(a: str, b: str) -> bool:
 
 
 # --------------------------------------------------------------------------- level 3: normalised name
-_INDEX: dict = {"sig": None, "full": {}, "core": {}}
+_INDEX: dict = {"sig": None, "full": {}, "core": {}, "sorted": {}, "brand": {}}
 
 
 def _index(db: Session) -> dict:
     sig = db.execute(select(func.count(Item.id), func.max(Item.id), func.max(Item.updated_at), func.sum(func.length(Item.name)),
                             func.min(Item.created_at)).where(Item.deleted_at.is_(None))).one()
     if _INDEX["sig"] != tuple(sig):
-        full, core = {}, {}
+        full, core, ordered, brand = {}, {}, {}, {}
         for iid, name, pack in db.execute(select(Item.id, Item.name, Item.pack_size).where(Item.deleted_at.is_(None))):
             names = {name} | ({f"{name} {pack}"} if _content_pack(pack) and not _has_size(name) else set())
             for n in names:
                 full.setdefault(key(n), set()).add(iid)
                 core.setdefault(core_key(n), set()).add(iid)
-        _INDEX.update(sig=tuple(sig), full=full, core=core)
+                ordered.setdefault(sorted_key(n), set()).add(iid)
+                words = tokens(n)
+                if words:
+                    brand.setdefault(words[0], set()).add((iid, n))
+        _INDEX.update(sig=tuple(sig), full=full, core=core, sorted=ordered, brand=brand)
     return _INDEX
 
 
@@ -135,6 +148,11 @@ def normalized_match(db: Session, description: str, pack: str = "") -> tuple[Ite
         return None, ""
     if ids:
         return None, ""
+    ids = idx["sorted"].get(sorted_key(description), set())
+    if len(ids) == 1:
+        item = db.get(Item, next(iter(ids)))
+        if item is not None and not form_conflict(want["form"], item.dosage_form or attributes(item.name)["form"]):
+            return item, "the same words in another order"
     ids = idx["core"].get(core_key(description), set())
     if len(ids) != 1 or not want["form"]:
         return None, ""
@@ -145,6 +163,33 @@ def normalized_match(db: Session, description: str, pack: str = "") -> tuple[Ite
     if item is None or not have or form_conflict(want["form"], have):
         return None, ""                                # the product's form must be known and agree
     return item, f"same name without form words, and both are {want['form'].lower()}s"
+
+
+def descriptive_match(db: Session, description: str, pack: str = "") -> tuple[Item | None, str]:
+    """A product whose name is this one plus (or minus) only descriptive words — IV, FLUID, BALM,
+    TABLET … — with every number equal and no release marker differing, when exactly one exists.
+    This is a *proposal*: a person sees it before posting, and posting teaches the supplier alias."""
+    words = tokens(description if _has_size(description) or not _content_pack(pack) else f"{description} {pack}")
+    if len(words) < 2:
+        return None, ""
+    idx = _index(db)
+    want = set(words)
+    nums = [w for w in words if re.fullmatch(r"\d+(?:\.\d+)?", w)]
+    found = {}
+    for iid, name in idx["brand"].get(words[0], set()):
+        have = tokens(name)
+        if [w for w in have if re.fullmatch(r"\d+(?:\.\d+)?", w)] != nums:
+            continue                                        # strengths and sizes must agree, in order
+        extra = (set(have) ^ want)
+        if not extra or not extra <= DESCRIPTIVE or extra & MARKERS:
+            continue
+        if form_conflict(attributes(description)["form"], attributes(name)["form"]):
+            continue
+        found[iid] = name
+    if len(found) != 1:
+        return None, ""
+    (iid, name), = found.items()
+    return db.get(Item, iid), f"same name and numbers as '{name}', differing only in descriptive words"
 
 
 # --------------------------------------------------------------------------- explainable scores

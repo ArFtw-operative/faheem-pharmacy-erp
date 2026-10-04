@@ -72,6 +72,8 @@ def test_scanned_pdf_uses_ocr_and_a_text_pdf_never_does():
 
 
 def test_unreconciled_ocr_line_goes_to_review_and_reconciled_lines_do_not(db):
+    from app.services import settings_service
+    settings_service.set_setting(db, "purchase_scan_import", "on")
     from app.services import confidence_gate
 
     sup = supplier(db)

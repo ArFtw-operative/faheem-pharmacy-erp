@@ -130,6 +130,26 @@ def remember_posted_line(db: Session, purchase: Purchase, line: PurchaseItem, *,
     decision = line.receipt_decision or {}
     if not purchase.supplier_id or line.item is None or not decision.get("resolved") or not line.pack_size:
         return
+    if decision.get("source") in ("PROPOSED", "SUPPLIER_PACKING_ALIAS") and not stamp:
+        # a person reviewed and posted a proposed count: learn it, trusted fully once posted a second time
+        factor = decision.get("units_per_invoice_unit")
+        if isinstance(factor, int) and factor >= 1:
+            existing = packaging_alias(db, purchase.supplier_id, line.pack_size, line.item)
+            if existing is not None and existing.units_per_invoice_unit == factor:
+                if existing.trust < TRUST_CONFIRMED:
+                    before = {"trust": str(existing.trust)}
+                    existing.trust, existing.occurrences = TRUST_CONFIRMED, (existing.occurrences or 0) + 1
+                    history(db, "PACKAGING_ALIAS", "CONFIRM", supplier_id=purchase.supplier_id,
+                            key=f"{existing.pack_key}|{line.item.id}", before=before, after={"trust": "1.000"},
+                            purchase_id=purchase.id, line_id=line.id, user=user)
+                else:
+                    existing.occurrences = (existing.occurrences or 0) + 1
+            elif decision.get("source") == "PROPOSED":
+                row = save_packaging_alias(db, supplier_id=purchase.supplier_id, pack=line.pack_size, item=line.item,
+                                           units_per_invoice_unit=factor, mrp_basis=decision.get("mrp_basis") or "MASTER_PACK",
+                                           source="POSTED_PROPOSAL", purchase=purchase, line=line, user=user)
+                row.trust = Decimal("0.900")
+        return
     if stamp.get("source", "CONFIRMED") != "CONFIRMED" or stamp.get("operator_counts") or not stamp or stamp.get("invoice_only"):
         return                                     # counts for one delivery / "this invoice only" are not a convention
     factor = decision.get("units_per_invoice_unit")

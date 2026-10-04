@@ -116,7 +116,10 @@ class Result:
     warning: int = 0
     review: int = 0
     blocked: int = 0
+    proposed: int = 0            # counted by a proposal: a person looks, then posts
+    counted: int = 0             # lines arriving with a stock count (certain or proposed)
     wrong: list = field(default_factory=list)
+    proposal_wrong: list = field(default_factory=list)
     known: int = 0               # lines whose product is in the catalogue and was bought before
     known_auto: int = 0
     packs_resolved: int = 0
@@ -318,6 +321,7 @@ def seed_catalogue(db) -> dict[str, int]:
     from app.services import inventory_service as inv, settings_service
 
     settings_service.set_setting(db, "purchase_automation", "prepare")
+    settings_service.set_setting(db, "purchase_scan_import", "on")      # one corpus supplier sends receipt photos
     ids = {}
     for name, pack, form, base, unit, upp, mrp, *_ in CATALOGUE + bulk_catalogue():
         item = inv.create_item(db, name=name, pack_size=pack, dosage_form=form, base_unit=base, pack_unit=unit,
@@ -341,19 +345,32 @@ def evaluate(db, purchase, inv: Invoice, ids: dict, *, recurring: bool, seen: se
     lines = sorted(purchase.items, key=lambda l: l.line_no)
     for line, truth in zip(lines, inv.lines):
         res.lines += 1
-        state = gate.assess(line, limits)["state"]
+        verdict = gate.assess(line, limits)
+        state, proposed = verdict["state"], verdict.get("proposed") and verdict["state"] == gate.WARNING
         res.auto += state == gate.AUTO_ACCEPT
-        res.warning += state == gate.WARNING
+        res.warning += state == gate.WARNING and not proposed
+        res.proposed += bool(proposed)
         res.review += state == gate.REVIEW
         res.blocked += state == gate.BLOCK
         d = line.receipt_decision or {}
         res.packs_resolved += bool(d.get("resolved"))
+        res.counted += bool(d.get("resolved"))
         want_item = ids.get(truth.product) if truth.product else None
         res.product_right += (line.item_id == want_item) if want_item else (line.item_id is None)
         if want_item and truth.product in seen:
             res.known += 1
-            res.known_auto += state in (gate.AUTO_ACCEPT, gate.WARNING)
-        if state in (gate.AUTO_ACCEPT, gate.WARNING):
+            res.known_auto += state in (gate.AUTO_ACCEPT, gate.WARNING) and not proposed
+        if proposed:
+            problems = []
+            if want_item and line.item_id != want_item:
+                problems.append(f"product {line.item_id} ≠ {want_item}")
+            if not want_item and not line.new_product:
+                problems.append("an unknown product was matched to an existing one")
+            if truth.received is not None and d.get("received_base_units") != truth.received:
+                problems.append(f"received {d.get('received_base_units')} ≠ {truth.received}")
+            if problems:
+                res.proposal_wrong.append({"line": line.line_no, "printed": truth.printed, "problems": problems})
+        elif state in (gate.AUTO_ACCEPT, gate.WARNING):
             problems = []
             if line.item_id != want_item:
                 problems.append(f"product {line.item_id} ≠ {want_item}")
@@ -430,6 +447,12 @@ def summarize(results: list[Result]) -> dict:
         out[route] = {"invoices": len(rec), "lines": sum(r.lines for r in rec), "known_lines": known,
                       "known_straight_through": round(100 * sum(r.known_auto for r in rec) / known, 1) if known else None,
                       "all_lines_straight_through": round(100 * sum(r.auto + r.warning for r in rec) / max(sum(r.lines for r in rec), 1), 1),
-                      "wrong_auto_accepts": sum(len(r.wrong) for r in rec)}
+                      "wrong_auto_accepts": sum(len(r.wrong) for r in rec),
+                      "proposed": sum(r.proposed for r in rec), "proposals_wrong": sum(len(r.proposal_wrong) for r in rec),
+                      "counted": round(100 * sum(r.counted for r in rec) / max(sum(r.lines for r in rec), 1), 1)}
     out["wrong_auto_accepts_total"] = sum(len(r.wrong) for r in results)
+    out["lines_total"] = sum(r.lines for r in results)
+    out["counted_total"] = round(100 * sum(r.counted for r in results) / max(out["lines_total"], 1), 1)
+    out["proposed_total"] = sum(r.proposed for r in results)
+    out["proposals_wrong_total"] = sum(len(r.proposal_wrong) for r in results)
     return out

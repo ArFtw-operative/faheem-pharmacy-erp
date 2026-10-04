@@ -160,6 +160,10 @@ def decide(line, confirmation=None, *, validate_master=False):
         factor = confirmation["units_per_invoice_unit"]
         basis = confirmation["mrp_basis"]
         out["source"] = confirmation.get("source", "CONFIRMED")
+        if confirmation.get("trust") is not None:
+            out["trust"] = confirmation["trust"]
+        if confirmation.get("proposal"):
+            out["proposal"] = confirmation["proposal"]
         evidence.extend(confirmation.get("evidence") or ["Invoice unit confirmed by an operator for this product and source pack"])
     elif master:
         annotated = re.search(r"\s+(nos?\.?|pcs?\.?|packs?|strips?|boxes)\s*$", str(v.get("quantity", "")), re.I)
@@ -183,6 +187,13 @@ def decide(line, confirmation=None, *, validate_master=False):
             parsed = packaging_service.resolve(probe)
             expected = parsed.units_per_pack if parsed else pack.units_per_pack
             if expected != master:
+                # the structured reading knows boxes of pieces, strips in cartons …: agree if any level matches
+                from app.services import packaging_parser
+                reading = packaging_parser.parse(v.get("pack"), master_form=item.dosage_form or "", description=line.product_name)
+                levels = {lv.quantity for lv in reading.levels} | {reading.retail_to_base, reading.base_per_outer}
+                if reading.confidence in (packaging_parser.HIGH, packaging_parser.MEDIUM) and master in levels:
+                    expected = master
+            if expected != master:
                 issue("pack_conflict", f"Invoice pack implies {expected} sale units; product master says {master}. Confirm the invoice unit or select the correct product.", "units_per_invoice_unit")
             else:
                 factor = master
@@ -192,8 +203,15 @@ def decide(line, confirmation=None, *, validate_master=False):
             issue("pack_unreadable", f"Pack {pack.raw!r} is not understood. Confirm its physical conversion.", "units_per_invoice_unit")
         else:
             factor = master
-            out["source"] = "PRODUCT_MASTER" if item else "NEW_PRODUCT_DEFINITION"
-            evidence.append(f"Uses {'matched' if item else 'confirmed new'} product definition: {master} base units per pack")
+            auto = (line.corrections or {}).get("_automation") or {}
+            if not item and auto.get("proposed") and not (line.corrections or {}).get("_product"):
+                # the new product's units were proposed from evidence, not confirmed by a person
+                out["source"] = "PROPOSED"
+                out["proposal"] = {"confidence": auto.get("confidence"), "definition": True}
+                evidence.append(f"Proposed new product definition: {master} base units per pack ({auto.get('reason') or 'evidence'})")
+            else:
+                out["source"] = "PRODUCT_MASTER" if item else "NEW_PRODUCT_DEFINITION"
+                evidence.append(f"Uses {'matched' if item else 'confirmed new'} product definition: {master} base units per pack")
     else:
         issue("conversion_missing", "Match a product or confirm its packaging before computing inventory", "units_per_pack")
     if factor is None:
@@ -246,7 +264,7 @@ def resolve(db, purchase, line):
         alias = mapping_store.packaging_alias(db, purchase.supplier_id, line.pack_size, line.item)
         if alias is not None:
             confirmed = {"units_per_invoice_unit": alias.units_per_invoice_unit, "mrp_basis": alias.mrp_basis,
-                         "source": "SUPPLIER_PACKING_ALIAS",
+                         "source": "SUPPLIER_PACKING_ALIAS", "trust": float(alias.trust or 1),
                          "evidence": [f"Supplier packing alias: {alias.raw_pack!r} from this supplier counts {alias.units_per_invoice_unit} "
                                       f"{(alias.base_unit or 'unit').lower()}s per invoice Qty (confirmed {alias.occurrences}×)"]}
     if confirmed is None:
@@ -266,6 +284,19 @@ def resolve(db, purchase, line):
             result=decide(line,confirmed,validate_master=purchase_automation.active(db,purchase))
     else:
         result = decide(line, confirmed, validate_master=purchase_automation.active(db, purchase))
+    if not result["resolved"] and purchase_automation.active(db, purchase):
+        # nothing certain decided it: weigh the evidence and propose a count (a person posts it)
+        from app.services import receipt_proposer
+        proposal = receipt_proposer.propose(db, purchase, line, result)
+        if proposal is not None:
+            proposed = decide(line, proposal)
+            if proposed["resolved"]:
+                # keep what was uncertain visible beside the proposal
+                proposed["issues"].extend({**i, "level": "info"} for i in result["issues"])
+                why = "; ".join(proposal["evidence"])
+                proposed["issues"].append({"code": "count_proposed", "field": "units_per_invoice_unit", "level": "proposal",
+                                           "message": f"Count proposed ({proposal['confidence']:.0%}): {why}. Check it, then post."})
+                result = proposed
     if confirmed and confirmed.get("history_line_ids"):
         result["history_line_ids"] = confirmed["history_line_ids"]
     if not line.pack_size:

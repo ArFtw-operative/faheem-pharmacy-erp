@@ -309,18 +309,26 @@ def prepare_line(db, purchase, line):
         reading = packaging_parser.parse(line.pack_size, master_form=uom.dosage_form if uom else "", description=line.product_name)
         if reading.ambiguous_count or reading.confidence == packaging_parser.UNRESOLVED:
             supported = False
+    from app.services import receipt_proposer
     if not supported:
-        if c.get("_automation"):
-            line.new_product, line.units_per_pack = False, None
-            c.pop("_automation", None)
-            line.corrections = c
-        return
+        # no certain definition: weigh the evidence (reference price, the pharmacy's price levels, the pack
+        # read both ways) and propose one; when nothing decides, the product is counted in whole packs
+        if not line.product_name.strip():
+            return
+        d = receipt_proposer.propose_definition(db, line)
+        uom = packaging_service.UOM(d["base_unit"], d["pack_unit"], d["units_per_pack"], None, "", d["dosage_form"],
+                                    "Proposed: " + "; ".join(d["reasons"]))
+        confidence, proposed = d["confidence"], True
+    else:
+        confidence, proposed = 0.95, False
     line.new_product = True
     line.base_unit, line.pack_unit, line.units_per_pack, line.dosage_form = (
         uom.base_unit, uom.pack_unit, uom.units_per_pack, uom.dosage_form)
+    if not line.category:
+        line.category = receipt_proposer.category_for(db, uom.dosage_form)   # what products of this form usually are
     c.pop("_units_suggested", None)
     c["_automation"] = {"version": VERSION, "action": "new_product", "reason": uom.reason,
-                        "reference": ref, "source_pack": line.pack_size}
+                        "reference": ref, "source_pack": line.pack_size, "proposed": proposed, "confidence": confidence}
     line.corrections = c
 
 
@@ -339,11 +347,23 @@ def review_issues(db, purchase, line, issues):
     if not active(db, purchase):
         return issues
     c = line.corrections or {}
+    if line.match_method == "PROPOSED_MATCH" and line.item is not None:
+        why = (c.get("_match_proposal") or {}).get("why", "")
+        issues.append({"code": "match_proposed", "field": "item_id", "level": "proposal",
+                       "message": f"Matched to {line.item.name} by name ({why}). Check it, then post — or F4 for another product."})
+    variant = c.get("_variant")
+    if variant and line.new_product:
+        issues.append({"code": "variant_proposed", "field": "name", "level": "proposal",
+                       "message": f"Different pack from {variant['of_name']} (catalogue: {variant['of_pack'] or '—'}, invoice: "
+                                  f"{line.pack_size}): proposed as its own product '{line.product_name}'. If it is the same pack, "
+                                  "match the existing product (F4)."})
     if proposed_new_product(line) and not auto_create_products(db):
-        issues.append({"code": "new_product_unconfirmed", "field": "name", "level": "match",
-                       "message": f"Not in the catalogue as printed. Units are prepared ({line.units_per_pack} "
-                                  f"{(line.base_unit or 'unit').lower()}s per {(line.pack_unit or 'pack').lower()}): confirm it as a "
-                                  "new product (Shift+F4) or match the existing product (F4)."})
+        auto = c.get("_automation") or {}
+        issues.append({"code": "new_product_unconfirmed", "field": "name", "level": "proposal",
+                       "message": f"New product, created when this invoice is posted: 1 {(line.pack_unit or 'pack').lower()} = "
+                                  f"{line.units_per_pack} {(line.base_unit or 'unit').lower()}"
+                                  f"{' (' + auto['reason'] + ')' if auto.get('reason') else ''}. "
+                                  "If it already exists under another name, match it (F4)."})
     if not line.item and not UOM_FIELDS.intersection(c):
         found = catalogue_candidates(db, line)
         if found and equivalent_candidate(found) is None:
@@ -363,10 +383,14 @@ def review_issues(db, purchase, line, issues):
         info = units.parse_pack(line.pack_size)
         form = packaging_service.detect_form(Item(name=line.product_name, generic_name='', dosage_form=line.dosage_form or ''))
         if info.kind == 'CONTENT' and form in {'TABLET','CAPSULE'}:
-            issues.append({"code": "strength_not_pack", "field": "pack", "level": "review",
-                           "message": "This field describes medicine strength, not the number of tablets or capsules in a pack."})
+            counted = (c.get("_automation") or {}).get("proposed") and line.base_unit == "STRIP"
+            issues.append({"code": "strength_not_pack", "field": "pack", "level": "proposal" if counted else "review",
+                           "message": "This field describes medicine strength, not the number of tablets or capsules in a pack"
+                                  + ("; counted in strips until the tablets per strip are known." if counted else ".")})
         if info.kind in {"COUNT", "NESTED"} and line.base_unit in {"", "PACK", "UNIT"} and not (info.strip and line.pack_unit == "STRIP"):
-            issues.append({"code": "product_unit_unknown", "field": "base_unit", "level": "review",
+            # a product prepared to be counted in whole packs is counted correctly; the person may refine it
+            level = "proposal" if (c.get("_automation") or {}).get("proposed") else "review"
+            issues.append({"code": "product_unit_unknown", "field": "base_unit", "level": level,
                            "message": "The invoice gives a count but does not establish the sale unit. Supply the product's form or a verified supplier mapping once; subsequent imports reuse it."})
     if (line.receipt_decision or {}).get("resolved"):
         issues = [i for i in issues if i["code"] != "units_suggested"]
@@ -425,7 +449,8 @@ def assessment(db, purchase):
     for l in purchase.items:
         if l.status in purchasing.DONE:
             continue
-        codes = [i["code"] for i in (l.issues or []) if i["level"] in {"block", "review", "warn", "match"} and not i.get("accepted")]
+        # proposals are counted and postable by a person, but never posted unattended
+        codes = [i["code"] for i in (l.issues or []) if i["level"] in {"block", "review", "warn", "match", "proposal"} and not i.get("accepted")]
         if l.status not in purchasing.POSTABLE:
             codes.append("line_not_ready")
         if not l.batch_no:
@@ -536,3 +561,49 @@ def import_file(db, filename, content, *, user=None, **kwargs):
             purchase_engine.record(db, purchase, route=purchase_engine.route_of(purchase), started=started,
                                    ocr_confidence=(purchase.charges or {}).get("_ocr_confidence"))
     return drafts
+
+
+VARIANT_CODES = {"content_conflict", "pack_conflict"}
+
+
+def propose_variant(db, purchase, line, decision):
+    """A matched product printed in a different size or pack (15GM against the catalogue's 10GM,
+    strips of 15 against 14) is a different stock item: propose it as a new product under its own
+    name, with the form and category of the product it varies. Never when a person chose the match."""
+    if (not active(db, purchase) or line.item is None or line.match_method == "MANUAL"
+            or not VARIANT_CODES & {i["code"] for i in decision.get("issues") or []}):
+        return False
+    from app.services import packaging_parser
+    item = line.item
+    reading = packaging_parser.parse(line.pack_size, master_form=item.dosage_form, description=line.product_name)
+    if reading.confidence not in (packaging_parser.HIGH, packaging_parser.MEDIUM):
+        return False                                   # an unreadable pack is not evidence of a variant
+    size = packaging_parser.normalize(line.pack_size).replace(" ", "")
+    base_name = rd.effective(line).get("name") or item.name
+    name = base_name if size and packaging_parser.normalize(base_name).replace(" ", "").endswith(size) else f"{base_name} {line.pack_size}".strip()
+    from app.services import product_matcher
+    existing, why = product_matcher.normalized_match(db, name, line.pack_size)
+    if existing is not None and existing.id != item.id:
+        # the variant was created before: receive into it
+        line.item, line.match_method = existing, "NORMALIZED_NAME"
+        return True
+    c = dict(line.corrections or {})
+    c["_variant"] = {"of": item.id, "of_name": item.name, "of_pack": item.pack_size, "name": name[:250]}
+    line.item, line.match_method, line.new_product = None, "", True
+    line.product_name = name[:250]
+    line.category = line.category or item.category
+    line.dosage_form = item.dosage_form or line.dosage_form
+    line.base_unit = line.pack_unit = ""
+    line.units_per_pack = None
+    line.corrections = c
+    prepare_line(db, purchase, line)
+    if not line.units_per_pack:
+        c = dict(line.corrections or {})
+        from app.services import receipt_proposer
+        d = receipt_proposer.propose_definition(db, line)
+        line.base_unit, line.pack_unit, line.units_per_pack = d["base_unit"], d["pack_unit"], d["units_per_pack"]
+        line.dosage_form = line.dosage_form or d["dosage_form"]
+        c["_automation"] = {"version": VERSION, "action": "new_product", "proposed": True, "confidence": d["confidence"],
+                            "reason": "; ".join(d["reasons"])}
+        line.corrections = c
+    return True

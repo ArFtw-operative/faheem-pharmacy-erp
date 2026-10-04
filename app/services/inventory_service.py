@@ -348,6 +348,7 @@ def add_or_update_batch(
     user: User | None = None,
     ip_address: str = "",
     levels: tuple[dict | None, dict | None] | None = None,
+    adapt: list | None = None,
 ) -> Batch:
     """Receive stock into the matching batch (created on first receipt).
 
@@ -366,7 +367,7 @@ def add_or_update_batch(
         batch_no=batch_no, expiry_date=expiry_date, mrp=mrp, purchase_rate=purchase_rate,
         selling_rate=selling_rate, supplier_id=supplier_id, purchase_id=purchase_id,
         reference_type=reference_type, reference_id=reference_id, reference_no=reference_no,
-        reason=reason, user=user, ip_address=ip_address, levels=levels,
+        reason=reason, user=user, ip_address=ip_address, levels=levels, adapt=adapt,
     )
     # Receiving stock re-enables a *disabled* item, but it must never resurrect
     # an item the user deleted to the recycle bin. Recycle-bin items are

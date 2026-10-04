@@ -17,12 +17,13 @@ from app.services import purchase_adjustment as physical
 from app.services import purchasing
 from tests.test_purchase_automation import enable
 from tests.test_purchasing import csv_bytes, draft, supplier
+from tests.conftest import certain
 
 
 def test_billed_quantity_stays_known_when_packaging_is_unknown(db):
     p = draft(db, ",MYSTERY BRAND,10ML57,B1,May-2028,2,1,10,20,20")
     view = _line_view(p.items[0])
-    assert not p.items[0].receipt_decision["resolved"]
+    assert not certain(p.items[0].receipt_decision)
     assert view["stock"]["stock"] == "3 purchase packs"
     assert view["stock"]["equivalent"] == "Pack conversion unresolved"
     assert "not confirmed" not in str(view["stock"]).lower()
@@ -58,7 +59,7 @@ def test_editing_packaging_recalculates_only_the_equivalent(db):
     p = draft(db, ",NEW BRAND,10x1x15,B,May-2028,2,1,10,20,20")
     line = p.items[0]
     before = _line_view(line)["stock"]
-    assert before["stock"] == "3 purchase packs"
+    assert before["quantity"] == "3"
     physical.adjust(db, p, line, dict(form="TABLET", units_per_pack="15", quantity="2", free="1"))
     after = _line_view(line)["stock"]
     assert after["quantity"] == before["quantity"] == "3"

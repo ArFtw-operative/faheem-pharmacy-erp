@@ -61,3 +61,8 @@ def login(client: TestClient, username: str = DEFAULT_ADMIN["username"], passwor
         client.post("/login/2fa/setup", data={"code": mfa.code_at(secret, mfa.current_step())})
         r = client.post("/login/2fa/done", follow_redirects=False)
     return r
+
+
+def certain(decision: dict) -> bool:
+    """Resolved by certain evidence — not merely a proposed count waiting for a person."""
+    return bool(decision.get("resolved")) and decision.get("source") != "PROPOSED"

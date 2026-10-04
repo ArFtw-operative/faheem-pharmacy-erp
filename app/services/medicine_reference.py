@@ -29,27 +29,62 @@ class Catalog:
                     pack TEXT, discontinued INTEGER, source TEXT, source_row INTEGER);
                 CREATE INDEX IF NOT EXISTS catalog_name ON medicines(normalized);
             ''')
+            columns = {r[1] for r in db.execute("PRAGMA table_info(medicines)")}
+            if "price" not in columns:          # reference MRP of the listed pack (older catalogues had none)
+                db.execute("ALTER TABLE medicines ADD COLUMN price REAL")
 
     def connect(self):
         return sqlite3.connect(self.path, timeout=30)
+
+    @staticmethod
+    def _rows(path):
+        """(row number, {column: value}) from a CSV or XLSX catalogue; column names normalised
+        (``price(₹)`` → ``price``)."""
+        def key(h):
+            k = re.sub(r"[^a-z_]", "", str(h or "").strip().lower().replace(" ", "_"))
+            return "price" if k.startswith("price") else k
+        if path.suffix.lower() in (".xlsx", ".xlsm"):
+            import openpyxl
+
+            wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+            rows = wb.active.iter_rows(values_only=True)
+            head = [key(h) for h in next(rows)]
+            for n, values in enumerate(rows, 2):
+                yield n, {h: ("" if v is None else v) for h, v in zip(head, values)}
+            wb.close()
+            return
+        with path.open(encoding="utf-8-sig", newline="") as stream:
+            reader = csv.reader(stream)
+            head = [key(h) for h in next(reader)]
+            for n, values in enumerate(reader, 2):
+                yield n, dict(zip(head, values))
 
     def ingest(self, path):
         path = Path(path)
         with path.open("rb") as stream:
             digest = hashlib.file_digest(stream, "sha256").hexdigest()
         count = 0
-        with path.open(encoding="utf-8-sig", newline="") as stream, self.connect() as db:
-            reader = csv.DictReader(stream)
-            if not {"name", "manufacturer_name", "pack_size_label"} <= set(reader.fieldnames or []):
-                raise ValueError("Catalogue requires name, manufacturer_name, pack_size_label")
+        rows = self._rows(path)
+        first = next(rows, None)
+        if first is None or not {"name", "manufacturer_name", "pack_size_label"} <= set(first[1]):
+            raise ValueError("Catalogue requires name, manufacturer_name, pack_size_label")
+        with self.connect() as db:
             # Replace this source atomically so a previous, active version cannot
             # override a newer discontinued / changed-pack record.
             db.execute("DELETE FROM medicines WHERE source=?", (path.name,))
-            for n, row in enumerate(reader, 2):
+            for n, row in [first, *rows]:
+                if not str(row.get("name") or "").strip():
+                    continue
                 identity = hashlib.sha256(f"{digest}:{n}".encode()).hexdigest()[:32]
-                db.execute("INSERT INTO medicines VALUES(?,?,?,?,?,?,?,?)", (
-                    identity, row["name"], normalize_name(row["name"]), row["manufacturer_name"],
-                    row["pack_size_label"], row.get("is_discontinued", "").lower() == "true", path.name, n))
+                try:
+                    price = float(row.get("price")) if str(row.get("price", "")).strip() else None
+                except ValueError:
+                    price = None
+                db.execute("INSERT INTO medicines (id, name, normalized, manufacturer, pack, discontinued, source, source_row, price) "
+                           "VALUES(?,?,?,?,?,?,?,?,?)", (
+                    identity, str(row["name"]), normalize_name(str(row["name"])), str(row["manufacturer_name"]),
+                    str(row["pack_size_label"]), str(row.get("is_discontinued", "")).lower() == "true", path.name, n,
+                    price if price and price > 0 else None))
                 count += 1
         return {"source": path.name, "rows": count, "sha256": digest}
 
@@ -198,3 +233,50 @@ def packaging_evidence(name, manufacturer="", printed_pack=""):
     return {"reference_id": row["id"], "name": row["name"], "manufacturer": row["manufacturer"],
             "pack": row["pack"], "source": row["source"], "source_row": row["source_row"], "uom": uom.as_dict(),
             "evidence_kind": evidence_kind}
+
+
+def price_evidence(name, manufacturer=""):
+    """The reference MRP of this medicine's listed retail pack: {count, unit, content, price, rows}.
+
+    Exact identity only (strength and release markers kept); every priced record must agree on
+    the pack, and their prices are summarised by the median. None when there is no such evidence.
+    """
+    from app.config import DATA_DIR
+    from app.services import units
+    path = DATA_DIR / "medicine-reference.sqlite"
+    key = identity_key(name)
+    prefix = key.split()[0] if key else ""
+    if not path.is_file() or not prefix:
+        return None
+    with Catalog(path, initialize=False).connect() as db:
+        db.row_factory = sqlite3.Row
+        cols = {r[1] for r in db.execute("PRAGMA table_info(medicines)")}
+        if "price" not in cols:
+            return None
+        rows = db.execute("SELECT name, manufacturer, pack, price, discontinued FROM medicines "
+                          "WHERE normalized>=? AND normalized<? AND price IS NOT NULL LIMIT 2001",
+                          (prefix, prefix + "\uffff")).fetchall()
+    if len(rows) > 2000:
+        return None
+    from app.services import packaging_parser as pp
+
+    family = lambda f: {"SOFTGEL": "CAPSULE", "ROTACAP": "CAPSULE", "SUSPENSION": "SYRUP", "AMPOULE": "INJECTION",
+                        "VIAL": "INJECTION", "IV_FLUID": "INJECTION"}.get(f, f)
+    want = family(pp.detect_dosage_form(description=name)[0])
+    rows = [r for r in rows if identity_key(r["name"]) == key and not r["discontinued"]
+            and (not manufacturer or maker_compatible(manufacturer, r["manufacturer"]))
+            # the identity key drops form words, so the forms must agree (a syrup is not the tablet)
+            and (family(pp.detect_dosage_form(description=f"{r['name']} {r['pack']}")[0]) == want if want
+                 else not pp.detect_dosage_form(description=r["name"])[0])]
+    packs = {}
+    for r in rows:
+        p = units.parse_pack(r["pack"])
+        if not p.confident:
+            continue
+        hint = p.unit_hint or ("" if p.kind != "CONTENT" else p.content_unit)
+        packs.setdefault((p.units_per_pack or 1, hint, str(p.content_qty or "")), []).append(float(r["price"]))
+    if len(packs) != 1:
+        return None
+    (count, hint, content), prices = next(iter(packs.items()))
+    prices.sort()
+    return {"count": count, "unit": hint, "content": content, "price": prices[len(prices) // 2], "rows": len(prices)}

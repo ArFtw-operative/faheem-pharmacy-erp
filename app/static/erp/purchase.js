@@ -26,6 +26,8 @@ const FIELD_NAMES = { product: "product", quantity: "quantity", batch: "batch", 
   amount: "amount", gst: "GST", mrp: "MRP" };
 const DONE = ["POSTED", "CLOSED"];
 const READYISH = ["READY", "CORRECTED"];
+// postable by a person: ready, or open only because of routine warnings that posting accepts
+const postableRow = (r) => READYISH.includes(r.status) || (r.status === "NEEDS_REVIEW" && r.gate?.state === "AUTO_ACCEPT_WITH_WARNING");
 const FIELDS = [
   ["name", "Supplier description", "full"], ["supplier_code", "Supplier product code"], ["pack", "Pack"],
   ["batch", "Batch"], ["expiry", "Expiry (month-year)"], ["quantity", "Qty (packs)"], ["free", "Free (packs)"],
@@ -107,6 +109,7 @@ export function create(ctx, params, root) {
   let view = null, switching = false;          // null until the first load picks the inbox or all lines
   const gateOf = (l) => l.gate?.state || "";
   const needsAttention = (l) => !DONE.includes(l.status) && ATTENTION.includes(gateOf(l));
+  const isProposed = (l) => !DONE.includes(l.status) && !!l.gate?.proposed && !ATTENTION.includes(gateOf(l));
   const markedIds = new Set();
   const markedRows = () => lines.filter((l) => markedIds.has(l.id));                 // any status (category, roll back)
   const selectedRows = () => markedRows().filter((l) => !DONE.includes(l.status));   // open lines (post, correct)
@@ -145,7 +148,7 @@ export function create(ctx, params, root) {
         ? `<span title="${esc(r.stock?.hierarchy || '')}">${esc(r.stock?.equivalent || '')}</span>`
         : `<button type="button" class="linkish" data-pack-fix="${r.id}" title="${esc(r.stock?.hierarchy || 'Confirm what one invoice Qty is')}">${esc(r.stock?.equivalent || '')} ✎</button>` },
       { key: 'gate', label: 'Confidence', width: 104, cellClass: r => 'gate-' + (GATE[r.gate?.state]?.[1] || 'muted'),
-        render: r => r.gate?.state && !DONE.includes(r.status) ? `<span title="${esc(gateTitle(r))}">${GATE[r.gate.state][0]}${r.gate.confidence != null ? ` ${Math.round(r.gate.confidence * 100)}%` : ''}</span>` : '' },
+        render: r => r.gate?.state && !DONE.includes(r.status) ? `<span title="${esc(gateTitle(r))}">${isProposed(r) ? "Proposed" : GATE[r.gate.state][0]}${r.gate.confidence != null ? ` ${Math.round(r.gate.confidence * 100)}%` : ''}</span>` : '' },
       { key: 'form', label: 'Form', width: 90, render: r => esc((r.physical?.form || '').toLowerCase().replace(/^./, c => c.toUpperCase()) || '—') },
       { key: 'base_unit', label: 'Base Unit', width: 90, render: r => esc((r.physical?.base_unit || '').toLowerCase().replace(/^./, c => c.toUpperCase()) || '—') },
       { key: "rate", label: "Rate", width: 70, align: "num", render: (r) => cell(r, "rate", money(r.rate)) },
@@ -231,14 +234,15 @@ export function create(ctx, params, root) {
 
   const VIEWS = { READY: "Ready", CORRECTED: "Corrected", NEEDS_REVIEW: "Needs review", PRODUCT_MATCH_REQUIRED: "Product match",
     INVALID: "Invalid", POSTED: "Posted", CLOSED: "Not received", SELECTED: "Selected", ATTENTION: "Needing attention",
-    GATE_WARN: "Accepted with a warning", GATE_AUTO: "Auto-accepted" };
+    GATE_WARN: "Accepted with a warning", GATE_AUTO: "Auto-accepted", PROPOSED: "Proposed count" };
   function applyView(keep = true) {
     for (const id of [...markedIds]) if (!lines.some((l) => l.id === id)) markedIds.delete(id);
     if (view === "SELECTED" && !markedIds.size) view = "all";
-    if (view === null) view = lines.some(needsAttention) ? "ATTENTION" : "all";
+    if (view === null) view = lines.some(needsAttention) ? "ATTENTION" : lines.some(isProposed) ? "PROPOSED" : "all";
     if (view === "ATTENTION" && !lines.some(needsAttention)) { view = "all"; if (keep) ctx.status("Nothing needs attention any more — every open line is accepted", "ok"); }
     const rows = view === "all" ? lines : view === "SELECTED" ? lines.filter((l) => markedIds.has(l.id))
       : view === "ATTENTION" ? lines.filter(needsAttention)
+      : view === "PROPOSED" ? lines.filter(isProposed)
       : view === "GATE_WARN" ? lines.filter((l) => !DONE.includes(l.status) && gateOf(l) === "AUTO_ACCEPT_WITH_WARNING")
       : view === "GATE_AUTO" ? lines.filter((l) => !DONE.includes(l.status) && gateOf(l) === "AUTO_ACCEPT")
       : lines.filter((l) => l.status === view);
@@ -262,7 +266,7 @@ export function create(ctx, params, root) {
     if (!doc) return;
     const p = doc.purchase, s = doc.summary, c = s.counts;
     const marked = selectedRows();
-    const markedReady = marked.filter((r) => READYISH.includes(r.status)).length;
+    const markedReady = marked.filter(postableRow).length;
     const postBtn = isOpen() && CAN["purchase.post"]
       ? marked.length
         ? `<button type="button" class="btn primary p-post" ${markedReady === marked.length ? "" : "disabled"} title="${markedReady === marked.length ? "" : "Only Ready or Corrected lines can be posted"}">Post ${marked.length} selected <kbd>${esc(keys.keyFor("purchase.post"))}</kbd></button>`
@@ -274,6 +278,7 @@ export function create(ctx, params, root) {
     const inbox = isOpen() && openCount ? `<span class="inbox-sum" title="Confidence gate: lines are auto-accepted only when product, quantity, batch, expiry and pack conversion are all certain">
         ${openCount} open · <b class="ok">${g.AUTO_ACCEPT || 0} auto</b> · <b class="warn">${g.AUTO_ACCEPT_WITH_WARNING || 0} warning</b> · <b class="${(g.REVIEW || 0) + (g.BLOCK || 0) ? "bad" : "ok"}">${(g.REVIEW || 0) + (g.BLOCK || 0)} need you</b></span>
       ${chip("ATTENTION", "Needs attention", (g.REVIEW || 0) + (g.BLOCK || 0), (g.REVIEW || 0) + (g.BLOCK || 0) ? "warn" : "")}
+      ${chip("PROPOSED", "Proposed — check", lines.filter(isProposed).length, lines.some(isProposed) ? "warn" : "")}
       ${chip("GATE_WARN", "Warnings", g.AUTO_ACCEPT_WITH_WARNING || 0)}${chip("GATE_AUTO", "Auto-accepted", g.AUTO_ACCEPT || 0, "ok")}
       <span class="sep"></span>` : "";
     bar.innerHTML = `${inbox}
@@ -747,13 +752,19 @@ export function create(ctx, params, root) {
     const s = doc.summary;
     if (lineIds === null && selectedRows().length) {
       const marked = selectedRows();
-      const notReady = marked.filter((r) => !READYISH.includes(r.status));
+      const notReady = marked.filter((r) => !postableRow(r));
       if (notReady.length) {
         grid.select(lines.indexOf(notReady[0]));
         ctx.status(`${notReady.length} selected line(s) are not ready (line ${notReady.map((r) => r.line_no).slice(0, 8).join(", ")}) — correct them or unmark with Space`, "warn");
         return;
       }
       lineIds = marked.map((r) => r.id);
+    }
+    if (lineIds === null && !s.postable && s.blocking && doc.purchase.supplier && doc.purchase.invoice_no) {
+      // some lines need a person: offer to post every line that is ready (they wait, the rest go to stock)
+      const ready = lines.filter((l) => !DONE.includes(l.status) && postableRow(l));
+      if (ready.length && await window.erpConfirm(`${s.blocking} line(s) still need you (shown under Needs attention). Post the other ${ready.length} ready line(s) now?`))
+        return postDoc(acceptDifference, ready.map((l) => l.id));
     }
     if (lineIds === null && !s.postable) {
       nextIssue();
@@ -764,10 +775,15 @@ export function create(ctx, params, root) {
     const count = lineIds ? lineIds.length : s.open;
     const value = lineIds ? lines.filter((l) => lineIds.includes(l.id)).reduce((a, l) => a + Number(l.amount || 0), 0) : Number(s.calculated_total);
     const rest = lineIds ? s.open - lineIds.length : 0;
+    const scope = lineIds ? lines.filter((l) => lineIds.includes(l.id)) : lines.filter((l) => !DONE.includes(l.status));
+    const proposed = scope.filter(isProposed).length;
+    const warned = scope.filter((l) => l.status === "NEEDS_REVIEW" && gateOf(l) === "AUTO_ACCEPT_WITH_WARNING").length;
     if (!acceptDifference && !(await window.erpConfirm(`Post ${count} line(s) of ${doc.purchase.invoice_no} into stock (₹${money(value)}${lineIds ? " before GST" : ""})?`
-      + (rest ? ` ${rest} line(s) stay open for review.` : "") + " Posted lines cannot be edited afterwards."))) return;
+      + (proposed ? ` ${proposed} proposed count(s) are accepted as shown.` : "")
+      + (warned ? ` ${warned} line(s) with routine warnings (expiry soon, GST changed …) are accepted.` : "")
+      + (rest ? ` ${rest} line(s) stay open for review.` : "") + " Posted lines can be rolled back to draft (Alt+B) while their stock is untouched."))) return;
     try {
-      const out = await api(`/api/erp/purchases/${id}/post`, { method: "POST", body: { accept_difference: acceptDifference, ...(lineIds ? { line_ids: lineIds } : {}) } });
+      const out = await api(`/api/erp/purchases/${id}/post`, { method: "POST", body: { accept_difference: acceptDifference, accept_warnings: true, ...(lineIds ? { line_ids: lineIds } : {}) } });
       grid.clearMarks();
       render(out);
       ctx.status(out.purchase.status === "PARTIAL" ? `${count} line(s) received under ${out.purchase.reference_no} · ${out.summary.open} still open`

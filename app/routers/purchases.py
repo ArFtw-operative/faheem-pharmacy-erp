@@ -445,7 +445,7 @@ async def purchase_post(purchase_id: int, request: Request, db: Session = Depend
     if ids is not None and (not isinstance(ids, list) or not all(str(i).isdigit() for i in ids)):
         raise HTTPException(400, "line_ids must be a list of line ids")
     _run(db, purchasing.post, p, user=user, accept_difference=bool(data.get("accept_difference")),
-         line_ids=[int(i) for i in ids] if ids is not None else None)
+         accept_warnings=bool(data.get("accept_warnings")), line_ids=[int(i) for i in ids] if ids is not None else None)
     return _document(_doc(db, purchase_id))
 
 

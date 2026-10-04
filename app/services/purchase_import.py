@@ -87,12 +87,18 @@ def _money(text: str) -> Decimal | None:
         return None
 
 
+SCANS_OFF = ("Photos and scans are not imported here: this pharmacy imports the supplier's computer-made PDF, CSV or "
+             "Excel file (scan import is switched off; purchase_scan_import=on enables it).")
+
+
 def parse(filename: str, content: bytes, *, learned: dict[str, str] | None = None,
-          vocab: dict[str, str] | None = None, advisor=None) -> RawDocument:
+          vocab: dict[str, str] | None = None, advisor=None, allow_scans: bool = True) -> RawDocument:
     suffix = Path(filename or "").suffix.lower()
     if not content:
         raise ImportError_("The file is empty")
     if suffix in IMAGE_SUFFIXES:
+        if not allow_scans:
+            raise ImportError_(SCANS_OFF)
         from app.services import ocr
 
         if not ocr.available():
@@ -108,6 +114,8 @@ def parse(filename: str, content: bytes, *, learned: dict[str, str] | None = Non
         raise ImportError_(f"Unsupported file type {suffix or filename!r}. Use CSV, XLS, XLSX or a digital PDF.")
     doc = RawDocument(format=fmt, sha256=hashlib.sha256(content).hexdigest())
     if fmt == "PDF" and _is_scan(content):
+        if not allow_scans:
+            raise ImportError_(SCANS_OFF.replace("Photos and scans are", "This PDF is a scan (no text layer); scans are"))
         from app.services import ocr
 
         if not ocr.available():

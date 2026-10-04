@@ -8,6 +8,7 @@ from app.models import Item, InventoryMovement, User
 from app.services import purchasing, purchase_automation as auto, settings_service, receipt_decision as rd, units
 from tests.test_purchasing import draft, supplier, csv_bytes, stock
 from tests.test_receipt_decisions import product
+from tests.conftest import certain
 
 
 def enable(db, mode="prepare"):
@@ -59,7 +60,7 @@ def test_three_reviewed_products_establish_scoped_layout_convention(db):
     assert len(d['history_line_ids'])==3
     p.column_map=[{**c,'column':'Boxes' if c['field']=='quantity' else c['column']} for c in p.column_map]
     purchasing.refresh_line(db,p,p.items[0])
-    assert not p.items[0].receipt_decision['resolved']
+    assert not certain(p.items[0].receipt_decision)
 
 
 @pytest.mark.parametrize('conflict,trusted',[(True,True),(False,False)])
@@ -68,23 +69,26 @@ def test_conflicting_or_automatic_history_cannot_authorize_new_nested_items(db,c
     reviewed_history(db,sup,conflict=conflict,trusted=trusted)
     enable(db)
     p=draft(db,"N,NEW TABLET,10x1x10,B,May-2028,2,,10,20,20",sup=sup)
-    assert not p.items[0].receipt_decision['resolved']
+    assert not certain(p.items[0].receipt_decision)
 
 
 def test_unknown_count_does_not_become_one_pack(db):
     enable(db)
     p=draft(db,",UNIDENTIFIED,10,B,May-2028,2,,10,20,20")
-    assert p.items[0].status != 'READY'
-    assert not p.items[0].receipt_decision['resolved']
-    assert 'product_unit_unknown' in {i['code'] for i in p.items[0].issues}
+    line=p.items[0]
+    assert not (line.base_unit=='PACK' and line.units_per_pack==1)          # never silently one pack
+    assert line.units_per_pack==10 and line.receipt_decision['received_base_units']==20
+    assert not certain(line.receipt_decision)
+    unknown=[i for i in line.issues if i['code']=='product_unit_unknown']
+    assert unknown and unknown[0]['level']=='proposal'                      # shown for a person to check
 
 
 def test_changed_source_discards_automatic_new_product_units(db):
     enable(db)
     p=draft(db,",NEW TABLET,10S,B,May-2028,2,,10,20,20")
     purchasing.correct(db,p,p.items[0],{'pack':'broken'})
-    assert not p.items[0].receipt_decision['resolved']
-    assert not p.items[0].new_product
+    assert not certain(p.items[0].receipt_decision)
+    assert p.items[0].units_per_pack!=10                                    # the old automatic units are gone
 
 
 def test_explicit_product_conversion_is_preserved(db):
@@ -186,7 +190,7 @@ def test_quantity_label_prevents_supplier_convention_reuse(db):
     reviewed_history(db,sup)
     enable(db)
     p=draft(db,'N,NEW TABLET,10X10S,B,May-2028,2 boxes,,10,20,20',sup=sup)
-    assert not p.items[0].receipt_decision['resolved']
+    assert not certain(p.items[0].receipt_decision)
 
 
 def test_reference_only_infers_form_without_replacing_name_or_strength(db,tmp_path,monkeypatch):
@@ -263,7 +267,7 @@ def test_strip_count_does_not_invent_tablet_form(db):
 def test_strength_is_not_a_retail_pack_count(db):
     enable(db)
     p=draft(db,',NEW TABLET,500MG,B,May-2028,2,,10,20,20')
-    assert not p.items[0].receipt_decision['resolved']
+    assert not certain(p.items[0].receipt_decision)
     assert 'strength_not_pack' in {i['code'] for i in p.items[0].issues}
 
 
@@ -312,7 +316,7 @@ def test_n_times_one_requires_retail_evidence_not_a_one_tablet_guess(db,tmp_path
     reviewed_history(db,sup)
     enable(db)
     p=draft(db,'X,NEW 10MG TAB,10X1,B1,May-2028,2,,10,20,20',sup=sup)
-    assert not p.items[0].receipt_decision['resolved']
+    assert not certain(p.items[0].receipt_decision)
     monkeypatch.setattr(config,'DATA_DIR',tmp_path)
     source=tmp_path/'ref.csv'
     source.write_text('name,manufacturer_name,pack_size_label\nNEW 10mg Tablet,Maker Ltd,strip of 10 tablets\n')
@@ -351,20 +355,27 @@ def test_existing_upload_api_posts_verified_invoice_and_returns_idempotent_resul
 
 
 
-def test_new_products_wait_for_a_person_by_default(db):
+def test_new_products_are_proposed_and_never_posted_unattended(db):
+    from app.services import confidence_gate
     enable(db)
     p=draft(db,'N,BRAND NEW 10MG TAB,10S,B1,May-2028,2,,10,20,20')
     line=p.items[0]
     assert line.new_product and line.units_per_pack==10            # units prepared from the pack
-    assert line.status=='PRODUCT_MATCH_REQUIRED'
-    assert 'new_product_unconfirmed' in {i['code'] for i in line.issues}
+    assert line.status=='READY'                                     # counted: a person posts it
+    issue=next(i for i in line.issues if i['code']=='new_product_unconfirmed')
+    assert issue['level']=='proposal'
+    assert confidence_gate.assess(line)['state']==confidence_gate.WARNING
+    assert 'new_product_unconfirmed' in auto.assessment(db,p)['exceptions'][0]['codes']   # not unattended
     purchasing.correct(db,p,line,{'new_product':True})              # Shift+F4: a person confirms it
-    assert line.status=='READY'
+    assert not any(i['code']=='new_product_unconfirmed' for i in line.issues)
 
 
-def test_ambiguous_count_is_not_prepared_as_a_new_product(db):
+def test_ambiguous_count_is_decided_by_price_evidence_and_shown(db):
     enable(db)
     p=draft(db,',BEGROEASE-50 TABLET,10X1,B1,May-2028,1,,150,320,150')
     line=p.items[0]
-    assert not line.new_product and line.units_per_pack is None     # 10X1: ten packs of one, or a strip of ten?
-    assert line.status=='PRODUCT_MATCH_REQUIRED'
+    # 10X1: ten packs of one tablet, or a strip of ten? ₹320 for one tablet is implausible: a strip of ten
+    assert line.new_product and line.units_per_pack==10
+    auto_info=line.corrections['_automation']
+    assert auto_info['proposed'] and 'other reading' in auto_info['reason']
+    assert not certain(line.receipt_decision)

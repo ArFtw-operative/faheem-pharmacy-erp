@@ -5,10 +5,12 @@ from app.services import inventory_service as inv, purchasing, receipt_decision 
 from tests.test_purchasing import draft
 from tests.test_purchase_automation import enable
 from tests.test_receipt_decisions import product
+from tests.conftest import certain
 
 
 def codes(line):
-    return {i['code'] for i in line.issues if i['level'] in {'review','match','warn','block'}}
+    # every uncertainty the line records — open, or kept for information beside a proposed count
+    return {i['code'] for i in line.issues if i['level'] in {'review','match','warn','block','info'}}
 
 
 def test_existing_generic_count_does_not_bypass_new_product_checks(db):
@@ -17,7 +19,7 @@ def test_existing_generic_count_does_not_bypass_new_product_checks(db):
     p=draft(db,',GENERIC BRAND,12,B,May-2028,2,,10,20,20')
     assert p.items[0].item_id==item.id
     assert 'master_unit_unverified' in codes(p.items[0])
-    assert not p.items[0].receipt_decision['resolved']
+    assert not certain(p.items[0].receipt_decision)
 
 
 def test_known_dose_name_with_content_weight_requires_pack_evidence(db):
@@ -25,7 +27,7 @@ def test_known_dose_name_with_content_weight_requires_pack_evidence(db):
     item=inv.create_item(db,name='EXAMPLE TABLETS',pack_size='20GM',base_unit='PACK',pack_unit='PACK',units_per_pack=1)
     p=draft(db,',EXAMPLE TABLETS,20GM,B,May-2028,1,,10,20,10')
     assert 'strength_not_pack' in codes(p.items[0])
-    assert not p.items[0].receipt_decision['resolved']
+    assert not certain(p.items[0].receipt_decision)
 
 
 def test_unknown_weight_cannot_corroborate_tube_master(db):
@@ -37,14 +39,14 @@ def test_unknown_weight_cannot_corroborate_tube_master(db):
     db.flush()
     p=draft(db,',EXAMPLE POWDER,300GM,B,May-2028,1,,10,20,10')
     assert 'master_container_unverified' in codes(p.items[0])
-    assert not p.items[0].receipt_decision['resolved']
+    assert not certain(p.items[0].receipt_decision)
 
 
 def test_explicit_whole_pack_confirmation_can_resolve_unknown_count(db):
     enable(db)
     inv.create_item(db,name='WHOLE DEVICE PACK',pack_size='12',base_unit='PACK',pack_unit='PACK',units_per_pack=1)
     p=draft(db,',WHOLE DEVICE PACK,12,B,May-2028,2,,10,20,20')
-    assert not p.items[0].receipt_decision['resolved']
+    assert not certain(p.items[0].receipt_decision)
     rd.confirm(db,p,p.items[0],factor=1,mrp_basis='MASTER_PACK',reason='Verified sealed pack sold whole')
     assert p.items[0].receipt_decision['resolved']
     assert p.items[0].receipt_decision['received_base_units']==2

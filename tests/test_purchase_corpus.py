@@ -38,6 +38,16 @@ def test_recurring_clear_scans_pass_straight_through(results):
     assert corpus.summarize(results)["OCR"]["known_straight_through"] >= 90.0
 
 
-def test_traps_never_pass(results):
+def test_traps_are_never_accepted_without_a_person(results):
     a2 = next(r for r in results if r.invoice == "NR03897")
-    assert a2.review + a2.blocked >= 4            # strength, release marker, unreadable pack, unknown product
+    # strength, release marker, unreadable pack, unknown product: proposed or held, never auto-accepted
+    assert a2.review + a2.blocked + a2.proposed >= 4 and not a2.wrong
+
+
+def test_every_line_of_a_text_invoice_arrives_counted(results):
+    text = [r for r in results if r.route != "OCR"]
+    assert sum(r.counted for r in text) == sum(r.lines for r in text)
+
+
+def test_proposals_are_right(results):
+    assert [(r.invoice, w) for r in results for w in r.proposal_wrong] == []

@@ -1,4 +1,5 @@
 import pytest
+from tests.conftest import certain
 from app.models import Batch
 from app.services import purchasing, purchase_adjustment as physical, inventory_service as inv, stock_ledger
 from tests.test_purchase_automation import enable
@@ -65,7 +66,7 @@ def test_changed_master_invalidates_staged_adjustment(db):
     item.units_per_pack=20
     db.flush()
     purchasing.refresh_line(db,p,p.items[0])
-    assert not p.items[0].receipt_decision['resolved']
+    assert not certain(p.items[0].receipt_decision)
     assert any(i['code']=='packaging_changed' for i in p.items[0].issues)
 
 def test_posted_adjustment_teaches_next_invoice_without_staging(db):
@@ -153,7 +154,7 @@ def test_delivery_count_is_not_learned_as_supplier_conversion(db):
     from app.models import SupplierProductMap
     assert not db.query(SupplierProductMap).one().receipt_conventions
     next_p=draft(db,',NEW BRAND,10x1x15,C,May-2028,2,,10,20,20',sup=sup)
-    assert not next_p.items[0].receipt_decision['resolved']
+    assert not certain(next_p.items[0].receipt_decision)
 
 
 def test_changing_billed_quantity_invalidates_delivery_count(db):
@@ -161,7 +162,7 @@ def test_changing_billed_quantity_invalidates_delivery_count(db):
     p=draft(db,',NEW BRAND,10x1x15,B,May-2028,1,,10,20,10')
     physical.adjust(db,p,p.items[0],values())
     purchasing.correct(db,p,p.items[0],{'quantity':'3'})
-    assert not p.items[0].receipt_decision['resolved']
+    assert not certain(p.items[0].receipt_decision)
     assert any(i['code']=='physical_count_stale' for i in p.items[0].issues)
 
 

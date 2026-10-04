@@ -21,6 +21,7 @@ Rules that never bend:
 """
 from __future__ import annotations
 
+import math
 import re
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -43,9 +44,11 @@ DONE = {POSTED, CLOSED}          # a line that no longer changes: received, or c
 POSTABLE = {READY, CORRECTED}
 EDITABLE = ("name", "supplier_code", "batch", "expiry", "quantity", "free", "rate", "mrp", "amount", "gst", "gst_amount", "discount", "scheme",
             "hsn", "pack", "manufacturer", "category", "dosage_form", "base_unit", "pack_unit", "units_per_pack")
-# warnings a person may accept as they are (everything else must be corrected)
+# warnings a person may accept as they are (everything else must be corrected); posting accepts the
+# routine ones in bulk, but a count that looks implausibly priced needs its own look (F6)
+BULK_ACCEPTABLE_EXCLUDED = {"unit_price_unusual"}
 ACCEPTABLE = {"mrp_below_rate", "expiry_soon", "amount_mismatch", "far_expiry", "units_suggested",
-              "gst_slab", "gst_changed", "gst_hsn_mixed", "gst_amount_mismatch"}
+              "gst_slab", "gst_changed", "gst_hsn_mixed", "gst_amount_mismatch", "unit_price_unusual"}
 _SCI = re.compile(r"^\d+(?:\.\d+[eE][+-]?\d+|[eE][+-]\d+)$")
 
 
@@ -128,8 +131,11 @@ def _vocab(db: Session) -> dict[str, str]:
 
 def _parse(db: Session, filename: str, content: bytes, supplier: Supplier | None) -> purchase_import.RawDocument:
     try:
+        from app.services import settings_service
+
         return purchase_import.parse(filename, content, learned=(supplier.column_profile or {}) if supplier else None,
-                                     vocab=_vocab(db))
+                                     vocab=_vocab(db),
+                                     allow_scans=settings_service.get_setting(db, "purchase_scan_import", "off") == "on")
     except purchase_import.ImportError_ as exc:
         raise PurchaseError(str(exc), "UNREADABLE")
 
@@ -353,6 +359,9 @@ def _normalise(db: Session, purchase: Purchase, line: PurchaseItem) -> list[dict
     v = effective(line)
     issues: list[dict] = []
     line.product_name = (v.get("name") or (line.item.name if line.item else "")).strip()[:250]
+    variant = (line.corrections or {}).get("_variant")
+    if variant and "name" not in (line.corrections or {}):
+        line.product_name = variant["name"][:250]          # a size variant is created under its own name
     line.supplier_code = (v.get("supplier_code") or "").strip()[:40]
     line.hsn_code = (v.get("hsn") or "").strip()[:20]
     if line.hsn_code and not re.fullmatch(r"\d{4}|\d{6}|\d{8}", line.hsn_code):
@@ -699,6 +708,77 @@ def _match(db: Session, purchase: Purchase, line: PurchaseItem) -> None:
             item, _why = product_matcher.normalized_match(db, line.product_name, line.pack_size)
             if item is not None:
                 line.item, line.match_method = item, "NORMALIZED_NAME"
+                return
+            item, why = product_matcher.descriptive_match(db, line.product_name, line.pack_size)
+            if item is not None:                    # a proposal: shown to a person, learned when posted
+                line.item, line.match_method = item, "PROPOSED_MATCH"
+                line.corrections = {**(line.corrections or {}), "_match_proposal": {"item_id": item.id, "why": why}}
+
+
+def _plausibility_issues(db: Session, line: PurchaseItem, decision: dict) -> list[dict]:
+    """A count whose MRP per stock unit is far from what that kind of unit costs in this pharmacy
+    (learned from its batches) while another reading of the same printed pack would be normal
+    usually means a wrong pack definition: say so, with the likely reading, before posting."""
+    from app.services import packaging_parser, receipt_proposer
+
+    issues: list[dict] = []
+    if not decision.get("resolved") or not line.mrp:
+        return issues
+    d = receipt_decision.definition(line)
+    upp = max(int(d.get("units_per_pack") or 1), 1)
+    base = d.get("base_unit") or "UNIT"
+    try:
+        per_unit = receipt_decision.mrp_per_master_pack(line) / upp
+    except (KeyError, ZeroDivisionError, TypeError):
+        return issues
+    z = receipt_proposer.price_z(db, base, per_unit)
+    if z is None or abs(z) <= 3:
+        return issues
+    reading = packaging_parser.parse(line.pack_size, master_form=d.get("dosage_form") or "", description=line.product_name)
+    # readings of the same printed pack; "one tablet per strip" is not an explanation for solid doses
+    counts = ({1} if base not in ("TABLET", "CAPSULE") else set()) | {lv.quantity for lv in reading.levels if lv.quantity > 1}
+    if reading.retail_to_base:
+        counts.add(reading.retail_to_base)
+    if reading.base is not None:
+        counts.add(reading.base.quantity)
+    better = [(n, line.mrp / n) for n in sorted(counts) if n != upp or z > 0]
+    better = [(n, p) for n, p in better if (zz := receipt_proposer.price_z(db, base, p)) is not None and abs(zz) < 2.0]
+    if not better:
+        return issues                                    # nothing in the printed pack explains it: no basis to warn
+    n, p = min(better, key=lambda x: abs(receipt_proposer.price_z(db, base, x[1])))
+    typical = math.exp(receipt_proposer.unit_price_prior(db)[base][0])
+    _issue(issues, "unit_price_unusual", "units_per_pack", "warn",
+           f"₹{money(per_unit)} MRP per {base.lower()} is {'far above' if z > 0 else 'far below'} what a {base.lower()} usually costs "
+           f"here (about ₹{money(typical)}); {n} per pack would make it ₹{money(p)}. Check the pack (Alt+K).")
+    return issues
+
+
+def _restock_issues(db: Session, line: PurchaseItem) -> list[dict]:
+    """Restocking a batch already on the shelf: say beforehand how differences will be reconciled
+    (stock_ledger.resolve_batch adapt rules), so posting never stops on a price or expiry clash."""
+    issues: list[dict] = []
+    if line.item is None or not line.batch_no:
+        return issues
+    batch = stock_ledger.find_batch(db, line.item, line.batch_no, line.expiry_date)
+    if batch is None:
+        return issues
+    d = line.receipt_decision or {}
+    notes = []
+    if d.get("resolved") and line.mrp:
+        incoming = money(receipt_decision.mrp_per_master_pack(line))
+        if batch.mrp and incoming != money(batch.mrp):
+            notes.append(f"MRP ₹{incoming} on the invoice, ₹{money(batch.mrp)} on the batch in stock → "
+                         + (f"the batch sells at the lower ₹{min(incoming, money(batch.mrp))}" if batch.quantity > 0 else f"updated to ₹{incoming}"))
+    if line.expiry_date and batch.expiry_date and (line.expiry_date.year, line.expiry_date.month) != (batch.expiry_date.year, batch.expiry_date.month):
+        notes.append(f"expiry {line.expiry_date:%b-%Y} on the invoice, {batch.expiry_date:%b-%Y} on the batch → "
+                     + ("the batch keeps its expiry" if batch.quantity > 0 else "updated"))
+    if notes:
+        _issue(issues, "restock_reconcile", "batch", "info", f"Restock of batch {batch.batch_no} ({batch.quantity} in stock): " + "; ".join(notes))
+    if batch.quantity > 0 and (batch.units_per_pack or 1) != (line.item.units_per_pack or 1):
+        _issue(issues, "batch_pack_clash", "batch", "review",
+               f"Batch {batch.batch_no} is in stock at {batch.units_per_pack} per pack, the product is now {line.item.units_per_pack} per pack. "
+               "Check the batch number on the invoice, or sell the old stock first.")
+    return issues
 
 
 def _product_issues(db: Session, line: PurchaseItem) -> list[dict]:
@@ -735,17 +815,21 @@ def refresh_line(db: Session, purchase: Purchase, line: PurchaseItem) -> Purchas
     if issues_has(issues, "qty_fraction") and line.item is not None:
         issues = _normalise(db, purchase, line)      # part packs are judged by the matched product's pack size
     decision = receipt_decision.resolve(db, purchase, line)
+    if purchase_automation.propose_variant(db, purchase, line, decision):
+        decision = receipt_decision.resolve(db, purchase, line)        # now the variant's own definition
     if decision["resolved"]:
         issues = [i for i in issues if i["code"] != "qty_fraction"]
     issues += decision["issues"]
     if not issues_has(issues, "gst_slab"):
         issues += _gst_history(db, purchase, line)
     issues += _product_issues(db, line)
+    issues += _restock_issues(db, line)
+    issues += _plausibility_issues(db, line, decision)
     issues = purchase_automation.review_issues(db, purchase, line, issues)
     accepted = set((line.corrections or {}).get("_accepted") or [])
     for i in issues:
         i["accepted"] = i["code"] in accepted and i["code"] in ACCEPTABLE
-    open_ = [i for i in issues if not i["accepted"]]
+    open_ = [i for i in issues if not i["accepted"]]       # "proposal" and "info" levels never block a person's post
     if any(i["level"] == "block" for i in open_):
         line.status = INVALID
     elif any(i["level"] == "match" for i in open_):
@@ -835,6 +919,8 @@ def correct(db: Session, purchase: Purchase, line: PurchaseItem, changes: dict, 
         corrections.pop("_accepted", None)  # acknowledgements apply only to the values reviewed
     if any(k in ("base_unit", "pack_unit", "units_per_pack", "dosage_form", "item_id") for k in changes):
         corrections.pop("_automation", None)
+    if any(k in ("item_id", "new_product", "pack") for k in changes):
+        corrections.pop("_variant", None)                  # a person decided the product
     stamp = {"by": _actor(user), "at": utcnow().isoformat(timespec="seconds")}
     raw = line.raw or {}
     for field, value in changes.items():
@@ -1061,7 +1147,7 @@ def summary(purchase: Purchase) -> dict:
     calculated = Decimal(t["total"])
     diff = money(purchase.supplier_total - calculated) if purchase.supplier_total is not None else None
     open_lines = [l for l in purchase.items if l.status not in DONE]
-    blocking = sum(1 for l in open_lines if l.status not in POSTABLE)
+    blocking = sum(1 for l in open_lines if l.status not in POSTABLE and not warnings_only(l))
     header_ok = bool(purchase.supplier_id) and bool(purchase.invoice_no) and not (purchase.charges or {}).get("_extraction_issues")
     return {"rows": len(purchase.items), "counts": counts, "calculated_total": str(calculated), "totals": t,
             "supplier_total": str(purchase.supplier_total) if purchase.supplier_total is not None else None,
@@ -1079,8 +1165,34 @@ def get(db: Session, purchase_id: int) -> Purchase | None:
 
 
 # --------------------------------------------------------------------------- posting
+def warnings_only(line: PurchaseItem) -> bool:
+    """Open only because of routine warnings that posting accepts (expiry soon, GST changed …)."""
+    if line.status != REVIEW:
+        return False
+    open_ = [i for i in (line.issues or []) if not i.get("accepted") and i["level"] not in ("info", "proposal")]
+    return bool(open_) and all(i["level"] == "warn" and i["code"] in ACCEPTABLE and i["code"] not in BULK_ACCEPTABLE_EXCLUDED
+                               for i in open_)
+
+
+def accept_line_warnings(db: Session, purchase: Purchase, lines: list[PurchaseItem], *, user: User | None = None) -> int:
+    """A person reviewed the invoice and posts it: warnings that may be accepted as they are
+    (expiry soon, GST rate changed, MRP below rate …) are accepted on these lines. Anything that
+    must be corrected stays. Returns how many lines changed."""
+    changed = 0
+    for line in lines:
+        if not warnings_only(line):
+            continue
+        codes = sorted({i["code"] for i in (line.issues or []) if not i.get("accepted") and i["level"] == "warn"})
+        line.corrections = {**(line.corrections or {}), "_accepted": sorted(set((line.corrections or {}).get("_accepted") or []) | set(codes))}
+        refresh_line(db, purchase, line)
+        changed += 1
+        audit.record(db, action=audit.A_UPDATE, entity_type="purchase_line", entity_id=line.id, user=user,
+                     after={"accepted": codes}, details=f"Warnings accepted when posting: {', '.join(codes)}")
+    return changed
+
+
 def post(db: Session, purchase: Purchase, *, user: User | None = None, accept_difference: bool = False,
-         line_ids: list[int] | None = None) -> Purchase:
+         line_ids: list[int] | None = None, accept_warnings: bool = False) -> Purchase:
     """Receive lines into stock in one transaction — or nothing.
 
     Without ``line_ids`` every line not yet received is posted. With them only
@@ -1123,6 +1235,8 @@ def post(db: Session, purchase: Purchase, *, user: User | None = None, accept_di
             raise PurchaseError(f"Line(s) {', '.join(map(str, done))} are already received or closed", "LINE_DONE")
     if not target:
         raise PurchaseError("There are no lines to post", "EMPTY")
+    if accept_warnings:
+        accept_line_warnings(db, purchase, target, user=user)
     not_ready = [l.line_no for l in target if l.status not in POSTABLE]
     if not_ready:
         raise PurchaseError(f"{len(not_ready)} selected line(s) still need review: {', '.join(map(str, not_ready[:12]))}",
@@ -1182,7 +1296,12 @@ def post(db: Session, purchase: Purchase, *, user: User | None = None, accept_di
                     mrp=money(receipt_decision.mrp_per_master_pack(line)), supplier_id=purchase.supplier_id, purchase_id=purchase.id, reference_type="PURCHASE",
                     reference_id=purchase.id, reference_no=reference,
                     reason=f"Purchase {reference} · {purchase.supplier.name if purchase.supplier else ''} inv {purchase.invoice_no}",
-                    user=user, levels=packaging_conversion.receipt_levels(receipt, receipt_decision.definition(line)))
+                    user=user, levels=packaging_conversion.receipt_levels(receipt, receipt_decision.definition(line)),
+                    adapt=(notes := []))
+                if notes:                                   # restock reconciled by rule, kept on the line and audited
+                    line.corrections = {**(line.corrections or {}), "_batch_reconciled": notes}
+                    audit.record(db, action=audit.A_UPDATE, entity_type="batch", entity_id=batch.id, user=user,
+                                 after={"notes": notes}, details=f"Restock of {item.name}: " + "; ".join(notes))
                 batch.rate_basis = "INCL_GST" if cost_incl else "EXCL_GST"
                 line.batch_id, line.status = batch.id, POSTED
                 _remember_mapping(db, purchase, line, user)
@@ -1380,7 +1499,7 @@ def close_remaining(db: Session, purchase: Purchase, *, reason: str, user: User 
 
 def _remember_mapping(db: Session, purchase: Purchase, line: PurchaseItem, user: User | None) -> None:
     """A posted deterministic identity teaches the supplier mapping for next time."""
-    if not purchase.supplier_id or line.item is None or (line.match_method not in ("MANUAL", "NEW_PRODUCT", "SUPPLIER_MAP", "EXACT_NAME", "CODE", "CANONICAL_NAME_PACK", "NORMALIZED_NAME", "GS1") and not (line.corrections or {}).get("_invoice_unit")):
+    if not purchase.supplier_id or line.item is None or (line.match_method not in ("MANUAL", "NEW_PRODUCT", "SUPPLIER_MAP", "EXACT_NAME", "CODE", "CANONICAL_NAME_PACK", "NORMALIZED_NAME", "GS1", "PROPOSED_MATCH") and not (line.corrections or {}).get("_invoice_unit")):
         return
     code = line.supplier_code or ""
     key = "" if code else description_key(line.description_raw or line.product_name)

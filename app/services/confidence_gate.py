@@ -19,12 +19,14 @@ import json
 from decimal import Decimal
 
 AUTO_ACCEPT, WARNING, REVIEW, BLOCK = "AUTO_ACCEPT", "AUTO_ACCEPT_WITH_WARNING", "REVIEW", "BLOCK"
+PROPOSAL_CODES = {"count_proposed", "new_product_unconfirmed", "product_unit_unknown", "variant_proposed", "match_proposed"}
 DEFAULTS = {"auto": 0.97, "warn": 0.90, "review": 0.75}
 CRITICAL = ("product", "quantity", "batch", "expiry", "packaging")
 
 # product match method → confidence and provenance
 _PRODUCT = {"SUPPLIER_MAP": (0.995, "SAVED_ALIAS"), "CODE": (0.99, "SOURCE_FILE"), "EXACT_NAME": (0.98, "PRODUCT_MASTER"),
             "CANONICAL_NAME_PACK": (0.975, "PRODUCT_MASTER"), "NORMALIZED_NAME": (0.97, "PRODUCT_MASTER"),
+            "PROPOSED_MATCH": (0.9, "FUZZY_MATCH"),
             "MANUAL": (1.0, "USER_CORRECTION"), "NEW_PRODUCT": (1.0, "USER_CORRECTION"), "GS1": (0.995, "GS1_BARCODE")}
 # receipt decision source → pack multiplier confidence and provenance
 _PACK = {"CONFIRMED": (1.0, "USER_CORRECTION"), "SUPPLIER_PACKING_ALIAS": (0.995, "SAVED_ALIAS"),
@@ -47,8 +49,17 @@ def thresholds(db=None) -> dict:
     return out
 
 
-def _open_codes(line) -> set[str]:
-    return {i["code"] for i in (line.issues or []) if not i.get("accepted") and i.get("level") != "info"}
+def _only_acceptable_warnings(line) -> bool:
+    from app.services import purchasing
+
+    open_ = [i for i in (line.issues or []) if not i.get("accepted") and i.get("level") not in ("info", "proposal")]
+    return bool(open_) and all(i.get("level") == "warn" and i["code"] in purchasing.ACCEPTABLE
+                               and i["code"] not in purchasing.BULK_ACCEPTABLE_EXCLUDED for i in open_)
+
+
+def _open_codes(line, levels=None) -> set[str]:
+    return {i["code"] for i in (line.issues or []) if not i.get("accepted")
+            and (i.get("level") in levels if levels else i.get("level") not in ("info", "proposal"))}
 
 
 def fields(line) -> tuple[dict, dict]:
@@ -64,8 +75,9 @@ def fields(line) -> tuple[dict, dict]:
         conf["product"], prov["product"] = _PRODUCT.get(method, (0.9, "FUZZY_MATCH"))
         if line.new_product and "units_suggested" in codes:
             conf["product"] = 0.85
-        if "new_product_unconfirmed" in codes:
-            conf["product"], prov["product"] = 0.8, "PACKAGING_RULE"      # new-product queue: a person confirms it
+        if "new_product_unconfirmed" in all_codes:
+            auto = (line.corrections or {}).get("_automation") or {}
+            conf["product"], prov["product"] = float(auto.get("confidence") or 0.9), "PROPOSED"   # created when a person posts
     else:
         conf["product"], prov["product"] = 0.0, "NONE"
     # quantity (billed + free): known whenever the invoice gives it
@@ -86,8 +98,12 @@ def fields(line) -> tuple[dict, dict]:
     prov["expiry"] = source
     # pack multiplier (changes stock)
     d = line.receipt_decision or {}
-    if d.get("resolved"):
+    if d.get("resolved") and d.get("source") == "PROPOSED":
+        conf["packaging"], prov["packaging"] = float((d.get("proposal") or {}).get("confidence") or 0.85), "PROPOSED"
+    elif d.get("resolved"):
         conf["packaging"], prov["packaging"] = _PACK.get(d.get("source"), (0.9, "PACKAGING_RULE"))
+        if d.get("source") == "SUPPLIER_PACKING_ALIAS" and float(d.get("trust") or 1) < 0.95:
+            conf["packaging"] = 0.95                     # learned from a single posting: shown until confirmed again
     else:
         conf["packaging"], prov["packaging"] = (0.5, "NONE")
     # arithmetic and price (supporting, not critical)
@@ -110,8 +126,15 @@ def assess(line, limits: dict | None = None) -> dict:
     limits = limits or DEFAULTS
     conf, prov = fields(line)
     critical = min(conf[k] for k in CRITICAL)
+    proposed = bool(_open_codes(line, levels=("proposal",)) & PROPOSAL_CODES)
     if line.status == purchasing.INVALID or any(conf[k] == 0.0 for k in ("quantity", "batch", "expiry")):
         state = BLOCK
+    elif "unit_price_unusual" in _open_codes(line):
+        state = REVIEW                                   # the count looks implausibly priced: a person looks first
+    elif proposed and line.status in purchasing.POSTABLE:
+        state = WARNING                                  # counted by proposal: a person looks, then posts
+    elif line.status == purchasing.REVIEW and _only_acceptable_warnings(line) and critical >= limits["review"]:
+        state = WARNING                                  # expiry soon, GST changed …: accepted when a person posts
     elif line.status in (purchasing.REVIEW, purchasing.MATCH) or critical < limits["warn"]:
         state = REVIEW if critical >= limits["review"] or conf["product"] == 0.0 or conf["packaging"] >= 0.5 else BLOCK
     elif critical >= limits["auto"] and min(conf["amount"], conf["gst"], conf["mrp"]) >= limits["warn"]:
@@ -119,7 +142,7 @@ def assess(line, limits: dict | None = None) -> dict:
     else:
         state = WARNING
     weakest = min(CRITICAL, key=lambda k: conf[k])
-    return {"state": state, "confidence": round(critical, 3), "weakest": weakest,
+    return {"state": state, "confidence": round(critical, 3), "weakest": weakest, "proposed": proposed,
             "fields": {k: round(v, 3) for k, v in conf.items()}, "provenance": prov}
 
 

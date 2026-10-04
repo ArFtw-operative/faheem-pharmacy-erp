@@ -34,6 +34,7 @@ CONTAINER = {"SYRUP": "BOTTLE", "SUSPENSION": "BOTTLE", "DROPS": "BOTTLE", "LOTI
              "SOAP": "PIECE", "INHALER": "PIECE", "DEVICE": "PIECE", "SYRINGE": "PIECE", "NEEDLE": "PIECE",
              "CANNULA": "PIECE", "BANDAGE": "PIECE", "TEST_STRIP": "PIECE", "KIT": "KIT", "PAIR": "PAIR"}
 _CONTENT = {"ML": "ML", "MLS": "ML", "MILLILITRE": "ML", "L": "L", "LTR": "L", "LITRE": "L", "G": "GRAM", "GM": "GRAM",
+            "GR": "GRAM", "GRS": "GRAM",
             "GMS": "GRAM", "GRM": "GRAM", "GRMS": "GRAM", "GRAM": "GRAM", "GRAMS": "GRAM", "KG": "KG", "MG": "MG", "MCG": "MCG"}
 _PIECE_WORDS = {"PCS": "PIECE", "PC": "PIECE", "PIECE": "PIECE", "PIECES": "PIECE", "NOS": "PIECE", "NO": "PIECE",
                 "N": "PIECE", "EA": "PIECE", "EACH": "PIECE", "UNIT": "PIECE", "UNITS": "PIECE"}
@@ -137,7 +138,7 @@ def tokenize(text: str) -> list[str]:
 # --------------------------------------------------------------------------- stage 3: measurement
 def detect_measurement(text: str) -> tuple[Decimal, str] | None:
     """A trailing content measurement: ``60ML``, ``1X100ML``, ``75GMS`` → (60, ML)."""
-    m = re.fullmatch(r"(?:\d+X)*(\d+(?:\.\d+)?)(ML|MLS|L|LTR|G|GM|GMS|GRM|GRMS|GRAM|GRAMS|KG|MG|MCG)", text.replace(" ", ""))
+    m = re.fullmatch(r"(?:\d+X)*(\d+(?:\.\d+)?)(ML|MLS|L|LTR|G|GM|GMS|GR|GRS|GRM|GRMS|GRAM|GRAMS|KG|MG|MCG)", text.replace(" ", ""))
     if not m:
         return None
     try:
@@ -150,7 +151,7 @@ def detect_measurement(text: str) -> tuple[Decimal, str] | None:
 # --------------------------------------------------------------------------- stage 4: hierarchy
 def detect_hierarchy(text: str) -> list[int] | None:
     """The counts of a multi-level pack, outermost first: ``10X1X10S`` → [10, 1, 10]."""
-    m = re.fullmatch(r"(\d+)(?:X(\d+))?(?:X(\d+))?(?:X(\d+))?(S|T|C|TAB|TABS|CAP|CAPS|PCS|PC|N|NOS)?", text.replace(" ", ""))
+    m = re.fullmatch(r"(\d+)(?:X(\d+))?(?:X(\d+))?(?:X(\d+))?(S|T|C|TAB|TABS|CAP|CAPS|PCS|PC|N|NOS|X)?", text.replace(" ", ""))
     if not m:
         return None
     return [int(g) for g in m.groups()[:4] if g is not None]
@@ -502,6 +503,10 @@ def parse(raw: Any, *, master_form: str = "", description: str = "", product_nam
             p.dosage_form, p.form_source = detect_dosage_form(master_form=master_form, description=description,
                                                               product_name=product_name, packing=text, confirmed_form=confirmed_form)
             return p
+        early_form, _ = detect_dosage_form(master_form=master_form, description=description, product_name=product_name,
+                                           packing=text, confirmed_form=confirmed_form)
+        if early_form in LIQUID and re.fullmatch(r"(?:\d+X)?\d+(?:\.\d+)?M", text.replace(" ", "")):
+            text = text.replace(" ", "") + "L"           # "1x30m", "110 M" on a liquid: millilitres
         handler = next(h for h in HANDLERS if h.matches(text, ctx))
         p = handler.parse(text, ctx)
         form, source = detect_dosage_form(master_form=master_form, description=description, product_name=product_name,

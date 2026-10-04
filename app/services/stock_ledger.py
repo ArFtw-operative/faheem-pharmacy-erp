@@ -223,8 +223,14 @@ def resolve_batch(
     purchase_id: int | None = None,
     user: User | None = None,
     ip_address: str = "",
+    adapt: list | None = None,
 ) -> Batch:
     """The batch this stock belongs to, created on first receipt.
+
+    With ``adapt`` (a list that collects notes) a restock of an existing batch is reconciled by
+    rule instead of refused: an empty batch takes the incoming expiry / MRP; a batch with stock
+    keeps its expiry and takes the lower of the two MRPs, so no pack is ever sold above the
+    price printed on it. A pack-size clash with stock still on hand is always refused.
 
     Same product + same batch number is always the same batch. Contradicting
     expiry, MRP or pack size is a :class:`BatchConflict`, never a silent merge
@@ -254,6 +260,26 @@ def resolve_batch(
         return batch
 
     label = batch.batch_no or "(no batch)"
+    if adapt is not None:
+        if expiry_date and batch.expiry_date and (expiry_date.year, expiry_date.month) != (batch.expiry_date.year, batch.expiry_date.month):
+            if batch.quantity <= 0:
+                adapt.append(f"Batch {label}: expiry updated {batch.expiry_date:%b-%Y} → {expiry_date:%b-%Y} (no stock was left)")
+                batch.expiry_date = expiry_date
+            else:
+                adapt.append(f"Batch {label}: invoice expiry {expiry_date:%b-%Y} differs from the {batch.expiry_date:%b-%Y} on the "
+                             "packs already in stock; the batch keeps its expiry")
+            expiry_date = batch.expiry_date
+        if mrp_d and batch.mrp and mrp_d != to_decimal(batch.mrp):
+            if batch.quantity <= 0:
+                adapt.append(f"Batch {label}: MRP updated ₹{batch.mrp} → ₹{mrp_d} (no stock was left)")
+                batch.mrp = mrp_d
+            else:
+                low = min(mrp_d, to_decimal(batch.mrp))
+                adapt.append(f"Batch {label}: invoice MRP ₹{mrp_d}, stock on hand ₹{batch.mrp}; the batch sells at ₹{low}, "
+                             "the lower printed price")
+                batch.mrp = low
+            sync_unit_prices(batch)
+            mrp_d = to_decimal(batch.mrp)
     if expiry_date and batch.expiry_date and (expiry_date.year, expiry_date.month) != (
         batch.expiry_date.year, batch.expiry_date.month
     ):
@@ -312,6 +338,7 @@ def receive(
     user: User | None = None,
     ip_address: str = "",
     levels: tuple[dict | None, dict | None] | None = None,
+    adapt: list | None = None,
 ) -> Batch:
     """Receive stock into a batch: paid quantity and free quantity post
     separately (``FREE_STOCK``) so free goods are never lost. ``levels`` (paid, free)
@@ -323,7 +350,7 @@ def receive(
     batch = resolve_batch(
         db, item, batch_no=batch_no, expiry_date=expiry_date, mrp=mrp, purchase_rate=purchase_rate,
         selling_rate=selling_rate, supplier_id=supplier_id, purchase_id=purchase_id,
-        user=user, ip_address=ip_address,
+        user=user, ip_address=ip_address, adapt=adapt,
     )
     upp = batch.units_per_pack or 1
     refs = dict(reference_type=reference_type, reference_id=reference_id, reference_no=reference_no,

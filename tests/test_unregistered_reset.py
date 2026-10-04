@@ -7,6 +7,7 @@ from app.services import purchasing, purchase_automation as auto, settings_servi
 from tests.test_purchase_automation import auto_create, enable, zero_tax_csv, reviewed_history
 from tests.test_purchasing import supplier, draft
 from tests.test_receipt_decisions import product
+from tests.conftest import certain
 
 
 def test_unregistered_pharmacy_can_autopost_using_its_state(db):
@@ -83,7 +84,7 @@ def test_reset_retains_contradictory_pack_evidence(db):
     inventory_reset.reset_purchases_and_stock(db)
     enable(db)
     p=draft(db,'N,NEW TABLET,10x1x10,B,May-2028,2,,10,20,20',sup=sup)
-    assert not p.items[0].receipt_decision['resolved']
+    assert not certain(p.items[0].receipt_decision)
 
 
 def test_reset_transaction_can_roll_back(db):

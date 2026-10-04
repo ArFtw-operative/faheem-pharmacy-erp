@@ -6,6 +6,7 @@ from app.services import inventory_service as inv
 from app.services import mapping_store, purchasing, receipt_decision
 from tests.test_purchase_automation import enable
 from tests.test_purchasing import draft, supplier
+from tests.conftest import certain
 
 
 def cap(db, name="EXAMPLE CAP"):
@@ -19,7 +20,7 @@ def test_confirmed_invoice_unit_becomes_a_packaging_alias_and_resolves_next_invo
     item = cap(db)
     p = draft(db, ",EXAMPLE CAP,10x1x10,B1,May-2028,2,,10,20,20", sup=sup)
     line = p.items[0]
-    assert not line.receipt_decision["resolved"]           # 10x1x10 alone does not say strips or boxes
+    assert not certain(line.receipt_decision)           # 10x1x10 alone does not say strips or boxes
     receipt_decision.confirm(db, p, line, factor=10, mrp_basis="MASTER_PACK", reason="Supplier bills strips of ten")
     purchasing.post(db, p)
     alias = db.query(SupplierPackagingAlias).one()
