@@ -708,3 +708,5 @@ ul.inspect { margin: 4px 0 8px 18px; padding: 0; }
 .res tr.disabled td:nth-child(4) { text-decoration: none; }
 .grid tbody tr.item-off td { color: #8c989d; }
 .tag.off { background: #f3e2e0; color: var(--bad); border-color: #ecc3be; }
+.life-off { display: flex; gap: 10px; align-items: baseline; margin: 0 0 6px; padding: 5px 8px; border: 1px solid #ecc3be; border-left: 3px solid var(--bad); background: #fbeeec; color: var(--bad); border-radius: var(--r); }
+.life-off span { color: var(--muted); font-size: 12px; }

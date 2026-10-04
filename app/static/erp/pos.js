@@ -383,7 +383,7 @@ export function create(ctx, params, root, saved) {
       return;
     }
     const a = alloc(l), first = (a[0] || {}).b || pool(l)[0] || {};
-    d.innerHTML = `<b>${esc(l.name)}</b>
+    d.innerHTML = `<b>${esc(l.name)}</b>${l.active === false ? '<span class="bad-t"><b>Disabled — not for sale</b> (enable it in Inventory)</span>' : ""}
       <span>${esc(l.form || "")}</span>
       <span>Pack <b>${upp(l) > 1 ? `${upp(l)} ${unitName(l.base_unit, upp(l))} / ${unitName(l.pack_unit, 1)}` : esc(l.pack_raw || "1")}</b></span>
       <span>Selling unit <b>${esc(unitName(l.base_unit, 1))}</b></span>
@@ -600,7 +600,7 @@ export function create(ctx, params, root, saved) {
   function lineFrom(p) {
     return { item_id: p.id, code: p.code, name: p.name, pack_raw: p.pack_raw, upp: p.upp || 1, loose: !!p.loose,
       base_unit: p.base_unit, pack_unit: p.pack_unit, form: p.form, rack: p.rack, batches: p.batches, batch_id: null, qty: 0,
-      content: p.content || "", disc: 0 };
+      content: p.content || "", disc: 0, active: p.active !== false };
   }
   function addProduct(p) {
     if (p.active === false) { ctx.status(`${p.name} is disabled in Inventory — not for sale. Enable it there (right-click → Enable) to sell it.`, "error"); return; }

@@ -45,7 +45,10 @@ def test_a_product_with_stock_cannot_be_deleted_only_disabled(client, db):
     item = product(db, stock=20)
     r = status(client, item, "delete")
     assert r.status_code == 400 and "Disable it instead" in r.json()["detail"]
+    assert client.get(f"/api/erp/inventory/{item.id}").json()["sellable"] == 20
     assert status(client, item, "disable").status_code == 200
+    d = client.get(f"/api/erp/inventory/{item.id}").json()          # the side panel shows the real status
+    assert d["lifecycle"] == "DISABLED" and d["sellable"] == 0 and d["stock"] == 20
 
 
 def test_packaging_filter_lists_products_by_setup(client, db):

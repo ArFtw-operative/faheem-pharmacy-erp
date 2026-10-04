@@ -269,11 +269,12 @@ export function create(ctx, params, root) {
     const p = d.packaging;
     const fact = (label,value) => `<div><span class="muted">${esc(label)}</span><b>${esc(value)}</b></div>`;
     const allBatches = d.batches || [];
-    el.innerHTML = `<div class="inv-report-title"><b>${esc(d.name)}</b><span class="mono muted">${esc(d.code)}</span>
+    const life = { DISABLED: ["Disabled — not sold in POS", "right-click → Enable"], DELETED: ["In the recycle bin", "right-click → Restore"] }[d.lifecycle];
+    el.innerHTML = `${life ? `<div class="life-off"><b>${life[0]}</b><span>${life[1]}</span></div>` : ""}<div class="inv-report-title"><b>${esc(d.name)}</b><span class="mono muted">${esc(d.code)}</span>
       <span class="muted">${esc([d.category_name,title(d.form),d.manufacturer,d.strength].filter(Boolean).join(' · '))}</span></div>
-      <div class="inv-report-facts">${fact('Form',title(d.form) || '—')}${fact('Base unit',title(p.base_unit))}${fact('Manufacturer',d.manufacturer || '—')}
+      <div class="inv-report-facts">${fact('Status', life ? life[0] : 'Active')}${fact('Form',title(d.form) || '—')}${fact('Base unit',title(p.base_unit))}${fact('Manufacturer',d.manufacturer || '—')}
       ${fact('Current stock',`${d.stock} ${unitName(p.base_unit,d.stock)}`)}
-      ${fact('Equivalent',d.equivalent || '—')}${fact('Available for sale',`${d.sellable} ${unitName(p.base_unit,d.sellable)}`)}
+      ${fact('Equivalent',d.equivalent || '—')}${fact('Available for sale', life ? `None (${d.lifecycle === 'DELETED' ? 'recycle bin' : 'disabled'})` : `${d.sellable} ${unitName(p.base_unit,d.sellable)}`)}
       ${fact('Packaging',p.pack_label || 'Not confirmed')}${p.content ? fact('Content',p.content) : ''}
       ${fact('Rack',d.rack || '—')}${fact('Batches',`${allBatches.length} total · ${allBatches.filter(b => b.stock > 0).length} with stock`)}</div>
       ${d.generic ? `<p class="hint"><b>Composition</b> ${esc(d.generic)}</p>` : ''}`;

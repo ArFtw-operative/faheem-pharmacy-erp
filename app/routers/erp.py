@@ -352,7 +352,10 @@ def _detail(db: Session, item: Item, user: User | None = None) -> dict:
         "category": item.category, "category_name": category_service.names(db).get(item.category, item.category),
         "hsn": item.hsn_code, "barcode": item.barcode, "mrp": str(item.mrp),
         "content_qty": str(item.content_qty) if item.content_qty is not None else "",
-        "content_unit": item.content_unit or "", "sellable": stock - expired,
+        # a disabled or recycle-bin product sells nothing, whatever it holds
+        "content_unit": item.content_unit or "",
+        "sellable": stock - expired if item.is_active and item.deleted_at is None else 0,
+        "lifecycle": "DELETED" if item.deleted_at is not None else "ACTIVE" if item.is_active else "DISABLED",
         "packaging": inv.packaging_view(item),
         # stock counted per pack can still be repacked into units; otherwise packaging is fixed while stock exists
         "packaging_locked": stock != 0 and (item.units_per_pack or 1) > 1,
