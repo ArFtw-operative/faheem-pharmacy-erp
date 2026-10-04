@@ -57,6 +57,20 @@ def _doc(db: Session, purchase_id: int) -> Purchase:
     return purchase
 
 
+def _recount(db: Session, purchases) -> None:
+    """Drafts counted by an older engine are counted again (once) before they are shown. A failure
+    never stops the screen: the draft is shown as it was."""
+    from app.services import purchase_automation
+    for p in purchases:
+        try:
+            if purchase_automation.refresh_if_stale(db, p):
+                db.commit()
+        except Exception:                      # noqa: BLE001 — shown as stored; the next open tries again
+            db.rollback()
+            import logging
+            logging.getLogger("pharmacy.purchases").exception("recount of purchase %s failed", getattr(p, "id", "?"))
+
+
 def _line(purchase: Purchase, line_id: int) -> PurchaseItem:
     line = next((l for l in purchase.items if l.id == line_id), None)
     if line is None:
@@ -171,6 +185,7 @@ def _document(p: Purchase) -> dict:
 def purchase_register(status: str = "", supplier: str = "", q: str = "", start: str = "", end: str = "",
                       limit: int = 200, offset: int = 0, db: Session = Depends(get_db),
                       user: User = Depends(require_permission("purchase.view"))):
+    _recount(db, db.scalars(select(Purchase).where(Purchase.status.in_(("DRAFT", "PARTIAL")))).all())
     lines = select(PurchaseItem.purchase_id, func.count(PurchaseItem.id).label("n"),
                    func.sum(case((PurchaseItem.status.in_(("READY", "CORRECTED", "POSTED", "CLOSED")), 0), else_=1)).label("open")
                    ).group_by(PurchaseItem.purchase_id).subquery()
@@ -262,6 +277,8 @@ async def purchase_create(request: Request, db: Session = Depends(get_db),
 @router.get("/api/erp/purchases/{purchase_id}")
 def purchase_detail(purchase_id: int, db: Session = Depends(get_db),
                     user: User = Depends(require_permission("purchase.view"))):
+    p = _doc(db, purchase_id)
+    _recount(db, [p])
     return _document(_doc(db, purchase_id))
 
 

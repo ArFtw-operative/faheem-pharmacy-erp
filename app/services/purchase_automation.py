@@ -509,6 +509,31 @@ def assessment(db, purchase):
             "exception_counts": dict(Counter(c for e in exceptions for c in e["codes"]))}
 
 
+# Bumped whenever the counting engine changes what it can decide. An open draft counted by an older
+# engine (or before engines were stamped) is counted again once when it is next listed or opened, so
+# drafts made before an update benefit from it too. A person's corrections are kept: refresh_line
+# re-derives only what the evidence decides.
+ENGINE_VERSION = "1.9.1"
+
+
+def refresh_if_stale(db, purchase) -> bool:
+    """Count an open draft again with this engine if an older one counted it. True when it did."""
+    from app import audit
+    from app.services import purchasing
+    if purchase.status not in ("DRAFT", "PARTIAL") or (purchase.charges or {}).get("_engine") == ENGINE_VERSION:
+        return False
+    if not any(l.status not in purchasing.DONE for l in purchase.items):
+        purchase.charges = {**(purchase.charges or {}), "_engine": ENGINE_VERSION}
+        return False
+    before = sum(1 for l in purchase.items if l.status not in purchasing.DONE and (l.receipt_decision or {}).get("resolved"))
+    with db.begin_nested():
+        prepare(db, purchase)
+    after = sum(1 for l in purchase.items if l.status not in purchasing.DONE and (l.receipt_decision or {}).get("resolved"))
+    audit.record(db, action=audit.A_UPDATE, entity_type="purchase", entity_id=purchase.reference_no or purchase.id,
+                 details=f"Counted again by engine {ENGINE_VERSION}: {before} → {after} open line(s) counted")
+    return True
+
+
 def prepare(db, purchase, *, user=None):
     from app.services import purchasing
     if (purchase.charges or {}).get("_auto_post_error"):
@@ -522,6 +547,7 @@ def prepare(db, purchase, *, user=None):
         for line in purchase.items:
             purchasing.refresh_line(db, purchase, line)
     purchasing._refresh_totals(purchase)
+    purchase.charges = {**(purchase.charges or {}), "_engine": ENGINE_VERSION}
     return assessment(db, purchase)
 
 

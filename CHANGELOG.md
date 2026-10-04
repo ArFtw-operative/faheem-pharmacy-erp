@@ -3,6 +3,14 @@
 Release notes for Faheem Pharmacy. Versions follow semantic versioning; every release
 lists its database migrations. Upgrades keep all business history (see docs/UPGRADES.md).
 
+## 1.9.1 (2026-10-04)
+
+- **Purchase drafts made before an update are counted by the new engine:** each draft records the engine
+  version that counted it; an open draft counted by an older engine is counted again once, automatically,
+  when the purchase list or the draft is opened (a person's corrections are kept, posted lines are never
+  touched, a failure leaves the draft as it was). On a copy of the shop's data: NR03895 0 → 38 lines ready,
+  invoice 1234 2 → 13; stock, ledger and sales unchanged.
+
 ## 1.9.0 (2026-10-04)
 
 - **Faheem Remote Support (MeshCentral, Apache-2.0):** the pharmacy double-clicks *Faheem Remote Support*;
