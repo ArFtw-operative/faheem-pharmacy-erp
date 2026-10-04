@@ -1136,6 +1136,8 @@ export function create(ctx, params, root) {
       for (const [aid, fn] of Object.entries(act)) if (keys.matches(aid, name)) { fn(); return true; }
       return false;
     },
+    // another counter changed purchases / stock / racks: show the current state (selection kept)
+    onDataChanged(areas) { if (areas.some((a) => ["purchases", "inventory", "locations"].includes(a))) load(); },
     onShow({ focus }) { if (focus) setTimeout(() => grid.focus(), 0); },
   };
 }

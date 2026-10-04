@@ -133,6 +133,7 @@ function renderTabs() {
     aria-selected="${t === active}" title="${esc(t.title)}${i < 9 ? " (Alt+" + (i + 1) + ")" : ""}">
     <span>${esc(t.title)}</span>${t.dirty ? '<b class="dot" title="Unsaved">•</b>' : ""}<i data-close="${t.id}" title="Close (${esc(keys.keyFor("app.closeTab"))})">×</i></button>`).join("");
   $("#modules").querySelectorAll("[data-module]").forEach((b) => b.classList.toggle("on", !!active && active.module === b.dataset.module));
+  if (typeof fitModules === "function" && $("#modules").querySelector("[data-module][hidden].on")) fitModules();
   tabList.innerHTML=`<option value="">All tabs (${tabs.length})</option>`+tabs.map(t=>`<option value="${esc(t.id)}">${t===active?'● ':''}${esc(t.title)}${t.dirty?' •':''}</option>`).join('');
   requestAnimationFrame(revealActiveTab);
 }
@@ -192,7 +193,40 @@ async function open(module, params = {}, { id, focus = true, fresh = false } = {
 }
 
 const recent = [];          // tab ids, most recently used first (tab switcher order)
+// ------------------------------------------------------------------ other counters (live refresh)
+// Every few seconds: what changed anywhere (GET /api/erp/sync, one tiny query). The screen on show
+// refreshes the areas that moved; screens in other tabs refresh when shown. Never while a dialog is
+// open (someone is in the middle of something) — that waits for the next round.
+let syncSeen = null;
+const pendingAreas = new Map();      // tab id → Set(areas) not yet shown to that tab
+function deliver(tab, areas) {
+  if (!areas.length || !tab.screen.onDataChanged) return;
+  try { tab.screen.onDataChanged(areas); } catch (err) { console.error(err); }
+}
+async function syncTick() {
+  if (document.hidden || !tabs.length) return;
+  let now;
+  try { now = (await api("/api/erp/sync")).versions; } catch { return; }
+  if (syncSeen === null) { syncSeen = now; return; }
+  const changed = Object.keys(now).filter((a) => now[a] !== syncSeen[a]);
+  if (!changed.length) return;
+  if (document.querySelector(".modal-backdrop, .ctx-menu")) return;          // try again next round
+  syncSeen = now;
+  for (const t of tabs) {
+    const set = pendingAreas.get(t.id) || new Set();
+    changed.forEach((a) => set.add(a));
+    pendingAreas.set(t.id, set);
+  }
+  if (active) { deliver(active, [...pendingAreas.get(active.id)]); pendingAreas.delete(active.id); }
+}
+setInterval(syncTick, 4000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) syncTick(); });
+
 function activate(tab, focus = true) {
+  if (pendingAreas.has(tab.id)) {     // changes made elsewhere while this tab was in the background
+    const areas = [...pendingAreas.get(tab.id)]; pendingAreas.delete(tab.id);
+    setTimeout(() => deliver(tab, areas), 0);
+  }
   const r = recent.indexOf(tab.id);
   if (r >= 0) recent.splice(r, 1);
   recent.unshift(tab.id);
@@ -309,9 +343,51 @@ tabBar.addEventListener("mousedown", (e) => {
 $("#modules").innerHTML = Object.entries(MODULES).filter(([m, d]) => !d.hidden && CAN_OPEN.has(m))
   .map(([m, d]) => `<button type="button" data-module="${m}" title="${esc(d.label)}${d.key ? " (" + d.key + ")" : ""}${d.href ? " — classic screen" : ""}">${esc(d.label)}</button>`).join("");
 $("#modules").addEventListener("click", (e) => {
+  const more = e.target.closest(".mod-more");
+  if (more) { toggleMoreMenu(more); return; }
   const b = e.target.closest("[data-module]");
-  if (b) open(b.dataset.module);
+  if (b) { closeMoreMenu(); open(b.dataset.module); }
 });
+
+// Every module stays reachable whatever the screen width or zoom: the bar tightens its spacing, then
+// moves the buttons that do not fit (never the open one) into "More ▾". Nothing hides off-screen.
+function fitModules() {
+  const nav = $("#modules"), bar = nav.closest(".appbar");
+  nav.querySelector(".mod-more")?.remove();
+  closeMoreMenu();
+  const buttons = [...nav.querySelectorAll("[data-module]")];
+  buttons.forEach((b) => { b.hidden = false; });
+  bar.classList.remove("compact", "tight");
+  const fits = () => nav.scrollWidth <= nav.clientWidth + 1;
+  if (fits()) return;
+  bar.classList.add("compact");
+  if (fits()) return;
+  bar.classList.add("tight");
+  if (fits()) return;
+  const more = h('<button type="button" class="mod-more" aria-haspopup="menu" title="More modules">More ▾</button>');
+  nav.append(more);
+  for (const b of [...buttons].reverse()) {
+    if (fits()) break;
+    if (b.classList.contains("on")) continue;
+    b.hidden = true;
+  }
+  more.classList.toggle("on", buttons.some((b) => b.hidden && b.classList.contains("on")));
+}
+function closeMoreMenu() { document.querySelector(".mod-menu")?.remove(); }
+function toggleMoreMenu(btn) {
+  if (document.querySelector(".mod-menu")) { closeMoreMenu(); return; }
+  const hidden = [...$("#modules").querySelectorAll("[data-module]")].filter((b) => b.hidden);
+  const menu = h(`<div class="mod-menu" role="menu">${hidden.map((b) => `<button type="button" role="menuitem" data-module="${b.dataset.module}">${esc(b.textContent)}</button>`).join("")}</div>`);
+  const r = btn.getBoundingClientRect();
+  menu.style.top = r.bottom + "px"; menu.style.right = Math.max(4, window.innerWidth - r.right) + "px";
+  menu.addEventListener("click", (e) => { const b = e.target.closest("[data-module]"); if (b) { closeMoreMenu(); open(b.dataset.module); } });
+  document.body.append(menu);
+  menu.querySelector("button")?.focus();
+}
+document.addEventListener("mousedown", (e) => { if (!e.target.closest(".mod-menu, .mod-more")) closeMoreMenu(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeMoreMenu(); });
+new ResizeObserver(() => fitModules()).observe(document.querySelector(".appbar"));
+fitModules();
 $("#operator-label").textContent = (BOOT.user && BOOT.user.name) || "";
 $("#st-right").textContent = [BOOT.pharmacy, (BOOT.user || {}).name].filter(Boolean).join(" · ");
 $("#st-right").classList.toggle("day-open", !!BOOT.session && BOOT.session.status !== "CLOSED");

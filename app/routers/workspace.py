@@ -31,6 +31,11 @@ def get_workspace(terminal: str = "", db: Session = Depends(get_db), user: User 
     if snap is None:
         snap = db.scalar(q.order_by(WorkspaceSnapshot.saved_at.desc()))
         other = snap is not None
+        # another PC that is in use right now keeps its own tabs and unfinished bills: a second counter
+        # (or a browser on another PC) starts clean instead of opening the same bills twice. Only a PC that
+        # has been quiet for a while (replaced, crashed) hands its work over.
+        if snap is not None and snap.saved_at is not None and (utcnow() - snap.saved_at).total_seconds() < 600:
+            return {"data": None, "other_terminal_active": True}
     if snap is None:
         return {"data": None}
     try:

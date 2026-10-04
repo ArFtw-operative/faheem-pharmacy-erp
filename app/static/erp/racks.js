@@ -491,5 +491,6 @@ export function create(ctx, params, root) {
     onKey(e, name) { const fn = KEYS[keys.lookup("racks", name)]; if (!fn) return false; fn(); return true; },
     onShow({ focus }) { refreshAll(); if (focus) setTimeout(() => list.focus(), 0); },
     navigate(p) { if (p && p.rack) loadRacks(Number(p.rack)); },
+    onDataChanged(areas) { if (areas.some((a) => a === "locations" || a === "inventory")) refreshAll(); },
   };
 }

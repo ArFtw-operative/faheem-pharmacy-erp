@@ -22,7 +22,15 @@ def test_snapshot_is_saved_per_counter_and_restored(client, db):
     other = {**DATA, "active": "t9"}
     client.put("/api/erp/workspace", json={"terminal": "counter-2", "data": other})
     assert client.get("/api/erp/workspace?terminal=counter-1").json()["data"]["active"] == "t1"        # counters apart
-    lost = client.get("/api/erp/workspace?terminal=never-seen").json()                                  # id lost: latest
+    busy = client.get("/api/erp/workspace?terminal=never-seen").json()        # counter-2 is in use: never copied
+    assert busy["data"] is None and busy["other_terminal_active"] is True
+    from datetime import timedelta
+    from app.models import WorkspaceSnapshot
+    from app.utils import utcnow
+    for snap in db.query(WorkspaceSnapshot).all():
+        snap.saved_at = utcnow() - timedelta(hours=1)
+    db.commit()
+    lost = client.get("/api/erp/workspace?terminal=never-seen").json()        # quiet for an hour: id lost → latest
     assert lost["data"]["active"] == "t9" and lost["other_terminal"] is True
 
 

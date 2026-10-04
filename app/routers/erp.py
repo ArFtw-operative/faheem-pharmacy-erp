@@ -175,6 +175,13 @@ async def erp_item_form_update(code: str, request: Request, db: Session = Depend
 
 
 # --------------------------------------------------------------------------- keyboard shortcuts
+@router.get("/api/erp/sync")
+def erp_sync(db: Session = Depends(get_db), user: User = Depends(require_login)):
+    """What changed anywhere (a counter per area): open screens on every PC refresh what moved."""
+    from app.services import sync_service
+    return {"versions": sync_service.versions(db)}
+
+
 @router.get("/api/erp/keymap")
 def erp_keymap(db: Session = Depends(get_db), user: User = Depends(require_login)):
     return keymap_service.payload(db, user)

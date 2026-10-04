@@ -620,6 +620,13 @@ export function create(ctx, params, root) {
       if (focus) setTimeout(() => qIn.focus(), 0);
     },
     adjust, newProduct, importSheet,
+    onDataChanged(areas) {
+      if (areas.includes("masters")) loadChoices();
+      if (areas.some((a) => ["inventory", "locations", "purchases", "masters"].includes(a))) {
+        details.clear(); locCache.clear(); load({ keep: true });
+        if (detail) fetchDetail(detail.id);
+      }
+    },
     navigate(p) {
       if (p && "location" in p) { F.location = p.location || ""; $(".f-location", root).value = F.location; load(); }
     },

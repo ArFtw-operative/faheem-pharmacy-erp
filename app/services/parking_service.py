@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app import audit
@@ -134,11 +134,14 @@ def resume_parked(
 ) -> ParkedSale:
     if parked.status != "PARKED":
         raise ParkedClaimConflict(parked)
-    parked.status = "CLAIMED"
-    parked.resumed_by_user_id = user.id if user else None
-    parked.resumed_at = business_time.now(db)
-    parked.version += 1
-    db.flush()
+    # one guarded statement: when two counters resume the same bill at the same moment, exactly one wins
+    claimed = db.execute(update(ParkedSale).where(ParkedSale.id == parked.id, ParkedSale.status == "PARKED")
+                         .values(status="CLAIMED", resumed_by_user_id=user.id if user else None,
+                                 resumed_at=business_time.now(db), version=ParkedSale.version + 1)
+                         .execution_options(synchronize_session=False)).rowcount
+    db.refresh(parked)
+    if claimed != 1:
+        raise ParkedClaimConflict(parked)
     audit.record(
         db, action=audit.A_UPDATE, entity_type="parked_sale", entity_id=parked.park_reference,
         user=user, after=audit.snapshot(parked),

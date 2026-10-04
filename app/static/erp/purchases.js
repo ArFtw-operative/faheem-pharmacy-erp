@@ -131,6 +131,7 @@ export function create(ctx, params, root) {
       if (keys.matches("purchases.return", name)) { show("returns"); panels.returns.create(); return true; }
       return panels[current].onKey(e, name);
     },
+    onDataChanged(areas) { if (areas.some((a) => a === "purchases" || a === "inventory")) Object.values(panels).forEach((p) => p.reload()); },
     onShow({ focus }) { Object.values(panels).forEach((p) => p.reload()); if (focus) setTimeout(() => panels[current].shown(true), 0); },
   };
 }

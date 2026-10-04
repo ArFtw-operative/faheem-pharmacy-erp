@@ -50,6 +50,12 @@ def _set_sqlite_pragma(dbapi_connection, _connection_record) -> None:
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
 
+def _install_sync() -> None:
+    """Change counters for open screens on other PCs (app/services/sync_service.py)."""
+    from app.services import sync_service
+    sync_service.install(SessionLocal)
+
+
 class Base(DeclarativeBase):
     pass
 

@@ -1165,3 +1165,15 @@ class LocationEvent(Base):
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     username: Mapped[str] = mapped_column(String(60), default="system")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class SyncVersion(Base):
+    """One counter per data area (inventory, purchases, sales …), bumped in the same transaction as any
+    change to that area. Open screens on every PC compare these to refresh what changed elsewhere
+    (app/services/sync_service.py)."""
+
+    __tablename__ = "sync_versions"
+
+    area: Mapped[str] = mapped_column(String(20), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, default=0)
+    changed_at: Mapped[datetime | None] = mapped_column(DateTime)

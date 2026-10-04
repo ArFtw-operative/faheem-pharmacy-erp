@@ -1454,6 +1454,9 @@ export function create(ctx, params, root, saved) {
       fn();
       return true;
     },
+    // stock / prices / racks changed on another counter: the next search shows them (the sale itself is
+    // always checked against the database when it is completed)
+    onDataChanged(areas) { if (areas.some((a) => ["inventory", "locations"].includes(a))) cache.clear(); },
     onShow({ focus }) { if (focus) setTimeout(() => (overlay ? overlay.querySelector(".pos-sheet") : q).focus(), 0); },
     prepareShortcut() {
       const inp = $(".qty-in, .disc-in", tbody);

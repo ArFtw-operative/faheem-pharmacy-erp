@@ -375,6 +375,7 @@ export function create(ctx, params, root) {
       for (const [id, fn] of Object.entries(act)) if (keys.matches(id, name)) { fn(); return true; }
       return false;
     },
+    onDataChanged(areas) { if (areas.some((a) => a === "sales" || a === "customers")) { cache.clear(); reload(); } },
     onShow({ focus }) { cache.clear(); reload(); if (focus) setTimeout(() => grid.focus(), 0); },
     onHide: hideTip,
   };

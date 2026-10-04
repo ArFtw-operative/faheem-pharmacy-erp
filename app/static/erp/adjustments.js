@@ -159,6 +159,7 @@ export function create(ctx, params, root) {
       for (const [id, fn] of Object.entries(act)) if (keys.matches(id, name)) { fn(); return true; }
       return false;
     },
+    onDataChanged(areas) { if (areas.includes("inventory")) reload(); },
     onShow({ focus }) { reload(); if (focus) setTimeout(() => grid.focus(), 0); },
   };
 }

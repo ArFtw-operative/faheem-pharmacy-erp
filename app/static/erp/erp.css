@@ -798,3 +798,15 @@ body.resizing { cursor: col-resize; user-select: none; }
 .tabsw-n { color: var(--muted); font-family: var(--mono, ui-monospace, monospace); font-size: 12px; }
 .tabsw-none { padding: 10px 12px; }
 .tag.warn { background: var(--warn-bg); color: var(--warn); }
+/* top bar: tighter when space runs out, then "More ▾" — every module stays reachable */
+.appbar.compact { gap: 10px; }
+.appbar.compact .modules button { padding: 0 9px; }
+.appbar.compact #clock { display: none; }
+.appbar.tight .brand { display: none; }
+.appbar.tight .modules button { padding: 0 7px; font-size: 12.5px; }
+.appbar.tight #operator-label { display: none; }
+.modules .mod-more { background: none; border: 0; border-bottom: 3px solid transparent; color: var(--bar-muted); padding: 0 10px; cursor: pointer; font-weight: 600; flex-shrink: 0; white-space: nowrap; }
+.modules .mod-more:hover, .modules .mod-more.on { color: #fff; }
+.mod-menu { position: fixed; z-index: 60; min-width: 190px; background: #fff; border: 1px solid #9fb0b6; box-shadow: 0 10px 28px rgba(0,0,0,.25); padding: 4px 0; }
+.mod-menu button { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 8px 14px; font-weight: 600; cursor: pointer; }
+.mod-menu button:hover, .mod-menu button:focus { background: #e3f1e8; outline: none; }

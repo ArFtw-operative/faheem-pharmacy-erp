@@ -54,6 +54,14 @@ def seed_defaults() -> None:
             if db.get(Setting, key) is None:
                 db.add(Setting(key=key, value=value, value_type=vtype, label=label))
 
+        # change counters for multi-counter screens
+        from app.models import SyncVersion
+        from app.services.sync_service import AREAS
+        have_areas = set(db.scalars(select(SyncVersion.area)))
+        for area in AREAS:
+            if area not in have_areas:
+                db.add(SyncVersion(area=area, version=0))
+
         # Product category master
         from app.models import Category
         from app.services.category_service import DEFAULT_NAMES, DEFAULTS as DEFAULT_CATEGORIES

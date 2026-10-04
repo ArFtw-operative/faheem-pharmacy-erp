@@ -13,7 +13,9 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import APP_BUILD, APP_NAME, APP_VERSION, STATIC_DIR
-from app.database import SessionLocal, init_db
+from app.database import SessionLocal, _install_sync, init_db
+
+_install_sync()      # change counters for screens open on other PCs
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("pharmacy")

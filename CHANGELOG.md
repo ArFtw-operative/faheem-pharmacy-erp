@@ -3,6 +3,19 @@
 Release notes for Faheem Pharmacy. Versions follow semantic versioning; every release
 lists its database migrations. Upgrades keep all business history (see docs/UPGRADES.md).
 
+## 1.9.2 (2026-10-04)
+
+- **Two counters at once (shop PC + a browser on another PC, same or different user):** every change bumps a
+  per-area counter (`sync_versions`, migration f6b8d0a2c4e7, additive) in the same transaction; each open
+  ERP checks it every 4 s and refreshes the screens whose data moved — Inventory, Racks, Purchases and the
+  open purchase, POS search, Sales, Customers, Adjustments — keeping the selection and never during an
+  open dialog. Tested with two browsers: a rack move / category change on one shows on the other in 3–4 s.
+- A browser opened while another PC is in use starts with its own tabs (it no longer copies that PC's open
+  bills); a PC quiet for 10 minutes still hands its work over (replaced / crashed PC).
+- Resuming a parked bill is one guarded update: two counters resuming the same bill — exactly one gets it.
+- **Top bar never cuts modules off:** it tightens its spacing on narrow screens / zoom and puts what still does
+  not fit in **More ▾** (Settings, Racks … stay one click away; the open module is never hidden).
+
 ## 1.9.1 (2026-10-04)
 
 - **Purchase drafts made before an update are counted by the new engine:** each draft records the engine

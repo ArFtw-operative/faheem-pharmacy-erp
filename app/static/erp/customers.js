@@ -66,6 +66,7 @@ export function create(ctx, params, root) {
       if (keys.matches("cust.panel", name)) { show(PANELS[(PANELS.indexOf(current) + 1) % PANELS.length]); return true; }
       return panels[current].onKey(e, name);
     },
+    onDataChanged(areas) { if (areas.some((a) => a === "customers" || a === "sales")) panels[current].reload(); },
     onShow({ focus }) { panels[current].reload(); if (focus) setTimeout(() => panels[current].focus(), 0); },
   };
 }
