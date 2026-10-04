@@ -3,7 +3,7 @@ import { openShortcuts } from "erp/shortcuts";
 // ERP shell: module bar, workspace tabs (state kept alive while switching),
 // global keyboard map, command palette (Ctrl+K), quick product lookup (Ctrl+F),
 // status bar. Screens are ES modules exporting create(ctx, params, saved).
-import { $, BOOT, api, esc, fmtExpShort, h, keyName, money, store } from "erp/core";
+import { $, BOOT, api, esc, fmtExpShort, h, keyName, money, store, unitName } from "erp/core";
 
 const MODULES = {
   pos: { label: "POS", key: "Alt+P", load: () => import("erp/pos"), multi: true },
@@ -385,8 +385,10 @@ function lookup() {
       const d = await api("/api/erp/pos/search?limit=6&q=" + encodeURIComponent(term), { signal: ctrl.signal });
       res.innerHTML = d.items.map((p) => {
         const b = p.batches[0];
-        return `<div class="lk-item"><b>${esc(p.name)}</b> <span class="muted">${esc(p.code)}${p.rack ? " · Rack " + esc(p.rack) : ""}</span>
-          <div>Stock <b>${p.stock}</b> ${esc((p.base_unit || "").toLowerCase())}s · ${esc(p.stock_label)}${b ? ` · MRP ₹${money(b.pack_mrp)}${p.upp > 1 ? " / ₹" + money(b.unit_mrp) : ""} · Exp ${fmtExpShort(b.expiry)}` : " · no sellable batch"}</div></div>`;
+        const off = p.active === false;
+        return `<div class="lk-item${off ? " lk-off" : ""}"><b>${esc(p.name)}</b> <span class="muted">${esc(p.code)}${p.rack ? " · Rack " + esc(p.rack) : ""}</span>
+          ${off ? '<span class="tag off">Disabled — not for sale</span>' : p.stock > 0 ? '<span class="tag ok">Active</span>' : '<span class="tag">Active · out of stock</span>'}
+          <div>Stock <b>${p.stock}</b> ${esc(unitName(p.base_unit, p.stock))} · ${esc(p.stock_label)}${b ? ` · MRP ₹${money(b.pack_mrp)}${p.upp > 1 ? " / ₹" + money(b.unit_mrp) : ""} · Exp ${fmtExpShort(b.expiry)}` : " · no sellable batch"}</div></div>`;
       }).join("") || '<div class="muted">No product found</div>';
     } catch (err) { if (err.name !== "AbortError") res.textContent = err.message; }
   };
