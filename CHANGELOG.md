@@ -3,7 +3,7 @@
 Release notes for Faheem Pharmacy. Versions follow semantic versioning; every release
 lists its database migrations. Upgrades keep all business history (see docs/UPGRADES.md).
 
-## Unreleased (next: 1.9.0)
+## 1.9.0 (2026-10-04)
 
 - **Faheem Remote Support (MeshCentral, Apache-2.0):** the pharmacy double-clicks *Faheem Remote Support*;
   the PC connects outbound to `remote.faheemerp.in` and shows online under its readable name

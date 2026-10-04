@@ -34,6 +34,7 @@ Faheem Pharmacy ERP — appliance control
   faheem-erp reset-test-data        reset business data: stock, products, purchases, sales (keeps customers, users, WhatsApp)
   faheem-erp force-update           install the newest fixes from prod right now (backup first)
   faheem-erp import-sqlite FILE     move an existing pharmacy.db into this (empty) installation
+  faheem-erp import-medicine-reference FILE   load the medicine reference list (XLSX / CSV) used for purchase price evidence
   faheem-erp user …                 accounts: list, add, passwd, rename --name, disable, enable, reset-2fa, unlock
   faheem-erp manage …               any scripts/manage.py command (settings, roles, version, deployments)
   faheem-erp maintenance            run the 05:00 maintenance now (may reboot when DAILY_HOST_REBOOT=true)
@@ -134,6 +135,19 @@ db.execute('DROP SCHEMA public CASCADE'); db.execute('CREATE SCHEMA public')" >/
       die "import refused or failed — the installation is as it was"
     fi
     start
+    ;;
+  import-medicine-reference)
+    require_root
+    src="$(readlink -f "${1:?usage: faheem-erp import-medicine-reference /path/to/list.xlsx}")"
+    [ -f "$src" ] || die "no file at $1"
+    case "${src,,}" in *.xlsx|*.xlsm|*.csv) ;; *) die "give an .xlsx or .csv file" ;; esac
+    inbox="$FAHEEM_DATA/application-data/incoming"
+    install -d -m 750 -o "$(env_get FAHEEM_UID)" -g "$(env_get FAHEEM_GID)" "$inbox"
+    name="$(basename "$src" | tr -c 'A-Za-z0-9._\n-' '_')"
+    install -m 640 -o "$(env_get FAHEEM_UID)" -g "$(env_get FAHEEM_GID)" "$src" "$inbox/$name"
+    if dc run --rm --no-TTY tools python scripts/import_medicine_reference.py --file "/var/lib/faheem-erp/application-data/incoming/$name"; then
+      rm -f "$inbox/$name"; dc restart web >/dev/null && wait_ready 120 && ok "Medicine reference imported"
+    else rm -f "$inbox/$name"; die "the import failed (see above)"; fi
     ;;
   user)
     require_root
