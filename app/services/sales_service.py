@@ -157,7 +157,8 @@ def _add_manual_lines(db: Session, sale: Sale, lines: list[dict[str, Any]]) -> t
     return money(subtotal), money(gross_total)
 
 
-def _add_lines(db: Session, sale: Sale, lines: list[dict[str, Any]], *, user, ip_address: str) -> tuple[Decimal, Decimal]:
+def _add_lines(db: Session, sale: Sale, lines: list[dict[str, Any]], *, user, ip_address: str,
+               already_billed: frozenset = frozenset()) -> tuple[Decimal, Decimal]:
     """Allocate stock, post SALE movements and write the sale rows.
 
     Returns ``(subtotal after line discounts, gross MRP value)``.
@@ -171,6 +172,10 @@ def _add_lines(db: Session, sale: Sale, lines: list[dict[str, Any]], *, user, ip
         item = db.get(Item, line.get("item_id"))
         if item is None:
             raise SaleError(f"Item {line.get('item_id')} not found")
+        if (not item.is_active or item.deleted_at is not None) and item.id not in already_billed:
+            # a disabled product is not sold; a bill that already carried it can still be edited
+            raise SaleError(f"{item.name} is {'in the recycle bin' if item.deleted_at else 'disabled'} and cannot be sold. "
+                            "Enable it in Inventory first.")
         quantity = _line_quantity(line, item, db)
         try:
             units.check_sale_quantity(
@@ -665,6 +670,7 @@ def amend_sale(
     before = {**audit.snapshot(sale), "lines": _line_audit(sale),
               "payments": [{"mode": p.mode, "amount": str(p.amount)} for p in sale.payments]}
 
+    billed = frozenset(i.item_id for i in sale.items if i.item_id)
     _restore_sale_stock(db, sale, user=user, ip_address=ip_address, reason=f"Edit of {sale.invoice_no}")
     for line in list(sale.items):
         db.delete(line)
@@ -680,7 +686,7 @@ def amend_sale(
     if (sale.invoice_type or "INVENTORY") == "MANUAL":
         subtotal, gross = _add_manual_lines(db, sale, lines)
     else:
-        subtotal, gross = _add_lines(db, sale, lines, user=user, ip_address=ip_address)
+        subtotal, gross = _add_lines(db, sale, lines, user=user, ip_address=ip_address, already_billed=billed)
     _apply_totals_and_payments(
         db, sale, subtotal, gross=gross, discount=discount, discount_pct=discount_pct, voucher=voucher,
         round_off_mode=round_off_mode, payment_mode=payment_mode, payments=payments, cash_received=cash_received,

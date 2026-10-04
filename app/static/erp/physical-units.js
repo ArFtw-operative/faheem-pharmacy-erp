@@ -1,7 +1,7 @@
 import { BOOT, api, esc, h, modal, toBase, unitName } from 'erp/core';
 
-// Item forms come from the form master (Masters → Item forms). The last entry of every
-// form list creates a new form on the spot.
+// Item forms come from the form master (Categories & Forms → Item forms). The last entry of every
+// form list creates a new form on the spot. pickCategory is the same for categories.
 export const NEW_FORM = '__new__';
 const units = () => BOOT.units || { base: [], pack: [] };
 export const forms = () => (BOOT.item_forms || []).filter((f) => f.active !== false);
@@ -33,13 +33,54 @@ export async function createForm() {
       <label>Retail pack<select name="pack_unit">${opt(u.pack, 'PIECE')}</select></label>
       <label class="chk full"><input type="checkbox" name="counted"> One pack holds several stock units (e.g. tablets in a strip, syringes in a box)</label>
       <label>Container holds<select name="content_unit"><option value="">— nothing measured —</option><option value="ML">mL</option><option value="G">g</option><option value="MG">mg</option></select></label>
-      <p class="full hint">The new form is available everywhere a form is chosen. Masters → Item forms lists and hides forms.</p></div>`,
+      <p class="full hint">The new form is available everywhere a form is chosen. Categories & Forms → Item forms lists and hides forms.</p></div>`,
     onSubmit: (form) => api('/api/erp/item-forms', { method: 'POST', body: {
       name: form.elements.name.value, base_unit: form.elements.base_unit.value, pack_unit: form.elements.pack_unit.value,
       counted: form.elements.counted.checked, content_unit: form.elements.content_unit.value } }) });
   if (!out) return null;
   BOOT.item_forms = out.forms;
   return out.form;
+}
+
+export const NEW_CATEGORY = '__new__';
+
+/**
+ * Ask for a category from the live list (a drop-down, read from the database each time), with
+ * "＋ New category…" at the bottom. Resolves with { code, name } or null; ``apply(code)`` runs on
+ * Apply and its result is returned as ``result`` (an error keeps the dialog open).
+ */
+export async function pickCategory({ title = 'Change category', intro = '', extra = '', current = '', apply, wide = false, submitLabel = 'Apply' }) {
+  const { categories } = await api('/api/erp/categories');
+  const active = categories.filter((c) => c.active);
+  const body = h(`<div class="form-grid">
+    ${intro ? `<p class="full">${intro}</p>` : ''}
+    <label class="full">Category<select name="category" autofocus>
+      ${current ? '' : '<option value="" selected>— choose —</option>'}
+      ${active.map((c) => `<option value="${esc(c.code)}" ${c.code === current ? 'selected' : ''}>${esc(c.name)} (${c.products})</option>`).join('')}
+      <option value="${NEW_CATEGORY}">＋ New category…</option></select></label>
+    <label class="full" data-new hidden>New category name<input name="new_name" maxlength="60" placeholder="e.g. OTC, Cosmetics, Veterinary"></label>
+    ${extra ? `<div class="full">${extra}</div>` : ''}
+  </div>`);
+  const sel = body.querySelector('[name="category"]'), box = body.querySelector('[data-new]');
+  sel.addEventListener('change', () => { box.hidden = sel.value !== NEW_CATEGORY; if (!box.hidden) box.querySelector('input').focus(); });
+  let chosen = null;
+  const out = await modal({ title, body, wide, submitLabel, onOpen: () => sel.focus(),
+    onSubmit: async (form) => {
+      let code = sel.value, name = sel.selectedOptions[0]?.textContent.replace(/ \(\d+\)$/, '');
+      if (code === NEW_CATEGORY) {
+        name = form.elements.new_name.value.trim();
+        if (!name) throw new Error('Type the new category name');
+        const made = await api('/api/erp/categories', { method: 'POST', body: { name } });
+        code = made.code;
+        BOOT.category_options = made.categories.filter((c) => c.active).map((c) => ({ code: c.code, name: c.name }));
+        sel.insertAdjacentHTML('afterbegin', `<option value="${esc(code)}">${esc(name)}</option>`);
+        sel.value = code; box.hidden = true;           // a failure below does not create it twice
+      }
+      if (!code) throw new Error('Choose a category');
+      chosen = { code, name };
+      return apply ? apply(code) : true;
+    } });
+  return out ? { ...chosen, result: out } : null;
 }
 
 /** Make a form <select> open "Create new form…" when its last option is chosen. */

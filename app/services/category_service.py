@@ -1,4 +1,4 @@
-"""Product category master, managed by the pharmacy (Masters → Categories).
+"""Product category master, managed by the pharmacy (Categories & Forms).
 
 Categories are rows in ``categories``; products refer to them by ``code``. The
 database enforces the relationship (triggers: a product's category must exist;

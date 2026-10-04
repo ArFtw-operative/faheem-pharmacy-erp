@@ -36,7 +36,7 @@ ACTIONS: list[dict] = [
     {"id": "app.history", "scope": "global", "group": "Everywhere", "label": "Go to Stock History", "key": "Alt+Shift+H"},
     {"id": "app.adjustments", "scope": "global", "group": "Everywhere", "label": "Go to Stock adjustments", "key": "Alt+Shift+A"},
     {"id": "app.customers", "scope": "global", "group": "Everywhere", "label": "Go to Customers", "key": "Alt+Shift+C"},
-    {"id": "app.masters", "scope": "global", "group": "Everywhere", "label": "Go to Masters", "key": "Alt+M"},
+    {"id": "app.masters", "scope": "global", "group": "Everywhere", "label": "Go to Categories & Forms", "key": "Alt+M"},
     {"id": "app.reports", "scope": "global", "group": "Everywhere", "label": "Go to Reports", "key": "Alt+R"},
     # ---- POS
     {"id": "pos.search", "scope": "pos", "group": "POS", "label": "Item search", "key": "F2", "bar": 1},
@@ -73,14 +73,14 @@ ACTIONS: list[dict] = [
     {"id": "reports.export", "scope": "reports", "group": "Reports", "label": "Export report to Excel", "key": "Ctrl+E", "bar": 5},
     {"id": "reports.view", "scope": "reports", "group": "Reports", "label": "Switch grid / document view", "key": "F6", "bar": 7},
     {"id": "reports.refresh", "scope": "reports", "group": "Reports", "label": "Refresh generated report", "key": "F5", "bar": 6},
-    # ---- Masters
-    {"id": "masters.search", "scope": "masters", "group": "Masters", "label": "Search", "key": "F2", "bar": 1},
-    {"id": "masters.refresh", "scope": "masters", "group": "Masters", "label": "Refresh", "key": "F5", "bar": 2},
-    {"id": "masters.panel", "scope": "masters", "group": "Masters", "label": "Switch list (Categories / Units of measure / Item forms)", "key": "F6", "bar": 3},
-    {"id": "masters.new", "scope": "masters", "group": "Masters", "label": "New category / item form", "key": "F3", "bar": 4},
-    {"id": "masters.merge", "scope": "masters", "group": "Masters", "label": "Merge category into another", "key": "F4", "bar": 5},
-    {"id": "masters.up", "scope": "masters", "group": "Masters", "label": "Move category up", "key": "Alt+ArrowUp"},
-    {"id": "masters.down", "scope": "masters", "group": "Masters", "label": "Move category down", "key": "Alt+ArrowDown"},
+    # ---- Categories & Forms
+    {"id": "masters.search", "scope": "masters", "group": "Categories & Forms", "label": "Search", "key": "F2", "bar": 1},
+    {"id": "masters.refresh", "scope": "masters", "group": "Categories & Forms", "label": "Refresh", "key": "F5", "bar": 2},
+    {"id": "masters.panel", "scope": "masters", "group": "Categories & Forms", "label": "Switch list (Categories / Item forms)", "key": "F6", "bar": 3},
+    {"id": "masters.new", "scope": "masters", "group": "Categories & Forms", "label": "New category / item form", "key": "F3", "bar": 4},
+    {"id": "masters.merge", "scope": "masters", "group": "Categories & Forms", "label": "Merge category into another", "key": "F4", "bar": 5},
+    {"id": "masters.up", "scope": "masters", "group": "Categories & Forms", "label": "Move category up", "key": "Alt+ArrowUp"},
+    {"id": "masters.down", "scope": "masters", "group": "Categories & Forms", "label": "Move category down", "key": "Alt+ArrowDown"},
     # ---- Sales history & returns
     {"id": "sales.search", "scope": "sales", "group": "Sales history", "label": "Search bill, customer, product or batch", "key": "F2", "bar": 1},
     {"id": "sales.period", "scope": "sales", "group": "Sales history", "label": "Focus date range", "key": "Alt+T", "bar": 2},
@@ -155,7 +155,7 @@ FIXED = [
     ("Tab", "Next field (Qty → Disc % in the bill)"), ("Alt+1 … Alt+9", "Switch to tab 1–9"),
     ("Delete", "Remove the selected bill line (asks first)"), ("+ / −", "Change quantity of the selected line"),
     ("1s · 2s+3", "Qty shorthand: one strip · two strips and three units"), ("#", "In the item box: jumps to the Customer field"),
-    ("Space", "Select a row (Masters)"), ("Shift+F10 / Menu key", "Row context menu"),
+    ("Space", "Select a row (Categories & Forms)"), ("Shift+F10 / Menu key", "Row context menu"),
 ]
 
 # The browser (or the OS) keeps these for itself: a web page can never use them.

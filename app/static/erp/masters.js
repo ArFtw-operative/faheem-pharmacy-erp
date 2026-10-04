@@ -1,16 +1,16 @@
-// Masters — data the pharmacy maintains itself, no developer involved.
+// Categories & Forms — the two lists the pharmacy maintains itself.
 //
-//   Categories         the product category master (add, rename, reorder,
-//                      activate/deactivate, merge, delete when unused). The
-//                      database enforces that every product's category exists.
-//   Units of measure   how each product is counted (detected automatically from
-//                      its pack and form; Enter corrects an exception).
-//   Item forms         the form master (tablets, syrup bottles, cannulas …): built-in
-//                      forms plus the pharmacy's own (F3 adds one, Space hides one).
+//   Categories         the product category list (add, rename, reorder, activate /
+//                      deactivate, merge, delete when unused). The database
+//                      enforces that every product's category exists.
+//   Item forms         how each kind of product is counted (tablets in strips, syrup
+//                      bottles, cannulas …): built-in forms plus the pharmacy's own.
 //
+// How each product is counted (units of measure) is set in Inventory: the Packaging
+// filter lists products by setup, and the product editor's Packaging tab changes it.
 // F6 switches between the lists.
 import * as keys from "erp/keys";
-import { $, $$, BOOT, api, debounce, esc, h, modal, toBase, unitName } from "erp/core";
+import { $, $$, BOOT, api, esc, h, modal, unitName } from "erp/core";
 import { Grid } from "erp/grid";
 import { createForm } from "erp/physical-units";
 
@@ -21,20 +21,17 @@ export function create(ctx, params, root) {
   root.innerHTML = `<div class="masters">
     <div class="mtabs" role="tablist">
       <button type="button" data-panel="categories" role="tab">Categories</button>
-      <button type="button" data-panel="uom" role="tab">Units of measure</button>
       <button type="button" data-panel="forms" role="tab">Item forms</button>
       <span class="hint">F6 switches</span>
     </div>
     <section class="mpanel" data-panel="categories"></section>
-    <section class="mpanel" data-panel="uom" hidden></section>
     <section class="mpanel" data-panel="forms" hidden></section>
   </div>`;
   const panels = {
     categories: categoriesPanel(ctx, $('.mpanel[data-panel="categories"]', root), CAN),
-    uom: uomPanel(ctx, $('.mpanel[data-panel="uom"]', root), CAN),
     forms: formsPanel(ctx, $('.mpanel[data-panel="forms"]', root), CAN),
   };
-  const ORDER = ["categories", "uom", "forms"];
+  const ORDER = ["categories", "forms"];
   let current = ORDER.includes(params.panel) ? params.panel : "categories";
   function show(name, focus = true) {
     current = name;
@@ -154,94 +151,6 @@ function categoriesPanel(ctx, el, CAN) {
       if (keys.matches("masters.down", name)) { moveBy(grid.selected, 1); return true; }
       if (keys.matches("masters.refresh", name)) { load(); return true; }
       if (keys.matches("masters.search", name)) { grid.focus(); return true; }
-      return false;
-    },
-  };
-}
-
-// ---------------------------------------------------------------------- units of measure
-function uomPanel(ctx, el, CAN) {
-  let rows = [];
-  el.innerHTML = `
-    <div class="filters">
-      <b>Units of measure</b>
-      <label>Search<input class="m-q" autocomplete="off" placeholder="name, code or pack"></label>
-      <label>Show<select class="m-scope">
-        <option value="all">All products</option><option value="loose">Sold loose</option><option value="whole">Sold whole</option>
-        <option value="undetected">Not detected (sold per unit)</option><option value="manual">Corrected by a user</option></select></label>
-      <span class="spacer"></span><span class="m-count muted"></span>
-    </div>
-    <p class="m-help">Configured automatically from the printed pack and form — no manual loose-sale switch.
-      Purchases, imports, POS, returns and adjustments all convert through this setup: 1 strip received = +10 tablets; 1 bottle = 1 bottle (200 mL is content, not stock).
-      <kbd>Enter</kbd> corrects an exception.</p>`;
-  const grid = new Grid({
-    label: "Units of measure", storageKey: "masters-uom", empty: "No products.",
-    columns: [
-      { key: "code", label: "Code", width: 90, render: (r) => `<span class="mono">${esc(r.code)}</span>` },
-      { key: "name", label: "Product", width: 290, render: (r) => `<b>${esc(r.name)}</b>` },
-      { key: "pack_raw", label: "Pack", width: 70 },
-      { key: "form", label: "Form", width: 86, render: (r) => esc(t(r.form)) },
-      { key: "base_unit", label: "Sale / Stock unit", width: 110, render: (r) => esc(t(r.base_unit)) },
-      { key: "pack_unit", label: "Purchase unit", width: 100, render: (r) => esc(t(r.pack_unit)) },
-      { key: "upp", label: "Conversion", width: 120, render: (r) => (r.upp > 1 ? `1 ${esc(t(r.pack_unit).toLowerCase())} = ${r.upp} ${esc(unitName(r.base_unit, r.upp))}` : "1 : 1") },
-      { key: "loose", label: "Loose", width: 56, align: "center", render: (r) => (r.loose ? "Yes" : "No") },
-      { key: "content", label: "Content", width: 80 },
-      { key: "stock", label: "Stock", width: 150, align: "num", render: (r) => `${r.stock} ${esc(unitName(r.base_unit, r.stock))}${r.upp > 1 && r.stock ? ` <small>${esc(r.stock_label)}</small>` : ""}` },
-      { key: "source", label: "Set by", width: 86, cellClass: (r) => (r.source === "MANUAL" ? "st-low" : !r.detected ? "st-out" : ""), render: (r) => (r.source === "MANUAL" ? "Corrected" : r.detected ? "Auto" : "Not detected") },
-    ],
-    onActivate: (r) => correct(r),
-  });
-  el.append(grid.el);
-
-  const q = $(".m-q", el), scope = $(".m-scope", el);
-  let loaded = false;
-  async function load() {
-    try {
-      const d = await api(`/api/erp/uom?scope=${scope.value}&q=${encodeURIComponent(q.value.trim())}`);
-      rows = d.rows;
-      grid.setRows(rows, { keep: true });
-      $(".m-count", el).textContent = `${d.total} product${d.total === 1 ? "" : "s"}`;
-      loaded = true;
-    } catch (err) { ctx.status(err.message, "error"); }
-  }
-  const reload = debounce(load, 150);
-  q.addEventListener("input", reload);
-  q.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === "ArrowDown") { e.preventDefault(); grid.focus(); } });
-  scope.addEventListener("change", load);
-  grid.el.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); q.focus(); } }, true);
-
-  async function correct(r) {
-    if (!CAN["inventory.edit"]) { ctx.status("Correcting a unit of measure needs inventory edit rights", "warn"); return; }
-    const det = r.detected;
-    const body = h(`<div class="form-grid">
-      <p class="full"><b>${esc(r.name)}</b> · pack <b>${esc(r.pack_raw || "—")}</b> · stock ${r.stock} ${esc(unitName(r.base_unit, r.stock))}<br>
-        <span class="hint">Detected: ${det ? esc(det.reason) : "nothing usable in the pack text"}</span></p>
-      <label>Sale / stock unit<select name="base_unit">${BOOT.units.base.map((u) => `<option value="${u}" ${u === r.base_unit ? "selected" : ""}>${t(u)}</option>`).join("")}</select></label>
-      <label>Purchase unit<select name="pack_unit">${BOOT.units.pack.map((u) => `<option value="${u}" ${u === r.pack_unit ? "selected" : ""}>${t(u)}</option>`).join("")}</select></label>
-      <label>Sale units per purchase unit<input name="units_per_pack" type="number" min="1" max="10000" value="${r.upp}" autofocus></label>
-      <label>Dosage form<select name="dosage_form">${BOOT.units.forms.map((u) => `<option value="${u}" ${u === r.form ? "selected" : ""}>${u ? t(u) : "—"}</option>`).join("")}</select></label>
-      <p class="full preview"></p></div>`);
-    const sync = () => {
-      const upp = Number(body.querySelector("[name=units_per_pack]").value) || 1;
-      const unit = body.querySelector("[name=base_unit]").value;
-      const after = r.upp === 1 ? toBase(r.stock, upp) : r.stock;
-      body.querySelector(".preview").innerHTML = `${upp > 1 ? "Sold loose automatically" : "Sold whole"}. `
-        + (r.stock ? `Stock becomes <b>${after}</b> ${esc(unitName(unit, after))}${r.upp === 1 && upp > 1 ? ` (${r.stock} × ${upp}, posted to the ledger)` : ""}.` : "Future stock is counted this way.");
-    };
-    body.addEventListener("input", sync);
-    body.addEventListener("change", sync);
-    const out = await modal({
-      title: "Correct unit of measure — " + r.name, body, submitLabel: "Save correction", onOpen: sync,
-      onSubmit: (form) => api(`/api/erp/inventory/${r.id}`, { method: "PUT", body: Object.fromEntries(new FormData(form).entries()) }),
-    });
-    if (out) { ctx.status(`${r.name}: unit of measure corrected`, "ok"); await load(); grid.focus(); }
-  }
-
-  return {
-    shown(focus) { if (!loaded) load(); if (focus) q.focus(); },
-    onKey(name) {
-      if (keys.matches("masters.refresh", name)) { load(); return true; }
-      if (keys.matches("masters.search", name)) { q.focus(); return true; }
       return false;
     },
   };

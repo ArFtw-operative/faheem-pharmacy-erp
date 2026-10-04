@@ -22,7 +22,7 @@ from app.services import stock_ledger, units
 from app.services.stock_ledger import StockError as InventoryError  # noqa: F401  (one error type)
 from app.utils import money, to_decimal, utcnow
 
-# the live category list is data (category_service / Masters → Categories)
+# the live category list is data (category_service / Categories & Forms)
 from app.services.category_service import DEFAULTS as DEFAULT_CATEGORIES  # noqa: E402
 CATEGORIES = DEFAULT_CATEGORIES
 

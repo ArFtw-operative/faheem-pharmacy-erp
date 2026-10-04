@@ -603,6 +603,7 @@ export function create(ctx, params, root, saved) {
       content: p.content || "", disc: 0 };
   }
   function addProduct(p) {
+    if (p.active === false) { ctx.status(`${p.name} is disabled in Inventory — not for sale. Enable it there (right-click → Enable) to sell it.`, "error"); return; }
     if (!p.batches.length) { ctx.status(`${p.name} has no sellable stock (out of stock or only expired batches)`, "error"); return; }
     let i = S.lines.findIndex((l) => l.item_id === p.id && !l.batch_id);
     if (i >= 0) {
@@ -637,10 +638,10 @@ export function create(ctx, params, root, saved) {
       results.map((p, i) => {
         const b = p.batches[0];
         const inBill = S.lines.filter((l) => l.item_id === p.id).reduce((n, l) => n + l.qty, 0);
-        return `<tr data-i="${i}" class="${i === at ? "on" : ""}${p.batches.length || S.manual ? "" : " off"}">
+        return `<tr data-i="${i}" class="${i === at ? "on" : ""}${p.active === false ? " off disabled" : p.batches.length || S.manual ? "" : " off"}">
           <td class="mono">${esc(p.code)}</td><td><b>${esc(p.name)}</b>${p.generic ? `<small>${esc(p.generic)}</small>` : ""}</td>
           <td class="num">${p.upp > 1 ? p.upp : esc(p.pack_raw || "1")}</td>
-          <td class="num">${p.batches.length ? `${p.stock} ${esc(unitName(p.base_unit, p.stock))}<small>${esc(p.stock_label)}${inBill ? " · " + inBill + " in bill" : ""}</small>` : '<span class="bad-t">Out of stock</span>'}</td>
+          <td class="num">${p.active === false ? '<span class="bad-t">Disabled — not for sale</span>' : p.batches.length ? `${p.stock} ${esc(unitName(p.base_unit, p.stock))}<small>${esc(p.stock_label)}${inBill ? " · " + inBill + " in bill" : ""}</small>` : '<span class="bad-t">Out of stock</span>'}</td>
           <td class="${b && daysUntil(b.expiry) <= expiryDays ? "warn" : ""}">${b ? fmtExpShort(b.expiry) : "—"}</td>
           <td class="num">${b ? `₹${money(b.unit_mrp)}<small>${p.upp > 1 ? "/" + esc(unitName(p.base_unit, 1)) + " · ₹" + money(b.pack_mrp) + "/" + esc(unitName(p.pack_unit, 1)) : ""}</small>` : "—"}</td>
           <td>${esc(p.rack || "")}</td></tr>`;

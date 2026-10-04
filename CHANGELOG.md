@@ -5,6 +5,20 @@ lists its database migrations. Upgrades keep all business history (see docs/UPGR
 
 ## Unreleased (next: 1.9.0)
 
+- **Inventory — complete product control in one place:** right-click (or Shift+F10) a product, or several
+  marked with Ctrl+click / Shift+↑↓ / Space, to **change category** (drop-down of the live list, with
+  "＋ New category…"; Purchases uses the same picker), **disable**
+  (kept in stock and history, not sold), **enable**, **move to the recycle bin** (only at zero stock) or
+  **restore**. New filters: **Packaging** (counted as plain packs / corrected by a user / set automatically)
+  replaces the Units of measure tab, and **Show** (active / disabled / recycle bin). "View batches" left the
+  menu (the side panel already shows them).
+- **POS:** a disabled product still appears in search, struck through, marked "Disabled — not for sale",
+  and cannot be added; the server refuses it too. Editing an old bill that already carried it still works.
+- **Masters renamed Categories & Forms**, holding only Categories and Item forms.
+- **Grids:** grey header, white / off-white rows, light grey rules and right-aligned figures; the blue
+  focus border that showed as stray lines on the right and bottom edges is replaced by an accent under
+  the header.
+
 - **Purchases — received stock always shown:** billed + free is shown for every line, in the unit the
   supplier billed ("3 purchase packs" until the pack is known, then "3 strips", "2 bottles", "6 boxes").
   "Quantity not confirmed" is gone; only the **Stock equivalent** column waits for the pack conversion

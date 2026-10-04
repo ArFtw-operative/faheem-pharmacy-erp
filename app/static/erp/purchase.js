@@ -1,5 +1,5 @@
 import * as keys from "erp/keys";
-import { physicalEditor, formFor, formOptions, forms as itemForms, wireFormSelect } from 'erp/physical-units';
+import { physicalEditor, formFor, formOptions, forms as itemForms, wireFormSelect, pickCategory } from 'erp/physical-units';
 // Purchase document — one supplier invoice, reviewed line by line before it
 // reaches stock. Every cell shows the corrected value; the supplier's original
 // stays visible in the side panel (and in the audit trail). Nothing is posted
@@ -803,24 +803,15 @@ export function create(ctx, params, root) {
   async function confirmNewProducts() {
     const rows = markedRows().filter((r) => queued().includes(r)).length ? markedRows().filter((r) => queued().includes(r)) : queued();
     if (!rows.length) { ctx.status("No new products are waiting", "ok"); return; }
-    const cats = BOOT.category_options || [];
-    let pick = null;
-    const body = h(`<div><p>${rows.length} product(s) are not in the catalogue as printed. Each keeps the units read from its pack
-        (shown below); the products are created when the purchase is posted. Click a category (or press its number) to confirm them.</p>
-      <div class="cat-pick">${cats.map((c, i) => `<button type="button" class="chip" data-code="${esc(c.code)}">${i < 9 ? `<kbd>${i + 1}</kbd> ` : ""}${esc(c.name)}</button>`).join("")}</div>
-      <table class="rawtab"><thead><tr><th>#</th><th>Product</th><th>Pack</th><th>Units</th></tr></thead><tbody>
+    const picked = await pickCategory({ title: `Confirm ${rows.length} new product(s)`, wide: true, submitLabel: "Confirm",
+      intro: `${rows.length} product(s) are not in the catalogue as printed. Each keeps the units read from its pack
+        (shown below); the products are created when the purchase is posted. Choose their category to confirm them.`,
+      extra: `<table class="rawtab"><thead><tr><th>#</th><th>Product</th><th>Pack</th><th>Units</th></tr></thead><tbody>
       ${rows.slice(0, 300).map((r) => `<tr><td>${r.line_no}</td><td>${esc(r.name)}</td><td class="mono">${esc(r.pack || "—")}</td>
         <td>${r.units_per_pack ? `1 ${esc(t(r.pack_unit || "pack").toLowerCase())} = ${r.units_per_pack} ${esc(t(r.base_unit || "unit").toLowerCase())}` : "—"}</td></tr>`).join("")}</tbody></table>
-      <p class="hint">A product that already exists under another name should be matched instead (F4) — matching is remembered for this supplier.</p></div>`);
-    const apply = (code) => { pick = code; body.closest("form")?.requestSubmit(); };
-    body.querySelectorAll("[data-code]").forEach((b) => { b.onclick = () => apply(b.dataset.code); });
-    body.addEventListener("keydown", (e) => { const n = Number(e.key); if (Number.isInteger(n) && n >= 1 && n <= Math.min(9, cats.length)) { e.preventDefault(); apply(cats[n - 1].code); } });
-    const out = await modal({ title: `Confirm ${rows.length} new product(s)`, body, wide: true, submitLabel: "Confirm",
-      onOpen: () => body.querySelector("[data-code]")?.focus(),
-      onSubmit: () => {
-        if (!pick) throw new Error("Click a category for the new products");
-        return api(`/api/erp/purchases/${id}/lines/bulk`, { method: "POST", body: { line_ids: rows.map((r) => r.id), changes: { new_product: true, category: pick } } });
-      } });
+      <p class="hint">A product that already exists under another name should be matched instead (F4) — matching is remembered for this supplier.</p>`,
+      apply: (code) => api(`/api/erp/purchases/${id}/lines/bulk`, { method: "POST", body: { line_ids: rows.map((r) => r.id), changes: { new_product: true, category: code } } }) });
+    const out = picked && picked.result;
     if (out) { grid.clearMarks(); render(out); ctx.status(`${out.result.changed} new product(s) confirmed`, "ok"); }
     grid.focus();
   }
@@ -830,25 +821,12 @@ export function create(ctx, params, root) {
     if (CAN["purchase.create"] === false) { ctx.status("Changing categories needs purchase rights", "warn"); return; }
     const rows = markedRows().length ? markedRows() : grid.selected ? [grid.selected] : [];
     if (!rows.length) { ctx.status("Select lines first (Space marks one, Shift+↑↓ several)", "warn"); return; }
-    const cats = BOOT.category_options || [];
     const now = [...new Set(rows.map((r) => r.product_category).filter(Boolean))];
-    const body = h(`<div><p>${rows.length} line(s) · now ${now.length ? now.map((c) => esc(catName(c))).join(", ") : "no category"}.
-      Click a category (or press its number) to apply it. Only the category changes — quantities, prices and stock stay as they are.</p>
-      <div class="cat-pick">${cats.map((c, i) => `<button type="button" class="chip${now.length === 1 && now[0] === c.code ? " on" : ""}" data-code="${esc(c.code)}">${i < 9 ? `<kbd>${i + 1}</kbd> ` : ""}${esc(c.name)}</button>`).join("")}</div>
-      <p class="hint">Matched products change in the product master; new products get it when they are created. Masters → Categories adds categories.</p></div>`);
-    let pick = null;
-    const apply = (code) => { pick = code; body.closest("form")?.requestSubmit(); };
-    body.querySelectorAll("[data-code]").forEach((b) => { b.onclick = () => apply(b.dataset.code); });
-    body.addEventListener("keydown", (e) => {
-      const n = Number(e.key);
-      if (Number.isInteger(n) && n >= 1 && n <= Math.min(9, cats.length)) { e.preventDefault(); apply(cats[n - 1].code); }
-    });
-    const out = await modal({ title: "Change category only", body, submitLabel: "Apply",
-      onOpen: () => (body.querySelector(".chip.on") || body.querySelector("[data-code]"))?.focus(),
-      onSubmit: () => {
-        if (!pick) throw new Error("Click a category, or press its number");
-        return api(`/api/erp/purchases/${id}/lines/category`, { method: "POST", body: { line_ids: rows.map((r) => r.id), category: pick } });
-      } });
+    const picked = await pickCategory({ title: "Change category only", current: now.length === 1 ? now[0] : "",
+      intro: `${rows.length} line(s) · now ${now.length ? now.map((c) => esc(catName(c))).join(", ") : "no category"}. Only the category changes —
+        quantities, prices and stock stay as they are. Matched products change in the product master; new products get it when created.`,
+      apply: (code) => api(`/api/erp/purchases/${id}/lines/category`, { method: "POST", body: { line_ids: rows.map((r) => r.id), category: code } }) });
+    const out = picked && picked.result;
     if (out) {
       render(out);
       ctx.status(`Category ${catName(out.result.category)} on ${out.result.lines} line(s)${out.result.products ? ` · ${out.result.products} product(s) updated` : ""}`, "ok");

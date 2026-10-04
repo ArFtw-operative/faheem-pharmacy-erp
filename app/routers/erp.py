@@ -35,7 +35,7 @@ MODULE_PERMS = {
 }
 CAPABILITIES = (
     "sales.create", "sales.discount", "sales.void", "sales.refund", "sales.view_history", "inventory.view", "inventory.create",
-    "inventory.edit", "inventory.export", "adjustment.create", "purchase.view", "purchase.create", "purchase.post",
+    "inventory.edit", "inventory.delete", "inventory.export", "adjustment.create", "purchase.view", "purchase.create", "purchase.post",
     "purchase.return", "supplier.manage", "reports.sales", "reports.export",
     "customers.create", "customers.view", "customers.edit", "followups.manage",
     "whatsapp.send", "settings.manage",
@@ -248,24 +248,38 @@ def _row(item: Item, stock: int, expired: int, first_expiry: date | None, low: i
         "equivalent": inv.describe_stock(item, stock), "reorder": reorder, "rack": item.rack or "",
         "first_expiry": first_expiry.isoformat() if first_expiry else "",
         "status": _status(stock, expired, first_expiry, reorder or low, today, days),
-        "active": bool(item.is_active),
+        "active": bool(item.is_active), "deleted": item.deleted_at is not None,
+        "packaging_source": item.packaging_source,
+        "generic_pack": item.base_unit in ("PACK", "UNIT") and (item.units_per_pack or 1) == 1,
     }
 
 
 @router.get("/api/erp/inventory")
 def erp_inventory(
     q: str = "", form: str = "", loose: str = "", stock: str = "", expiry: str = "",
-    category: str = "", supplier: str = "",
+    category: str = "", supplier: str = "", state: str = "", packaging: str = "",
     offset: int = 0, limit: int = 200,
     db: Session = Depends(get_db), user: User = Depends(require_permission("inventory.view")),
 ):
+    """``state``: "" (active and disabled) · active · disabled · deleted (recycle bin).
+    ``packaging``: generic (counted as plain packs) · manual (corrected by a user) · auto (set automatically)."""
     today = date.today()
     days = get_int(db, "expiry_threshold_days", 90)
     low = get_int(db, "low_stock_threshold", 5)
     sv = _stock_view(db, today)
     qty = func.coalesce(sv.c.stock, 0)
     reorder = func.coalesce(func.nullif(Item.reorder_level, 0), low)
-    conds = [Item.deleted_at.is_(None)]
+    conds = [Item.deleted_at.is_not(None)] if state == "deleted" else [Item.deleted_at.is_(None)]
+    if state == "active":
+        conds.append(Item.is_active.is_(True))
+    elif state == "disabled":
+        conds.append(Item.is_active.is_(False))
+    if packaging == "generic":
+        conds.append(and_(Item.base_unit.in_(("PACK", "UNIT")), func.coalesce(Item.units_per_pack, 1) == 1))
+    elif packaging == "manual":
+        conds.append(Item.packaging_source == "MANUAL")
+    elif packaging == "auto":
+        conds.append(Item.packaging_source != "MANUAL")
     if q.strip():
         term = q.strip()
         ids = search.product_ids(db, term, 5000)
@@ -401,7 +415,10 @@ def _item_or_404(db: Session, item_id: int) -> Item:
 @router.get("/api/erp/inventory/{item_id}")
 def erp_inventory_detail(item_id: int, db: Session = Depends(get_db),
                          user: User = Depends(require_permission("inventory.view"))):
-    return _detail(db, _item_or_404(db, item_id), user)
+    item = db.get(Item, item_id)                 # recycle-bin products can still be looked at
+    if item is None:
+        raise HTTPException(404, "Product not found")
+    return _detail(db, item, user)
 
 
 # --------------------------------------------------------------------------- adjustments
@@ -496,6 +513,90 @@ def _fields(data: dict) -> dict:
     return out
 
 
+ITEM_ACTIONS = ("disable", "enable", "delete", "restore")
+
+
+def _item_status(db: Session, item: Item, action: str, user: User, ip: str) -> None:
+    """disable · enable · delete (to the recycle bin) · restore. Nothing is ever erased: sales,
+    purchases and the stock ledger keep pointing at the product. Raises ValueError with the reason."""
+    if action == "delete":
+        stock = inv.stock_on_hand(db, item.id)
+        if stock > 0:
+            raise ValueError(f"{item.name} still has {stock} {units.unit_label(item.base_unit, stock)} in stock. "
+                             "Disable it instead, or bring the stock to zero (adjustment / purchase return) first.")
+        inv.delete_item(db, item, user=user, ip_address=ip)
+    elif action == "restore":
+        inv.restore_item(db, item, user=user, ip_address=ip)
+    elif item.deleted_at is not None:
+        raise ValueError(f"{item.name} is in the recycle bin: restore it first")
+    elif action == "disable":
+        inv.deactivate_item(db, item, user=user, ip_address=ip)
+    else:
+        inv.reactivate_item(db, item, user=user, ip_address=ip)
+
+
+def _bulk_ids(data: dict) -> list[int]:
+    ids = data.get("ids")
+    if not isinstance(ids, list) or not ids or not all(str(i).isdigit() for i in ids) or len(ids) > 5000:
+        raise HTTPException(400, "Select products first")
+    return [int(i) for i in ids]
+
+
+@router.post("/api/erp/inventory/bulk/status")
+async def erp_items_status(request: Request, db: Session = Depends(get_db),
+                           user: User = Depends(require_permission("inventory.delete"))):
+    """The same action on many products; each one that cannot change says why, the rest change."""
+    data = await request.json()
+    action = str(data.get("action") or "")
+    if action not in ITEM_ACTIONS:
+        raise HTTPException(400, "Action must be disable, enable, delete or restore")
+    done, refused = [], []
+    for item in db.scalars(select(Item).where(Item.id.in_(_bulk_ids(data)))):
+        try:
+            with db.begin_nested():
+                _item_status(db, item, action, user, client_ip(request))
+            done.append(item.id)
+        except ValueError as exc:
+            refused.append({"id": item.id, "name": item.name, "reason": str(exc)})
+    db.commit()
+    return {"done": done, "refused": refused}
+
+
+@router.post("/api/erp/inventory/bulk/category")
+async def erp_items_category(request: Request, db: Session = Depends(get_db),
+                             user: User = Depends(require_permission("inventory.edit"))):
+    """Change only the category of the selected products."""
+    data = await request.json()
+    code = category_service.code_for(str(data.get("category") or ""))
+    if not code or code not in category_service.active_codes(db):
+        raise HTTPException(400, "Choose a category from the list")
+    changed = 0
+    for item in db.scalars(select(Item).where(Item.id.in_(_bulk_ids(data)))):
+        if item.category != code:
+            inv.update_item(db, item, category=code, user=user, ip_address=client_ip(request))
+            changed += 1
+    db.commit()
+    return {"changed": changed, "category": code}
+
+
+@router.post("/api/erp/inventory/{item_id}/status")
+async def erp_item_status(item_id: int, request: Request, db: Session = Depends(get_db),
+                          user: User = Depends(require_permission("inventory.delete"))):
+    action = str((await request.json()).get("action") or "")
+    if action not in ITEM_ACTIONS:
+        raise HTTPException(400, "Action must be disable, enable, delete or restore")
+    item = db.get(Item, item_id)
+    if item is None:
+        raise HTTPException(404, "Product not found")
+    try:
+        _item_status(db, item, action, user, client_ip(request))
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(400, str(exc))
+    db.commit()
+    return {"id": item.id, "active": bool(item.is_active), "deleted": item.deleted_at is not None}
+
+
 @router.post("/api/erp/inventory")
 async def erp_create_item(request: Request, db: Session = Depends(get_db),
                           user: User = Depends(require_permission("inventory.create"))):
@@ -544,7 +645,7 @@ def erp_parked(db: Session = Depends(get_db), user: User = Depends(require_permi
 def _search_ids(db: Session, term: str, limit: int) -> list[int]:
     """Candidate product ids: exact code/barcode, FTS prefix match, then LIKE."""
     exact = list(db.scalars(select(Item.id).where(
-        Item.deleted_at.is_(None), Item.is_active.is_(True),
+        Item.deleted_at.is_(None),          # a disabled product is still found, and shown as disabled
         or_(Item.barcode == term, func.upper(Item.article_id) == term.upper()))))
     if exact:
         return exact
@@ -571,8 +672,7 @@ def erp_pos_search(q: str = "", limit: int = 15, db: Session = Depends(get_db),
     ids = _search_ids(db, term, limit)
     if not ids:
         return {"items": []}
-    items = list(db.scalars(select(Item).where(
-        Item.id.in_(ids), Item.deleted_at.is_(None), Item.is_active.is_(True))))
+    items = list(db.scalars(select(Item).where(Item.id.in_(ids), Item.deleted_at.is_(None))))
     by_item: dict[int, list[Batch]] = {}
     for b in db.scalars(select(Batch).where(Batch.item_id.in_([i.id for i in items]), Batch.quantity > 0)
                         .order_by(Batch.expiry_date.asc().nulls_last(), Batch.id.asc())):
@@ -580,10 +680,10 @@ def erp_pos_search(q: str = "", limit: int = 15, db: Session = Depends(get_db),
             by_item.setdefault(b.item_id, []).append(b)
     low = term.lower()
 
-    def rank(it: Item) -> tuple:
+    def rank(it: Item) -> tuple:                          # disabled products last
         name = it.name.lower()
         tier = 0 if name.startswith(low) else 1 if any(w.startswith(low) for w in name.replace("-", " ").split()) else 2
-        return (not by_item.get(it.id), tier, name)
+        return (not it.is_active, not by_item.get(it.id), tier, name)
 
     ranked = sorted(items, key=rank)[:min(max(limit, 1), 40)]
     return {"items": [_pos_item(it, by_item.get(it.id, [])) for it in ranked]}
@@ -595,6 +695,7 @@ def _pos_item(it: Item, batches: list[Batch]) -> dict:
     pv = inv.packaging_view(it)
     return {
         "id": it.id, "code": it.article_id, "name": it.name, "generic": it.generic_name,
+        "active": bool(it.is_active), "status": "DISABLED" if not it.is_active else ("IN_STOCK" if stock > 0 else "OUT_OF_STOCK"),
         "manufacturer": it.manufacturer, "pack_raw": it.pack_size, "upp": it.units_per_pack or 1,
         "base_unit": it.base_unit, "pack_unit": it.pack_unit, "loose": bool(it.loose_sale),
         "form": it.dosage_form, "rack": it.rack or "", "stock": stock,

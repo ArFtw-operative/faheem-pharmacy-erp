@@ -9,7 +9,7 @@ import * as keys from "erp/keys";
 let openNow = false;
 // categories in the order people meet them in the app; any other group follows in registry order
 const GROUP_ORDER = ["Everywhere", "POS", "Sales history", "Customers", "Inventory", "Stock ledger", "Stock history",
-  "Stock adjustments", "Purchases", "Purchase document", "Masters", "Reports", "Settings"];
+  "Stock adjustments", "Purchases", "Purchase document", "Categories & Forms", "Reports", "Settings"];
 const ACTION_AT = new Map(keys.ACTIONS.map((a, i) => [a.id, i]));
 const groupAt = (a) => { const i = GROUP_ORDER.indexOf(a.group); return i < 0 ? GROUP_ORDER.length + ACTION_AT.get(a.id) : i; };
 

@@ -1448,7 +1448,7 @@ def set_category(db: Session, purchase: Purchase, line_ids: list[int], category:
 
     code = category_service.code_for(category)
     if not code or code not in set(category_service.names(db)) | set(category_service.DEFAULTS):
-        raise PurchaseError("Choose a category from the list (Masters → Categories adds new ones)")
+        raise PurchaseError("Choose a category from the list (Categories & Forms adds new ones)")
     code = category_service.ensure(db, code, user=user)
     by_id = {l.id: l for l in purchase.items}
     wanted = [int(i) for i in line_ids or []]

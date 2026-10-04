@@ -33,7 +33,7 @@ fails if they disagree with `units.py`.
 | Purchase cost per pack | `services/purchasing.py` `_cost_per_pack`, `gst.line_breakdown` | value ÷ received packs | money division, packs from the receipt decision |
 | Inventory | `routers/erp.py`, `routers/inventory.py`, `inventory_service.describe_stock` | stock → strips + tablets; unit MRP | `units.describe_stock`, `units.display_unit_price` |
 | Inventory (packaging editor) | `static/erp/inventory.js` | stock after a pack change | `core.toBase` (was inline) |
-| Masters (UOM editor) | `static/erp/masters.js` | stock after a pack change | `core.toBase` (was inline) |
+| Inventory (product editor, Packaging tab) | `static/erp/inventory.js` | stock after a pack change | `core.toBase` |
 | POS | `services/sales_service.py` | cashier quantity, sale rules, line MRP | `units.parse_qty_expression`, `check_sale_quantity`, `line_amount`, `display_unit_price` |
 | POS (screen) | `static/erp/pos.js` | FEFO preview amount | `core.lineAmount` (was inline `pack_mrp * qty / upp`) |
 | Sales returns | `services/refund_service.py` | refund value ÷ sold qty | value apportionment (money), quantities stay in base units |

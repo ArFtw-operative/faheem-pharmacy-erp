@@ -16,7 +16,7 @@ const MODULES = {
   sales: { label: "Sales", load: () => import("erp/sales") },
   customers: { label: "Customers", load: () => import("erp/customers") },
   reports: { label: "Reports", load: () => import("erp/reports") },
-  masters: { label: "Masters", load: () => import("erp/masters") },
+  masters: { label: "Categories & Forms", load: () => import("erp/masters") },
   settings: { label: "Settings", load: () => import("erp/settings") },
 };
 const CAN_OPEN = new Set(BOOT.modules || []);
@@ -331,7 +331,7 @@ const COMMANDS = [
   { label: "Stock adjustments register", get key() { return keys.keyFor("app.adjustments"); }, run: () => open("adjustments") },
   { label: "New product", get key() { return keys.keyFor("inv.new"); }, run: async () => { const t = await open("inventory"); t && t.screen.newProduct && t.screen.newProduct(); } },
   { label: "Import opening stock (sheet)", run: async () => { const t = await open("inventory"); t && t.screen.importSheet && t.screen.importSheet(); } },
-  { label: "Units of measure register (strips, tablets, bottles)", run: () => open("masters") },
+  { label: "Units of measure (Inventory → Packaging filter)", run: () => open("inventory") },
   { label: "Stock history (all movements)", get key() { return keys.keyFor("app.history"); }, run: () => open("history") },
   { label: "Purchases", get key() { return keys.keyFor("app.purchases"); }, run: () => open("purchases") },
   { label: "Customers", get key() { return keys.keyFor("app.customers"); }, run: () => open("customers") },

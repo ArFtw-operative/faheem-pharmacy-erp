@@ -1,5 +1,5 @@
 import * as keys from "erp/keys";
-import { physicalEditor } from 'erp/physical-units';
+import { physicalEditor, pickCategory } from 'erp/physical-units';
 // Inventory — product grid + batch pane + detail strip. Back-office control:
 // stock changes only through ledgered adjustments (F5), packaging through the
 // guarded product editor (Ctrl+E). Nothing here edits a stock number directly.
@@ -13,7 +13,8 @@ const title = (s) => String(s || "").charAt(0) + String(s || "").slice(1).toLowe
 export function create(ctx, params, root) {
   const CAN = BOOT.can || {};
   const saved = store.get("inv:filters", {});
-  const F = { q: "", form: "", loose: "", stock: "", expiry: "", category: "", supplier: "", ...saved, q: saved.q || "" };
+  const F = { q: "", form: "", loose: "", stock: "", expiry: "", category: "", supplier: "", state: "", packaging: "", ...saved, q: saved.q || "" };
+  const FILTERS = ["category", "form", "loose", "stock", "expiry", "supplier", "state", "packaging"];
   let total = 0, loading = false, detail = null, pane = "products";
   const details = new Map();
 
@@ -27,6 +28,10 @@ export function create(ctx, params, root) {
       <label>Stock<select class="f-stock"><option value="">All</option><option value="in">In stock</option><option value="low">Low</option><option value="out">Out of stock</option></select></label>
       <label>Expiry<select class="f-expiry"><option value="">All</option><option value="expiring">Expiring soon</option><option value="expired">Has expired stock</option></select></label>
       <label>Supplier<select class="f-supplier"><option value="">All</option></select></label>
+      <label>Packaging<select class="f-packaging" title="How products are counted (units of measure)"><option value="">All</option>
+        <option value="generic">Counted as plain packs</option><option value="manual">Corrected by a user</option><option value="auto">Set automatically</option></select></label>
+      <label>Show<select class="f-state"><option value="">Active + disabled</option><option value="active">Active only</option>
+        <option value="disabled">Disabled</option><option value="deleted">Recycle bin</option></select></label>
       <button type="button" class="btn f-reset">Reset</button>
       <button type="button" class="btn f-columns" title="Choose inventory columns">Columns ⚙</button>
       <span class="spacer"></span><span class="f-count muted"></span>
@@ -37,9 +42,9 @@ export function create(ctx, params, root) {
       <div class="pane batches"><section class="inv-detail" aria-label="Product specifications"></section><div class="pane-h">BATCHES <span class="b-title muted"></span>${CAN["purchase.view"] && CAN["inventory.edit"] ? ' <button type="button" class="btn b-cost">Verify cost</button>' : ""}</div></div>
     </div>
   </div>`;
-  for (const k of ["category", "form", "loose", "stock", "expiry", "supplier"]) $(".f-" + k, root).value = F[k] || "";
+  for (const k of FILTERS) $(".f-" + k, root).value = F[k] || "";
 
-  // category and supplier choices come from the database (Masters → Categories)
+  // category and supplier choices come from the database (Categories & Forms)
   let catOptions = (BOOT.category_options || []).map((c) => ({ ...c, active: true }));
   async function loadChoices() {
     try {
@@ -58,10 +63,10 @@ export function create(ctx, params, root) {
     label: "Products", storageKey: "inv-products", empty: "No products match. Use New product; Inventory → Import loads a stock sheet.",
     columns: [
       { key: "code", label: "Item Code", width: 92, render: (r) => `<span class="mono">${esc(r.code)}</span>` },
-      { key: "name", label: "Product", width: 300, render: (r) => `<b>${esc(r.name)}</b>${r.active ? "" : ' <span class="tag">disabled</span>'}` },
+      { key: "name", label: "Product", width: 300, render: (r) => `<b>${esc(r.name)}</b>${r.deleted ? ' <span class="tag off">recycle bin</span>' : r.active ? "" : ' <span class="tag off">disabled</span>'}${r.generic_pack && !r.deleted ? ' <span class="tag" title="Counted as plain packs: set units per strip in Packaging to sell loose">pack</span>' : ""}` },
       { key: "category", label: "Category", width: 100, render: (r) => esc(r.category_name || r.category) },
       { key: "form", label: "Form", width: 78, render: (r) => esc(title(r.form)) },
-      { key: "upp", label: "Pack", width: 54, align: "num", title: "Units per purchase pack", render: (r) => (r.upp > 1 ? r.upp : esc(r.pack_raw || "1")) },
+      { key: "upp", label: "Pack", width: 72, align: "num", title: "Units per purchase pack", render: (r) => (r.upp > 1 ? r.upp : esc(r.pack_raw || "1")) },
       { key: "base_unit", label: "Base Unit", width: 80, render: (r) => esc(title(r.base_unit)) },
       { key: "loose", label: "Loose", width: 54, align: "center", render: (r) => (r.loose ? "Yes" : "No") },
       { key: "stock", label: "Current Stock", width: 110, align: "num", render: (r) => `<b>${r.stock}</b> <small>${esc(unitName(r.base_unit, r.stock))}</small>` },
@@ -73,12 +78,20 @@ export function create(ctx, params, root) {
     onSelect: (r) => showProduct(r),
     onActivate: () => focusPane("batches"),
     onNearEnd: () => loadMore(),
+    rowClass: (r) => (r.active === false || r.deleted ? "item-off" : ""),
+    multi: true,                                   // Shift+↑↓ · Space · Ctrl+A · Ctrl+click mark products
+    onMarks: (marked) => {
+      const n = marked.length;
+      $(".f-count", root).innerHTML = n ? `<b>${n} selected</b> · right-click for actions · Esc clears` : `${total} product${total === 1 ? "" : "s"}`;
+    },
     contextMenu: (r) => [
-      { label: "View batches", key: "Enter", action: () => focusPane("batches") },
       { label: "Stock adjustment", actionId: "inv.adjust", key: keys.keyFor("inv.adjust"), action: () => adjust() },
       { label: "Stock ledger", key: keys.keyFor("inv.ledger"), action: () => ledger() },
       { label: "Stock history", key: keys.keyFor("inv.history"), action: () => history() },
       { label: "Edit product", actionId: "inv.edit", key: keys.keyFor("inv.edit"), action: () => edit() },
+      { label: "Packaging (units of measure)…", actionId: "inv.edit", action: () => edit("p") },
+      ...(CAN["inventory.edit"] ? [{ label: picked(r).length > 1 ? `Change category of ${picked(r).length} products…` : "Change category…", action: () => changeCategory(picked(r)) }] : []),
+      ...(CAN["inventory.delete"] ? statusItems(picked(r)) : []),
     ].filter((x) => (x.actionId !== "inv.adjust" || CAN["adjustment.create"]) && (x.actionId !== "inv.edit" || CAN["inventory.edit"])),
   });
   const batches = new Grid({
@@ -189,7 +202,8 @@ export function create(ctx, params, root) {
   // ---------------------------------------------------------------- loading
   let ctrl = null;
   function query(offset) {
-    const u = new URLSearchParams({ q: F.q, form: F.form, loose: F.loose, stock: F.stock, expiry: F.expiry, category: F.category || "", supplier: F.supplier || "", offset, limit: 200 });
+    const u = new URLSearchParams({ q: F.q, form: F.form, loose: F.loose, stock: F.stock, expiry: F.expiry, category: F.category || "", supplier: F.supplier || "",
+      state: F.state || "", packaging: F.packaging || "", offset, limit: 200 });
     return "/api/erp/inventory?" + u;
   }
   async function load({ keep = false } = {}) {
@@ -218,10 +232,10 @@ export function create(ctx, params, root) {
     if (e.key === "Enter" || e.key === "ArrowDown") { e.preventDefault(); reload.flush(); products.focus(); }
     if (e.key === "Escape") { e.preventDefault(); if (qIn.value) { qIn.value = ""; F.q = ""; reload.flush(); } }
   });
-  for (const k of ["category", "form", "loose", "stock", "expiry", "supplier"]) $(".f-" + k, root).addEventListener("change", (e) => { F[k] = e.target.value; load(); });
+  for (const k of FILTERS) $(".f-" + k, root).addEventListener("change", (e) => { F[k] = e.target.value; load(); });
   $(".f-reset", root).onclick = () => {
-    Object.assign(F, { q: "", form: "", loose: "", stock: "", expiry: "", category: "", supplier: "" });
-    qIn.value = ""; for (const k of ["category", "form", "loose", "stock", "expiry", "supplier"]) $(".f-" + k, root).value = "";
+    Object.assign(F, { q: "", form: "", loose: "", stock: "", expiry: "", category: "", supplier: "", state: "", packaging: "" });
+    qIn.value = ""; for (const k of FILTERS) $(".f-" + k, root).value = "";
     load(); qIn.focus();
   };
 
@@ -393,12 +407,61 @@ export function create(ctx, params, root) {
     for (const k of Object.keys(out)) if (k.startsWith('physical_')) delete out[k];
     return out;
   };
-  async function edit() {
+  /** The marked products when the right-clicked one is among them (or nothing is marked: just that one). */
+  const picked = (r) => {
+    const marked = products.markedRows;
+    return marked.length && (!r || marked.some((m) => m.id === r.id)) ? marked : r ? [r] : [];
+  };
+  function statusItems(rows) {
+    if (!rows.length) return [];
+    const n = rows.length, of = n > 1 ? ` ${n} products` : "";
+    const binned = rows.filter((x) => x.deleted).length, off = rows.filter((x) => !x.deleted && !x.active).length;
+    const items = [];
+    if (binned) items.push({ label: `Restore${of} from recycle bin`, action: () => setStatus(rows, "restore") });
+    if (binned < n) {
+      if (off < n - binned) items.push({ label: `Disable${of} (not sold in POS)`, action: () => setStatus(rows, "disable") });
+      if (off) items.push({ label: `Enable${of}`, action: () => setStatus(rows, "enable") });
+      items.push({ label: `Move${of} to recycle bin`, action: () => setStatus(rows, "delete") });
+    }
+    return items;
+  }
+  /** Disable / enable / recycle bin / restore — nothing is erased; history keeps pointing at the products. */
+  async function setStatus(rows, action) {
+    const who = rows.length > 1 ? `${rows.length} products` : rows[0].name;
+    const say = { disable: `Disable ${who}? They stay in stock and history but cannot be sold in POS until enabled.`,
+      delete: `Move ${who} to the recycle bin? They disappear from lists and POS; Show → Recycle bin restores them. Products with stock are skipped.` }[action];
+    if (say && !(await window.erpConfirm(say))) return;
+    try {
+      const out = await api("/api/erp/inventory/bulk/status", { method: "POST", body: { action, ids: rows.map((x) => x.id) } });
+      const verb = { disable: "disabled", enable: "enabled", delete: "moved to the recycle bin", restore: "restored" }[action];
+      ctx.status(`${out.done.length} ${verb}` + (out.refused.length ? ` · ${out.refused.length} skipped: ${out.refused[0].reason}` : ""),
+        out.refused.length ? "warn" : "ok");
+      rows.forEach((x) => details.delete(x.id));
+      products.clearMarks();
+      await load({ keep: true });
+    } catch (err) { ctx.status(err.message, "error"); }
+  }
+  /** Pick a category from the live drop-down (or create one) and set it on every selected product. */
+  async function changeCategory(rows) {
+    if (!rows.length) return;
+    const now = [...new Set(rows.map((x) => x.category))];
+    const out = await pickCategory({ current: now.length === 1 ? now[0] : "",
+      intro: `${rows.length} product(s). Only the category changes — stock, prices and packaging stay as they are.`,
+      apply: (code) => api("/api/erp/inventory/bulk/category", { method: "POST", body: { ids: rows.map((x) => x.id), category: code } }) });
+    if (out) {
+      ctx.status(`${out.name} set on ${out.result.changed} product(s)`, "ok");
+      rows.forEach((x) => details.delete(x.id)); products.clearMarks();
+      await loadChoices(); await load({ keep: true });
+    }
+    products.focus();
+  }
+  async function edit(tab = "") {
     if (!CAN["inventory.edit"]) { ctx.status("You do not have permission to edit products", "warn"); return; }
     if (!detail) { ctx.status("Select a product first", "warn"); return; }
     const d = detail;
     const out = await modal({
       title: "Edit product — " + d.name, body: productForm(d), wide: true,
+      onOpen: (form) => { if (tab) form.querySelector(`[data-t="${tab}"]`)?.click(); },
       onSubmit: (form) => api(`/api/erp/inventory/${d.id}`, { method: "PUT", body: collect(form) }),
     });
     if (out) { ctx.status(`Saved ${out.name}`, "ok"); details.set(out.id, out); await refresh(out.id); }
@@ -475,7 +538,7 @@ export function create(ctx, params, root) {
     get keys() { return keys.bar("inventory"); },
     onKey(e, name) { const fn = KEYS[keys.lookup("inventory", name)]; if (!fn) return false; fn(); return true; },
     onShow({ focus }) {
-      loadChoices();   // categories may have been changed in Masters meanwhile
+      loadChoices();   // categories may have been changed in Categories & Forms meanwhile
       if (detail) { details.delete(detail.id); load({ keep: true }); }
       if (focus) setTimeout(() => qIn.focus(), 0);
     },
