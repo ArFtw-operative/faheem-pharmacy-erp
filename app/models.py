@@ -19,6 +19,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     JSON,
@@ -215,6 +216,8 @@ class Category(Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=100)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # the rack this category's products usually go to: offered as a suggestion, never applied silently
+    default_rack_id: Mapped[int | None] = mapped_column(ForeignKey("racks.id", ondelete="SET NULL"))
 
 
 class Supplier(Base):
@@ -299,6 +302,8 @@ class Item(Base):
     content_qty: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
     content_unit: Mapped[str] = mapped_column(String(10), default="")
     reorder_level: Mapped[int] = mapped_column(Integer, default=0)  # base units; 0 = use the global threshold
+    # legacy free-text rack (before the rack master). Read once by the location migration; the
+    # product's location now lives in item_locations (app/services/location_service.py).
     rack: Mapped[str] = mapped_column(String(20), default="")
     hsn_code: Mapped[str] = mapped_column(String(20), default="")
     gst_rate: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=Decimal("12"))
@@ -565,6 +570,11 @@ class Purchase(Base):
 
 class PurchaseItem(Base):
     __tablename__ = "purchase_items"
+    __table_args__ = (
+        # a box on a line belongs to the line's rack (enforced by the database, not only the screen)
+        ForeignKeyConstraint(["rack_id", "box_id"], ["rack_boxes.rack_id", "rack_boxes.id"],
+                             name="fk_purchase_items_rack_box"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     purchase_id: Mapped[int] = mapped_column(ForeignKey("purchases.id", ondelete="CASCADE"))
@@ -616,6 +626,9 @@ class PurchaseItem(Base):
     landed_total: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     landed_rate: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))       # per pack, incl. GST
     gst_source: Mapped[str] = mapped_column(String(20), default="", server_default="")   # FILE · DERIVED · PRODUCT · NONE
+    # where the received stock goes, confirmed by a person (a suggestion is never stored here)
+    rack_id: Mapped[int | None] = mapped_column(ForeignKey("racks.id"))
+    box_id: Mapped[int | None] = mapped_column(Integer)
 
     purchase: Mapped[Purchase] = relationship(back_populates="items")
     item: Mapped[Item | None] = relationship()
@@ -1028,3 +1041,127 @@ class ImportMetric(Base):
     ocr_confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
     processing_ms: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+# --------------------------------------------------------------------------- #
+# Physical locations: racks, boxes, where each product is, and every move
+# (app/services/location_service.py; DECISIONS.md D25-D30)
+# --------------------------------------------------------------------------- #
+class Rack(Base):
+    """A physical rack. Products refer to its id, never its code or name, so a rename or a
+    new code never breaks a relationship. Never deleted once used: it is deactivated."""
+
+    __tablename__ = "racks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(30), unique=True)          # R-A01 (upper case, unique)
+    name: Mapped[str] = mapped_column(String(80), default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100)
+    # room for later (not used yet): zone, shelf count, capacity
+    zone: Mapped[str] = mapped_column(String(40), default="", server_default="")
+    shelf_count: Mapped[int | None] = mapped_column(Integer)
+    capacity: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+
+    boxes: Mapped[list["RackBox"]] = relationship(back_populates="rack", order_by="RackBox.sort_order, RackBox.code")
+
+
+class RackBox(Base):
+    """An optional box / bin inside one rack. The code is unique within its rack only."""
+
+    __tablename__ = "rack_boxes"
+    __table_args__ = (
+        UniqueConstraint("rack_id", "code", name="uq_rack_box_code"),
+        # target of the composite (rack_id, box_id) keys: a box can only be used with its own rack
+        UniqueConstraint("rack_id", "id", name="uq_rack_box_rack_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    rack_id: Mapped[int] = mapped_column(ForeignKey("racks.id", ondelete="RESTRICT"), index=True)
+    code: Mapped[str] = mapped_column(String(30))
+    name: Mapped[str] = mapped_column(String(80), default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+
+    rack: Mapped[Rack] = relationship(back_populates="boxes")
+
+
+class ItemLocation(Base):
+    """Where a product (or, later, one of its batches) is kept, over time.
+
+    A row is valid from ``valid_from`` until ``valid_to`` (open = current). A move closes the
+    current row and opens a new one, so the location on any past date is a query, not a guess.
+    ``batch_id`` NULL = the product's location (today's screens); a batch-level row is the
+    extension point for stock kept in several places. At most one open row per scope.
+    """
+
+    __tablename__ = "item_locations"
+    __table_args__ = (
+        ForeignKeyConstraint(["rack_id", "box_id"], ["rack_boxes.rack_id", "rack_boxes.id"],
+                             name="fk_item_locations_rack_box", ondelete="RESTRICT"),
+        Index("uq_item_location_open_product", "item_id", unique=True,
+              sqlite_where=text("valid_to IS NULL AND batch_id IS NULL"),
+              postgresql_where=text("valid_to IS NULL AND batch_id IS NULL")),
+        Index("uq_item_location_open_batch", "item_id", "batch_id", unique=True,
+              sqlite_where=text("valid_to IS NULL AND batch_id IS NOT NULL"),
+              postgresql_where=text("valid_to IS NULL AND batch_id IS NOT NULL")),
+        Index("ix_item_locations_rack_open", "rack_id", "valid_to"),
+        Index("ix_item_locations_box", "box_id"),
+        Index("ix_item_locations_item_time", "item_id", "valid_from"),
+        Index("ix_item_locations_batch", "batch_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("items.id", ondelete="RESTRICT"))
+    batch_id: Mapped[int | None] = mapped_column(ForeignKey("batches.id", ondelete="RESTRICT"))
+    rack_id: Mapped[int] = mapped_column(ForeignKey("racks.id", ondelete="RESTRICT"))
+    box_id: Mapped[int | None] = mapped_column(Integer)
+    quantity: Mapped[int | None] = mapped_column(Integer)        # NULL: all of the scope's stock (split stock later)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=True)
+    valid_from: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    valid_to: Mapped[datetime | None] = mapped_column(DateTime)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    event_id: Mapped[int | None] = mapped_column(Integer)        # the location event that opened it
+
+
+class LocationEvent(Base):
+    """Append-only history of every location change. Codes and names are copied at the time
+    of the move, so a later rename never rewrites what history says. One operation (a bulk
+    move of 500 products) shares one ``operation_id``."""
+
+    __tablename__ = "location_events"
+    __table_args__ = (
+        Index("ix_location_events_item_time", "item_id", "created_at"),
+        Index("ix_location_events_from_rack", "from_rack_id", "created_at"),
+        Index("ix_location_events_to_rack", "to_rack_id", "created_at"),
+        Index("ix_location_events_time", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    operation_id: Mapped[str] = mapped_column(String(36), index=True)
+    event_type: Mapped[str] = mapped_column(String(16))        # ASSIGNED · MOVED · BOX_CHANGED · UNASSIGNED
+    source: Mapped[str] = mapped_column(String(16), default="MANUAL")   # MANUAL · BULK · PURCHASE · IMPORT · RACK · MIGRATION
+    item_id: Mapped[int] = mapped_column(ForeignKey("items.id", ondelete="RESTRICT"))
+    batch_id: Mapped[int | None] = mapped_column(ForeignKey("batches.id", ondelete="RESTRICT"))
+    from_rack_id: Mapped[int | None] = mapped_column(ForeignKey("racks.id", ondelete="RESTRICT"))
+    from_box_id: Mapped[int | None] = mapped_column(ForeignKey("rack_boxes.id", ondelete="RESTRICT"))
+    to_rack_id: Mapped[int | None] = mapped_column(ForeignKey("racks.id", ondelete="RESTRICT"))
+    to_box_id: Mapped[int | None] = mapped_column(ForeignKey("rack_boxes.id", ondelete="RESTRICT"))
+    from_label: Mapped[str] = mapped_column(String(200), default="")    # "R-A01 Antibiotics / B02 Middle" at the time
+    to_label: Mapped[str] = mapped_column(String(200), default="")
+    stock_snapshot: Mapped[int | None] = mapped_column(Integer)          # stock on hand when moved (information only)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    reference: Mapped[str] = mapped_column(String(60), default="")      # PUR-000123, import file …
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    username: Mapped[str] = mapped_column(String(60), default="system")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

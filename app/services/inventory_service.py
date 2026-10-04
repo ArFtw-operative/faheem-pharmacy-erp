@@ -743,16 +743,26 @@ INVENTORY_COLUMNS = [
     "strength", "unit", "base_unit", "pack_unit", "units_per_pack", "loose_sale",
     "hsn_code", "barcode", "mrp", "batch_no", "expiry_date",
     "quantity", "purchase_rate", "selling_rate", "supplier", "stock_value",
+    "rack_code", "rack_name", "box_code", "box_name",
 ]
 
 
 def _inventory_rows(db: Session, items: list[Item]) -> list[dict]:
+    from app.services import location_service
+
+    places = {}
+    ids = [i.id for i in items]
+    for start in range(0, len(ids), 5000):                 # bounded IN lists on large catalogues
+        places.update(location_service.current(db, ids[start:start + 5000]))
     rows = []
     for item in items:
+        here = places.get(item.id)
+        where = {"rack_code": here.rack_code if here else "", "rack_name": here.rack_name if here else "",
+                 "box_code": here.box_code if here else "", "box_name": here.box_name if here else ""}
         if not item.batches:
-            rows.append(_item_row(item, None))
+            rows.append({**_item_row(item, None), **where})
         for batch in item.batches:
-            rows.append(_item_row(item, batch))
+            rows.append({**_item_row(item, batch), **where})
     return rows
 
 
@@ -923,6 +933,7 @@ IMPORT_TEMPLATE_COLUMNS = [
     "Product Name", "Generic Name", "Manufacturer", "Category", "Form", "Pack", "Strength",
     "Base Unit", "Pack Unit", "Units Per Pack",
     "HSN", "Barcode", "Batch", "Expiry", "Qty", "Loose Qty", "Purchase Rate", "MRP",
+    "Rack Code", "Box Code",
 ]
 
 
@@ -968,7 +979,8 @@ def import_items(
     if default not in known:
         default = known[0]
     result = {"rows": len(table.rows), "created": 0, "updated": 0, "batches": 0, "units": 0,
-              "skipped": table.skipped, "errors": []}
+              "skipped": table.skipped, "errors": [], "located": 0, "location_review": []}
+    placed: dict[tuple, list[int]] = {}
     seen: dict[str, Item] = {}
     reference = f"IMPORT {filename}"[:60]
     for row in table.rows:
@@ -1047,8 +1059,28 @@ def import_items(
                 result["batches"] += 1
                 result["units"] += added
             seen[key] = item
+            if cells.get("rack_code"):
+                # an exact, active rack (and box) is applied; anything else waits for a person, with the
+                # closest existing code offered — a typo never creates a rack
+                from app.services import location_service
+
+                rack, box, problem, hint = location_service.resolve_code(db, cells["rack_code"], cells.get("box_code", ""))
+                if problem:
+                    result["location_review"].append({"row": row["_row"], "item_id": item.id, "name": item.name,
+                                                      "typed": " / ".join(x for x in (cells["rack_code"], cells.get("box_code", "")) if x),
+                                                      "problem": problem, "suggestion": hint})
+                else:
+                    placed.setdefault((rack.id, box.id if box else None), []).append(item.id)
         except (InventoryError, ValueError) as exc:
             result["errors"].append(f"{where}: {exc}")
+    if placed:
+        from app.services import location_service
+
+        for (rack_id, box_id), ids in placed.items():
+            out = location_service.assign(db, ids, rack_id, box_id, source="IMPORT", reference=reference,
+                                          reason=f"Inventory import {filename}"[:200], user=user, ip_address=ip_address)
+            result["located"] += out["processed"]
+            result["errors"] += [f"{f['name']}: location not set — {f['reason']}" for f in out["failed"]]
     db.flush()
     audit.record(
         db, action=audit.A_CREATE, entity_type="item_import", entity_id=filename[:60], user=user,

@@ -155,6 +155,9 @@ def _document(p: Purchase) -> dict:
     from app.services import confidence_gate
     limits = confidence_gate.thresholds(db)
     lines = [_line_view(l, ctx, limits) for l in sorted(p.items, key=lambda l: l.line_no)]
+    places = purchasing.location_suggestions(db, p)
+    for view in lines:
+        view["location"] = places.get(view["id"], {"state": "NONE"})
     gate = {s: 0 for s in (confidence_gate.AUTO_ACCEPT, confidence_gate.WARNING, confidence_gate.REVIEW, confidence_gate.BLOCK)}
     for l in lines:
         if l["status"] not in purchasing.DONE:
@@ -478,6 +481,20 @@ async def purchase_lines_category(purchase_id: int, request: Request, db: Sessio
     p = _doc(db, purchase_id)
     ids = data.get("line_ids") if isinstance(data.get("line_ids"), list) else []
     result = _run(db, purchasing.set_category, p, [int(i) for i in ids], str(data.get("category") or ""), user=user)
+    return {**_document(_doc(db, purchase_id)), "result": result}
+
+
+@router.post("/api/erp/purchases/{purchase_id}/lines/location")
+async def purchase_lines_location(purchase_id: int, request: Request, db: Session = Depends(get_db),
+                                  user: User = Depends(require_permission("rack.assign"))):
+    """Where the selected lines' stock goes: one rack / box, or each line's suggestion (``suggested``)."""
+    data = await request.json()
+    p = _doc(db, purchase_id)
+    ids = data.get("line_ids") if isinstance(data.get("line_ids"), list) else []
+    if not all(str(i).isdigit() for i in ids):
+        raise HTTPException(400, "line_ids must be a list of line ids")
+    result = _run(db, purchasing.set_location, p, [int(i) for i in ids], data.get("rack_id"), data.get("box_id"),
+                  suggested=bool(data.get("suggested")), user=user)
     return {**_document(_doc(db, purchase_id)), "result": result}
 
 

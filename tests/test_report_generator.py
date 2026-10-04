@@ -136,6 +136,10 @@ def test_every_report_queries_existing_database(client,db,rid):
         assert client.post('/reports/api/generate',json={'report':rid,'parameters':params}).status_code==400
         customer=Customer(name='Report Customer',mobile='9000000001',customer_id='CUST-R1');db.add(customer);db.commit()
         params['customer_id']=customer.id
+    if rid=='rack-history':       # one rack's days: the rack is required
+        assert client.post('/reports/api/generate',json={'report':rid,'parameters':params}).status_code==400
+        from app.services import location_service
+        params['rack']=str(location_service.create_rack(db,code='R-T1').id);db.commit()
     response=client.post('/reports/api/generate',json={'report':rid,'parameters':params})
     assert response.status_code==200,response.text
     assert response.json()['id']==rid and 'token' in response.json()

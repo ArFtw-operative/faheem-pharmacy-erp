@@ -227,3 +227,54 @@ The reference catalogue now stores the MRP of each listed pack (`scripts/import_
 --file Extensive_A_Z_medicines_dataset_of_India.xlsx`, CSV or XLSX). The lookup requires the
 same identity and the same dosage form (a syrup is never priced from the tablet). The data file
 is not in Git; on the appliance it must be imported once.
+
+## D25. Racks and boxes are masters referred to by id
+
+A rack (`racks`) and its optional boxes (`rack_boxes`) are data the pharmacy maintains. Products,
+purchase lines and history refer to them by id, never by code or name, so renaming a rack or
+changing its code never breaks anything. Rack codes are unique; box codes are unique within their
+rack. A (rack, box) pair that does not belong together is refused by the database itself: a
+composite foreign key on `item_locations` (and on `purchase_items` on PostgreSQL; a trigger on an
+existing SQLite installation, which cannot add one without rebuilding the table). Racks and boxes
+are never deleted once used: they are disabled, and a rack or box holding products can only be
+disabled after its products are moved (or, for a box, kept in the rack without a box).
+
+## D26. Location is dated, per product, ready for per batch
+
+`item_locations` holds where a product is, valid from / to. A move closes the open row and opens a
+new one (a partial unique index allows one open row per product). `batch_id` and `quantity` are
+the extension point for stock kept in several places; today's screens use the product's location.
+Products without a location are Unassigned — nothing is invented. The legacy free-text
+`items.rack` value, where one existed, became a real rack and an assignment (MIGRATION event).
+
+## D27. Every change is an event
+
+`location_events` (append-only) records each assignment, move, box change and unassignment with
+the codes and names of the time, who, when, why, the stock at that moment and a shared
+`operation_id` for a bulk operation; the operation is also audited with its requested / processed /
+skipped / failed counts and reasons. A product already in the target is skipped without a write;
+a product another user moved since the screen loaded (`expected`) is reported, not moved. On
+PostgreSQL the open rows are locked for the move.
+
+## D28. The past is reconstructed, not copied
+
+"What was in R-A03 at the close of 30 Sep" = the dated location rows valid at that moment + the
+stock ledger summed up to it — the same source as every stock report, so Σ racks + Unassigned =
+the Current Stock total for the same day. Rack names of the time come from the audited changes
+after that moment. No snapshot tables are filled: the ledger and the dated rows are already the
+history, and they cannot disagree with themselves. (Persisted daily snapshots would duplicate
+50k rows a day and could drift; reconstruction measured 13 ms for one rack as of a past day and
+1.7 s for every rack at 50k batches.)
+
+## D29. Suggestions are shown, never applied
+
+When stock arrives the line shows where it should go: CURRENT (the product's place), LAST (where it
+was before), CATEGORY (the rack set for its category) or USUAL (most of its category is in one rack —
+only once at least half the category has a rack and one rack holds 60% of those). A suggestion is
+applied only when a person confirms it (Accept suggested racks or Set rack…); confirmed racks are
+applied when the purchase posts, in the same transaction as the stock.
+
+## D30. Location never touches stock
+
+Moving products creates no stock movement and no ledger rows. Selling to zero, disabling, archiving
+and restoring a product leave its location as it is, so new stock is suggested back to its shelf.

@@ -80,7 +80,8 @@ def test_product_create_and_guarded_packaging_edit(client, db):
     d = client.post("/api/erp/inventory", json={
         "name": "PANTOCID DSR CAP 10'S", "dosage_form": "CAPSULE", "base_unit": "CAPSULE", "pack_unit": "STRIP",
         "units_per_pack": 10, "loose_sale": "yes", "rack": "A2", "reorder_level": 100}).json()
-    assert (d["upp"], d["loose"], d["rack"], d["reorder"]) == (10, True, "A2", 100)
+    # a typed rack is ignored: locations live in the rack master (location_service), never free text
+    assert (d["upp"], d["loose"], d["rack"], d["reorder"]) == (10, True, "", 100)
     ok = client.put(f"/api/erp/inventory/{d['id']}", json={"units_per_pack": 15})
     assert ok.status_code == 200 and ok.json()["upp"] == 15  # no stock yet: allowed
     client.post(f"/api/erp/inventory/{d['id']}/adjust", json={"direction": "IN", "quantity": 5, "batch_no": "P1",

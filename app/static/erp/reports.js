@@ -29,6 +29,10 @@ const FILTERS = {
   exclude_open_followup: ['With open follow-up','select',[['','Include'],['1','Exclude']]],
   followup_scope: ['Show','select',[['open','All open'],['overdue','Overdue'],['today','Today'],['next7','Next 7 days'],['all','Everything']]],
   operator: ['Created by','select'], customer_id: ['','hidden'],
+  racks: ['Racks (Ctrl+click several)','multi'], rack: ['Rack','select'], box: ['Box','select'],
+  location: ['Location','select',[['','Racks + unassigned'],['assigned','In a rack'],['unassigned','Unassigned only']]],
+  stock_condition: ['Stock','select',[['','In stock'],['all','In stock + out of stock'],['zero','Out of stock only'],['expired','Expired only']]],
+  item_status: ['Product status','select',[['','All'],['active','Active'],['disabled','Disabled']]],
   adjustment_type: ['Adjustment type','select',[['','All'],['LOOSE','Loose'],['DAMAGE','Damage'],['EXPIRED','Expired'],['COUNT','Count Correction'],['ADJUSTMENT_IN','Adjustment In'],['ADJUSTMENT_OUT','Adjustment Out'],['CUSTOMER_RETURN','Customer Return']]],
 };
 const option = (value,label) => `<option value="${esc(value)}">${esc(label)}</option>`;
@@ -55,11 +59,15 @@ export function create(ctx,params,root) {
     if(name==='manufacturer')return [['','All'],...options.manufacturers.map(v=>[v,v])];
     if(name==='supplier')return [['','All'],...options.suppliers.map(s=>[s.value,s.label])];
     if(name==='operator')return [['','Everyone'],...(options.operators||[]).map(s=>[s.value,s.label])];
+    if(name==='racks')return (options.racks||[]).map(s=>[s.value,s.label]);
+    if(name==='rack')return [['','Choose a rack'],...(options.racks||[]).map(s=>[s.value,s.label])];
+    if(name==='box')return [['','All boxes'],...(options.boxes||[]).map(s=>[s.value,s.label])];
     return FILTERS[name]?.[2] || [];
   }
   function filter(name) {
     const [label,type]=FILTERS[name];
     if(type==='hidden')return `<input type="hidden" name="${name}">`;
+    if(type==='multi')return `<label>${label}<select name="${name}" multiple size="4">${choices(name).map(([v,l])=>option(v,l)).join('')}</select></label>`;
     if(type==='lookup')return `<label class="report-lookup">${label}<input name="${name}" placeholder="${name==='customer'?'Name, mobile or ID':'Product name or code'}" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false"><div class="lookup-drop" role="listbox" hidden></div></label>`;
     return `<label>${label}${type==='select'?`<select name="${name}">${choices(name).map(([v,l])=>option(v,l)).join('')}</select>`:`<input name="${name}" placeholder="All" autocomplete="off">`}</label>`;
   }
@@ -151,7 +159,8 @@ export function create(ctx,params,root) {
     if(!custom){const range=options.presets[period.value];from.value=range[0];to.value=range[1];}
   }
   function parameters() {
-    const values=Object.fromEntries(new FormData($('form',root)).entries());
+    const form=new FormData($('form',root)), values=Object.fromEntries(form.entries());
+    $$('select[multiple]',root).forEach(s=>{const all=form.getAll(s.name);if(all.length)values[s.name]=all.join(',');else delete values[s.name];});
     if($('[name=period]',root)?.value!=='custom'){delete values.from;delete values.to;}
     return values;
   }

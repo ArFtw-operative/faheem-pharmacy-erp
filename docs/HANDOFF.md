@@ -150,7 +150,7 @@ app/services/  stock_ledger (ledger engine) · inventory_service · units / pack
 app/routers/   erp (shell, inventory, masters) · purchases · sales · sales_history · stock_history
                adjustments · reports · inventory (import, export, ledger APIs)
 app/static/erp/ shell · core · grid (multi-select) · keys · pos · inventory · purchases · purchase
-               sales · studio · history · adjustments · reports · masters · ledger · shortcuts
+               sales · studio · history · adjustments · reports · masters · ledger · shortcuts · racks · locations
 alembic/versions/  migrations (applied by the migration job / upgrade guard; additive only)
 tests/         460+ tests incl. test_end_to_end.py, test_invoice_corpus.py, test_upgrades.py, test_appliance.py
 ```
@@ -161,4 +161,6 @@ tests/         460+ tests incl. test_end_to_end.py, test_invoice_corpus.py, test
   purchase returns.
 - **Legacy stock has no purchase cost.** Profit & Margin counts profit only on sold lines whose batch has a
   purchase rate; the rest add to Net Revenue but not to cost or profit. Rates can be set per batch in Inventory.
-- **Product disable/delete** is not in the workspace yet.
+- **Product disable / enable / recycle bin** are in Inventory (right-click or the bulk bar, `inventory.delete`).
+- **Racks and boxes** (Racks tab, Inventory, POS, purchase review, reports): docs/LOCATIONS.md, DECISIONS D25–D30.
+  `scripts/perf_locations.py` re-measures at 10k products / 50k batches.

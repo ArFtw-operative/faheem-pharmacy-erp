@@ -12,6 +12,7 @@ import { physicalEditor, formFor, formOptions, forms as itemForms, wireFormSelec
 //   Delete   remove the line            Alt+O     supplier's file
 import { $, BOOT, api, debounce, esc, fmtDateTime, fmtExp, h, modal, money, toBase } from "erp/core";
 import { Grid } from "erp/grid";
+import { pickLocation } from "erp/locations";
 
 export const STATUS = {
   READY: ["Ready", "ok"], CORRECTED: ["Corrected", "ok"], NEEDS_REVIEW: ["Needs review", "warn"],
@@ -116,6 +117,7 @@ export function create(ctx, params, root) {
   root.innerHTML = `<div class="pdoc">
     <div class="pdoc-head"></div>
     <div class="pdoc-bar"></div>
+    <div class="filters pdoc-filters"></div>
     <div class="pdoc-split"><div class="pdoc-lines"></div><aside class="pdoc-side"></aside></div>
   </div>`;
   const head = $(".pdoc-head", root), bar = $(".pdoc-bar", root), side = $(".pdoc-side", root);
@@ -138,6 +140,7 @@ export function create(ctx, params, root) {
       { key: "item", label: "Our product", width: 210, render: (r) => r.item ? `${esc(r.item.name)} <span class="tag">${esc(matchLabel(r.match))}</span>`
         : r.new_product ? `<span class="tag new">NEW</span> ${esc(r.name)}` : '<span class="bad">— F4 to match</span>' },
       { key: "product_category", label: "Category", width: 84, render: (r) => r.product_category ? `<span class="tag">${esc(catName(r.product_category))}</span>` : '<span class="muted">—</span>' },
+      ...(CAN["rack.view"] ? [{ key: "location", label: "Rack", width: 104, render: (r) => locCell(r.location) }] : []),
       { key: "batch", label: "Batch", width: 96, render: (r) => cell(r, "batch", `<span class="mono">${esc(r.batch || "—")}</span>`) },
       { key: "expiry", label: "Expiry", width: 74, render: (r) => cell(r, "expiry", r.expiry ? fmtExp(r.expiry) : `<span class="muted">${esc(r.expiry_raw || "—")}</span>`) },
       { key: "pack", label: "Packing", width: 82, render: (r) => cell(r, "pack", `<span class="mono">${esc(r.pack || "—")}</span>`) },
@@ -185,14 +188,69 @@ export function create(ctx, params, root) {
       { label: "Accept warnings", key: keys.keyFor("purchase.accept"), action: () => accept(grid.selected) },
       { label: "Remove line", key: keys.keyFor("purchase.removeLine"), action: () => removeLine(grid.selected) },
       { label: "Change category only", key: keys.keyFor("purchase.category"), action: () => changeCategory() },
+      ...rackItems(r),
       { label: "Mark / unmark for posting", key: "Space", action: () => grid.toggleMark() },
       ...(draft() ? [{ label: "Delete purchase draft", key: keys.keyFor("purchase.delete"), action: deleteDoc },
         { label: "Cancel purchase draft", key: keys.keyFor("purchase.cancel"), action: cancelDoc }] : []),
     ] : [{ label: "Stock ledger of the product", key: "Enter", action: () => openLedger(grid.selected) },
       ...(CAN["purchase.create"] ? [{ label: "Change category only", key: keys.keyFor("purchase.category"), action: () => changeCategory() }] : []),
+      ...rackItems(r),
       ...(r.status === "POSTED" && CAN["purchase.post"] ? [{ label: "Roll back to draft (take out of stock)", key: keys.keyFor("purchase.rollback"), action: () => rollback() }] : [])],
   });
   $(".pdoc-lines", root).append(grid.el);
+
+  /** Where the stock goes: set on the line (bold), already the product's place, or only suggested (italic, "?"). */
+  function locCell(l) {
+    if (!l || l.state === "NONE") return '<span class="muted">—</span>';
+    if (l.state === "CONFIRMED") return `<b class="loc-code" title="Set for this receipt${l.rack_name ? " · " + esc(l.rack_name) : ""}">${esc(l.label)}</b>`;
+    if (l.state === "CURRENT") return `<span class="loc-code" title="The product's current place${l.rack_name ? " · " + esc(l.rack_name) : ""}">${esc(l.label)}</span>`;
+    const why = { CATEGORY: "set for its category", USUAL: "where its category usually is", LAST: "where it was before" }[l.source] || "";
+    return `<i class="loc-sug" title="Suggested — ${esc(why)}. ${esc(keys.keyFor("purchase.rackSuggested"))} accepts">${esc(l.label)}?</i>`;
+  }
+  function rackItems(r) {
+    if (!CAN["rack.assign"]) return [];
+    const cat = r && r.product_category;
+    return [
+      { label: markedRows().length > 1 ? `Set rack for ${markedRows().length} lines…` : "Set rack / box…", key: keys.keyFor("purchase.rack"), action: () => setRack() },
+      ...(suggestedRows().length ? [{ label: `Accept suggested racks (${suggestedRows().length})`, key: keys.keyFor("purchase.rackSuggested"), action: () => acceptSuggested() }] : []),
+      ...(cat ? [{ label: `Select all ${catName(cat)} lines`, action: () => selectCategory(cat) }] : []),
+    ];
+  }
+  const pickRows = () => (markedRows().length ? markedRows() : grid.selected ? [grid.selected] : []);
+  const suggestedRows = () => (markedRows().length ? markedRows() : lines).filter((l) => l.location?.state === "SUGGESTED");
+  function selectCategory(cat) {
+    const ids = lines.filter((l) => l.product_category === cat && l.status !== "CLOSED").map((l) => l.id);
+    ids.forEach((i) => markedIds.add(i));
+    grid.setMarks(grid.rows.map((r, i) => (markedIds.has(r.id) ? i : -1)).filter((i) => i >= 0));
+    renderBar();
+    ctx.status(`${ids.length} ${catName(cat)} line(s) selected — ${keys.keyFor("purchase.rack")} sets their rack`, "ok");
+  }
+  /** One rack / box for the selected lines (stock posts there); received lines move their product now. */
+  async function setRack() {
+    if (!CAN["rack.assign"]) { ctx.status("Setting racks needs the rack assign right", "warn"); return; }
+    const rows = pickRows();
+    if (!rows.length) { ctx.status("Select lines first (Space marks one, Shift+↑↓ several)", "warn"); return; }
+    const first = rows[0].location;
+    const set = rows.filter((r) => r.location?.state === "CONFIRMED").length;
+    const picked = await pickLocation({ title: `Rack for ${rows.length} line(s)`, allowClear: set > 0,
+      clearLabel: `Instead, clear the rack chosen on ${set} line(s)`,
+      intro: `${rows.length} line(s). Open lines receive into it when posted; already received lines move their product now (stock is not changed).`,
+      current: rows.length === 1 && first && first.rack_id ? { rack_id: first.rack_id, box_id: first.box_id } : null,
+      verb: (t) => (t === "Unassigned" ? "Clear the rack" : `Set ${t || "rack"} on ${rows.length} line(s)`),
+      apply: (t) => api(`/api/erp/purchases/${id}/lines/location`, { method: "POST", body: { line_ids: rows.map((r) => r.id), rack_id: t.rack_id, box_id: t.box_id } }) });
+    if (picked) { render(picked.result); ctx.status(`Rack ${picked.label} on ${picked.result.result.changed} line(s)${picked.result.result.moved ? ` · ${picked.result.result.moved} product(s) moved` : ""}`, "ok"); }
+    grid.focus();
+  }
+  async function acceptSuggested() {
+    if (!CAN["rack.assign"]) return;
+    const rows = suggestedRows();
+    if (!rows.length) { ctx.status("No suggested racks to accept", "ok"); return; }
+    try {
+      const out = await api(`/api/erp/purchases/${id}/lines/location`, { method: "POST", body: { line_ids: rows.map((r) => r.id), suggested: true } });
+      render(out);
+      ctx.status(`Suggested rack confirmed on ${out.result.changed} line(s)`, "ok");
+    } catch (err) { ctx.status(err.message, "error"); }
+  }
 
   const matchLabel = (m) => ({ SUPPLIER_MAP: "supplier map", CODE: "code", EXACT_NAME: "exact name", NORMALIZED_NAME: "normalised name",
     CANONICAL_NAME_PACK: "name + pack", MANUAL: "chosen", NEW_PRODUCT: "created" })[m] || m.toLowerCase();
@@ -235,6 +293,88 @@ export function create(ctx, params, root) {
   const VIEWS = { READY: "Ready", CORRECTED: "Corrected", NEEDS_REVIEW: "Needs review", PRODUCT_MATCH_REQUIRED: "Product match",
     INVALID: "Invalid", POSTED: "Posted", CLOSED: "Not received", SELECTED: "Selected", ATTENTION: "Needing attention",
     GATE_WARN: "Accepted with a warning", GATE_AUTO: "Auto-accepted", PROPOSED: "Proposed count" };
+  // filters on top of the status chips (find · category · rack · form), so a person can narrow to,
+  // say, every FMCG line without a rack, mark them all (Ctrl+A) and set the rack once (Alt+L)
+  const LF = { q: "", cat: "", rack: "", form: "" };
+  const lineForm = (l) => (l.physical?.form || l.dosage_form || "").toUpperCase();
+  const rackState = (l) => l.location?.state || "NONE";
+  function lineFilter(l) {
+    if (LF.q) {
+      const t = LF.q.toLowerCase();
+      if (![l.name, l.item?.name, l.supplier_code, l.batch, l.pack, l.manufacturer].some((x) => (x || "").toLowerCase().includes(t))) return false;
+    }
+    if (LF.cat && (l.product_category || "") !== LF.cat) return false;
+    if (LF.form && lineForm(l) !== LF.form) return false;
+    if (LF.rack) {
+      const s = rackState(l);
+      if (LF.rack === "none" && s !== "NONE") return false;
+      if (LF.rack === "suggested" && s !== "SUGGESTED") return false;
+      if (LF.rack === "set" && s !== "CONFIRMED") return false;
+      if (LF.rack === "current" && s !== "CURRENT") return false;
+      if (LF.rack === "unplaced" && (s === "CONFIRMED" || s === "CURRENT")) return false;
+      if (LF.rack.startsWith("r:") && !((s === "CONFIRMED" || s === "CURRENT") && String(l.location.rack_id) === LF.rack.slice(2))) return false;
+    }
+    return true;
+  }
+  const filtering = () => !!(LF.q || LF.cat || LF.rack || LF.form);
+  function renderFilters() {
+    const fl = $(".pdoc-filters", root);
+    const count = (pred) => lines.filter(pred).length;
+    const opt = (v, label, n) => `<option value="${esc(v)}">${esc(label)}${n !== undefined ? ` (${n})` : ""}</option>`;
+    if (!fl.dataset.built) {
+      // built once: re-rendering would replace the search box under the cursor while typing
+      fl.dataset.built = "1";
+      fl.innerHTML = `
+        <label>Find<input class="lf-q" placeholder="product, supplier text, batch, pack" autocomplete="off"></label>
+        <label>Category<select class="lf-cat"></select></label>
+        ${CAN["rack.view"] ? '<label>Rack<select class="lf-rack"></select></label>' : ""}
+        <label>Form<select class="lf-form"></select></label>
+        <button type="button" class="btn lf-clear" hidden>Clear filters</button>
+        <span class="spacer"></span><span class="muted lf-count"></span>
+        <button type="button" class="btn lf-markall" title="Mark every line shown (Ctrl+A in the grid)">Mark all shown</button>
+        ${CAN["rack.assign"] ? `<button type="button" class="btn primary lf-rackset">Set rack… <kbd>${esc(keys.keyFor("purchase.rack"))}</kbd></button>` : ""}`;
+      for (const [k, cls] of [["cat", ".lf-cat"], ["rack", ".lf-rack"], ["form", ".lf-form"]]) {
+        const sel = $(cls, fl);
+        if (sel) sel.onchange = () => { LF[k] = sel.value; applyView(false); setTimeout(() => grid.focus(), 0); };
+      }
+      const q = $(".lf-q", fl);
+      let t;
+      q.oninput = () => { clearTimeout(t); t = setTimeout(() => { LF.q = q.value.trim(); applyView(false); }, 150); };
+      q.onkeydown = (e) => {
+        if (e.key === "ArrowDown" || e.key === "Enter") {
+          e.preventDefault(); e.stopPropagation(); clearTimeout(t);
+          if (LF.q !== q.value.trim()) { LF.q = q.value.trim(); applyView(false); }
+          grid.focus();
+        } else if (e.key === "Escape" && q.value) { e.preventDefault(); e.stopPropagation(); q.value = ""; LF.q = ""; applyView(false); }
+      };
+      $(".lf-clear", fl).onclick = () => { Object.assign(LF, { q: "", cat: "", rack: "", form: "" }); q.value = ""; applyView(false); grid.focus(); };
+      $(".lf-markall", fl).onclick = () => { grid.markAll(); grid.focus(); };
+      $(".lf-rackset", fl)?.addEventListener("click", () => setRack());
+    }
+    // options and counts follow the lines (after every correction, match or rack change)
+    const cats = [...new Set(lines.map((l) => l.product_category || ""))].sort((a, b) => catName(a).localeCompare(catName(b)));
+    const forms = [...new Set(lines.map(lineForm).filter(Boolean))].sort();
+    const racks = new Map();
+    for (const l of lines) if (["CONFIRMED", "CURRENT"].includes(rackState(l)) && l.location.rack_id) racks.set(String(l.location.rack_id), l.location.label.split(" / ")[0]);
+    const fill = (cls, k, html) => {
+      const sel = $(cls, fl);
+      if (!sel) return;
+      sel.innerHTML = html;
+      if (![...sel.options].some((o) => o.value === LF[k])) LF[k] = "";
+      sel.value = LF[k];
+    };
+    fill(".lf-cat", "cat", opt("", "All") + cats.map((c) => opt(c, c ? catName(c) : "No category", count((l) => (l.product_category || "") === c))).join(""));
+    fill(".lf-rack", "rack", opt("", "All")
+      + opt("unplaced", "Needs a rack (none or only suggested)", count((l) => !["CONFIRMED", "CURRENT"].includes(rackState(l))))
+      + opt("none", "No rack, no suggestion", count((l) => rackState(l) === "NONE"))
+      + opt("suggested", "Suggested only", count((l) => rackState(l) === "SUGGESTED"))
+      + opt("set", "Set on this purchase", count((l) => rackState(l) === "CONFIRMED"))
+      + opt("current", "Already in a rack", count((l) => rackState(l) === "CURRENT"))
+      + [...racks].map(([id, code]) => opt("r:" + id, "In " + code, count((l) => ["CONFIRMED", "CURRENT"].includes(rackState(l)) && String(l.location.rack_id) === id))).join(""));
+    fill(".lf-form", "form", opt("", "All") + forms.map((f) => opt(f, f.charAt(0) + f.slice(1).toLowerCase(), count((l) => lineForm(l) === f))).join(""));
+    $(".lf-clear", fl).hidden = !filtering();
+    $(".lf-count", fl).textContent = filtering() ? `${grid.rows.length} of ${lines.length} lines` : "";
+  }
   function applyView(keep = true) {
     for (const id of [...markedIds]) if (!lines.some((l) => l.id === id)) markedIds.delete(id);
     if (view === "SELECTED" && !markedIds.size) view = "all";
@@ -246,13 +386,15 @@ export function create(ctx, params, root) {
       : view === "GATE_WARN" ? lines.filter((l) => !DONE.includes(l.status) && gateOf(l) === "AUTO_ACCEPT_WITH_WARNING" && !isProposed(l))
       : view === "GATE_AUTO" ? lines.filter((l) => !DONE.includes(l.status) && gateOf(l) === "AUTO_ACCEPT")
       : lines.filter((l) => l.status === view);
+    const shown = filtering() ? rows.filter(lineFilter) : rows;
     switching = true;
     try {
-      grid.setRows(rows, { keep });
-      grid.setMarks(rows.map((r, i) => (markedIds.has(r.id) ? i : -1)).filter((i) => i >= 0));
+      grid.setRows(shown, { keep });
+      grid.setMarks(shown.map((r, i) => (markedIds.has(r.id) ? i : -1)).filter((i) => i >= 0));
     } finally { switching = false; }
     renderBar();
-    if (!rows.length) renderSide(null);
+    renderFilters();
+    if (!shown.length) renderSide(null);
   }
   function setView(v) {
     view = view === v || !v ? "all" : v;
@@ -292,6 +434,8 @@ export function create(ctx, params, root) {
       ${c.POSTED ? chip("POSTED", "Posted", c.POSTED, "ok") : ""}
       ${c.CLOSED ? chip("CLOSED", "Not received", c.CLOSED) : ""}
       ${markedRows().length && CAN["purchase.create"] ? `<button type="button" class="chip p-cat" title="Change only the category of the selected lines (${esc(keys.keyFor("purchase.category"))})">Category… <kbd>${esc(keys.keyFor("purchase.category"))}</kbd></button>` : ""}
+      ${markedRows().length && CAN["rack.assign"] ? `<button type="button" class="chip p-rack" title="Set the rack / box of the selected lines">Rack… <kbd>${esc(keys.keyFor("purchase.rack"))}</kbd></button>` : ""}
+      ${CAN["rack.assign"] && isOpen() && suggestedRows().length ? `<button type="button" class="chip p-rsug" title="Confirm each line's suggested rack">Accept ${suggestedRows().length} suggested rack${suggestedRows().length === 1 ? "" : "s"} <kbd>${esc(keys.keyFor("purchase.rackSuggested"))}</kbd></button>` : ""}
       ${marked.length ? `${chip("SELECTED", "Selected", marked.length, "sel")}${markedReady < marked.length ? `<span class="hint">${marked.length - markedReady} not ready</span>` : ""}<button type="button" class="chip clear-sel" title="Clear the selection (Esc)">✕ clear</button>`
         : isOpen() && s.ready ? '<span class="hint">Shift+↑↓ selects lines · Space marks one · Ctrl+A all</span>' : ""}
       <span class="spacer"></span>
@@ -317,6 +461,10 @@ export function create(ctx, params, root) {
     if (post) post.onclick = () => postDoc();
     const cat = $(".p-cat", bar);
     if (cat) cat.onclick = () => changeCategory();
+    const rk = $(".p-rack", bar);
+    if (rk) rk.onclick = () => setRack();
+    const rs = $(".p-rsug", bar);
+    if (rs) rs.onclick = () => acceptSuggested();
     const back = $(".p-rollback", bar);
     if (back) back.onclick = () => rollback();
     const queue = $(".p-queue", bar);
@@ -979,6 +1127,8 @@ export function create(ctx, params, root) {
         "purchase.next": nextIssue, "purchase.post": () => postDoc(), "purchase.refresh": load, "purchase.cancel": cancelDoc,
         "purchase.delete": deleteDoc, "purchase.removeLine": () => removeLine(grid.selected),
         "purchase.columns": columns, "purchase.gst": gstPanel, "purchase.category": changeCategory, "purchase.rollback": rollback,
+        "purchase.rack": setRack, "purchase.rackSuggested": acceptSuggested,
+        "purchase.filter": () => { const q = $(".lf-q", root); q?.focus(); q?.select(); },
         "purchase.packaging": () => packagingDialog(grid.selected), "purchase.inspect": () => inspector(grid.selected),
         "purchase.inbox": () => setView(view === "ATTENTION" ? "all" : "ATTENTION"),
         "purchase.source": () => doc && doc.purchase.has_source ? window.open(`/api/erp/purchases/${id}/source`, "_blank") : ctx.status("No supplier file (manual entry)", "warn"),

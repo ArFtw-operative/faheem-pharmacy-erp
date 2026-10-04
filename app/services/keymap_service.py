@@ -28,6 +28,7 @@ ACTIONS: list[dict] = [
     {"id": "app.newBill", "scope": "global", "group": "Everywhere", "label": "New POS bill tab (next customer)", "key": "Alt+N"},
     {"id": "app.closeTab", "scope": "global", "group": "Everywhere", "label": "Close tab / bill", "key": "Alt+W"},
     {"id": "app.nextTab", "scope": "global", "group": "Everywhere", "label": "Next tab", "key": "Alt+PageDown"},
+    {"id": "app.tabSwitcher", "scope": "global", "group": "Everywhere", "label": "Tab switcher: open tabs, most recent first (hold Alt, tap Z to step, release to switch)", "key": "Alt+Z"},
     {"id": "app.prevTab", "scope": "global", "group": "Everywhere", "label": "Previous tab", "key": "Alt+PageUp"},
     {"id": "app.pos", "scope": "global", "group": "Everywhere", "label": "Go to POS", "key": "Alt+P"},
     {"id": "app.inventory", "scope": "global", "group": "Everywhere", "label": "Go to Inventory", "key": "Alt+I"},
@@ -37,6 +38,7 @@ ACTIONS: list[dict] = [
     {"id": "app.adjustments", "scope": "global", "group": "Everywhere", "label": "Go to Stock adjustments", "key": "Alt+Shift+A"},
     {"id": "app.customers", "scope": "global", "group": "Everywhere", "label": "Go to Customers", "key": "Alt+Shift+C"},
     {"id": "app.masters", "scope": "global", "group": "Everywhere", "label": "Go to Categories & Forms", "key": "Alt+M"},
+    {"id": "app.racks", "scope": "global", "group": "Everywhere", "label": "Go to Racks", "key": "Alt+Shift+K"},
     {"id": "app.reports", "scope": "global", "group": "Everywhere", "label": "Go to Reports", "key": "Alt+R"},
     # ---- POS
     {"id": "pos.search", "scope": "pos", "group": "POS", "label": "Item search", "key": "F2", "bar": 1},
@@ -73,6 +75,15 @@ ACTIONS: list[dict] = [
     {"id": "reports.export", "scope": "reports", "group": "Reports", "label": "Export report to Excel", "key": "Ctrl+E", "bar": 5},
     {"id": "reports.view", "scope": "reports", "group": "Reports", "label": "Switch grid / document view", "key": "F6", "bar": 7},
     {"id": "reports.refresh", "scope": "reports", "group": "Reports", "label": "Refresh generated report", "key": "F5", "bar": 6},
+    # ---- Racks
+    {"id": "racks.search", "scope": "racks", "group": "Racks", "label": "Search racks", "key": "F2", "bar": 1},
+    {"id": "racks.new", "scope": "racks", "group": "Racks", "label": "New rack", "key": "F3", "bar": 2},
+    {"id": "racks.addProducts", "scope": "racks", "group": "Racks", "label": "Add products to the rack", "key": "F4", "bar": 3},
+    {"id": "racks.refresh", "scope": "racks", "group": "Racks", "label": "Refresh", "key": "F5", "bar": 4},
+    {"id": "racks.tab", "scope": "racks", "group": "Racks", "label": "Next tab (Products / Boxes / History / Snapshots / Settings)", "key": "F6", "bar": 5},
+    {"id": "racks.move", "scope": "racks", "group": "Racks", "label": "Move selected products", "key": "F8", "bar": 6},
+    {"id": "racks.edit", "scope": "racks", "group": "Racks", "label": "Edit rack", "key": "Ctrl+E", "bar": 7},
+    {"id": "racks.newBox", "scope": "racks", "group": "Racks", "label": "New box", "key": "Alt+B"},
     # ---- Categories & Forms
     {"id": "masters.search", "scope": "masters", "group": "Categories & Forms", "label": "Search", "key": "F2", "bar": 1},
     {"id": "masters.refresh", "scope": "masters", "group": "Categories & Forms", "label": "Refresh", "key": "F5", "bar": 2},
@@ -113,6 +124,8 @@ ACTIONS: list[dict] = [
     {"id": "history.refresh", "scope": "history", "group": "Stock history", "label": "Refresh", "key": "F5", "bar": 4},
     {"id": "history.export", "scope": "history", "group": "Stock history", "label": "Export to Excel (CSV)", "key": "F9", "bar": 5},
     {"id": "inv.history", "scope": "inventory", "group": "Inventory", "label": "Stock history of the product", "key": "F7", "bar": 8},
+    {"id": "inv.moveRack", "scope": "inventory", "group": "Inventory", "label": "Move selected products to a rack / box", "key": "F8", "bar": 9},
+    {"id": "inv.category", "scope": "inventory", "group": "Inventory", "label": "Change category of selected products", "key": "Alt+G"},
     # ---- Purchases (register, suppliers, returns)
     {"id": "purchases.search", "scope": "purchases", "group": "Purchases", "label": "Search", "key": "F2", "bar": 1},
     {"id": "purchases.import", "scope": "purchases", "group": "Purchases", "label": "Import supplier invoice (CSV / Excel / PDF)", "key": "F3", "bar": 2},
@@ -124,6 +137,9 @@ ACTIONS: list[dict] = [
     {"id": "purchases.delete", "scope": "purchases", "group": "Purchases", "label": "Delete unreceived draft", "key": "Alt+Delete", "bar": 8},
     {"id": "purchases.cancel", "scope": "purchases", "group": "Purchases", "label": "Cancel draft", "key": "Alt+X"},
     # ---- Purchase document (import review)
+    {"id": "purchase.filter", "scope": "purchase", "group": "Purchase document", "label": "Filter lines (find, category, rack, form)", "key": "Alt+S"},
+    {"id": "purchase.rack", "scope": "purchase", "group": "Purchase document", "label": "Set rack / box for selected lines", "key": "Alt+L"},
+    {"id": "purchase.rackSuggested", "scope": "purchase", "group": "Purchase document", "label": "Accept suggested racks (selected or all lines)", "key": "Alt+Shift+L"},
     {"id": "purchase.header", "scope": "purchase", "group": "Purchase document", "label": "Invoice header (supplier, number, date, total)", "key": "F2", "bar": 1},
     {"id": "purchase.add", "scope": "purchase", "group": "Purchase document", "label": "Add line", "key": "F3", "bar": 2},
     {"id": "purchase.product", "scope": "purchase", "group": "Purchase document", "label": "Match product for the line", "key": "F4", "bar": 3},
@@ -137,7 +153,7 @@ ACTIONS: list[dict] = [
     {"id": "purchase.source", "scope": "purchase", "group": "Purchase document", "label": "Open the supplier's file", "key": "Alt+O"},
     {"id": "purchase.cancel", "scope": "purchase", "group": "Purchase document", "label": "Cancel draft", "key": "Alt+X"},
     {"id": "purchase.delete", "scope": "purchase", "group": "Purchase document", "label": "Delete unreceived draft", "key": "Alt+Delete"},
-    {"id": "purchase.removeLine", "scope": "purchase", "group": "Purchase document", "label": "Remove unreceived line", "key": "Alt+D"},
+    {"id": "purchase.removeLine", "scope": "purchase", "group": "Purchase document", "label": "Remove unreceived line", "key": "Ctrl+Delete"},
     {"id": "purchase.category", "scope": "purchase", "group": "Purchase document", "label": "Change category only (selected lines, one click)", "key": "F7", "bar": 10},
     {"id": "purchase.rollback", "scope": "purchase", "group": "Purchase document", "label": "Roll back posted lines to draft (stock taken out again)", "key": "Alt+B"},
     {"id": "purchase.packaging", "scope": "purchase", "group": "Purchase document", "label": "Correct packing: what one invoice Qty is (saved for invoice, product or supplier)", "key": "Alt+K"},
@@ -155,7 +171,16 @@ FIXED = [
     ("Tab", "Next field (Qty → Disc % in the bill)"), ("Alt+1 … Alt+9", "Switch to tab 1–9"),
     ("Delete", "Remove the selected bill line (asks first)"), ("+ / −", "Change quantity of the selected line"),
     ("1s · 2s+3", "Qty shorthand: one strip · two strips and three units"), ("#", "In the item box: jumps to the Customer field"),
-    ("Space", "Select a row (Categories & Forms)"), ("Shift+F10 / Menu key", "Row context menu"),
+    ("Shift+F10 / Menu key", "Row context menu"),
+    # lists that can mark several rows (Inventory, Purchases, Racks, Categories & Forms …)
+    ("Space", "Mark / unmark the selected row"), ("Shift+↑ ↓", "Mark a range of rows"),
+    ("Ctrl+A", "Mark every row shown"), ("Ctrl+click", "Mark / unmark the clicked row"),
+    ("Esc (rows marked)", "Clear the marks"),
+    ("0–9 (bill line selected)", "Start typing the quantity of the selected bill line"),
+    ("Delete (purchase line)", "Remove the selected unreceived purchase line"),
+    ("M (Purchases list)", "The supplier's product mappings"),
+    ("Alt+1 / 2 / 3 (product editor)", "General · Packaging · Price & control tabs"),
+    ("Alt+Z (in the tab switcher)", "Next tab in the list · Shift goes back · Delete closes the highlighted tab"),
 ]
 
 # The browser (or the OS) keeps these for itself: a web page can never use them.

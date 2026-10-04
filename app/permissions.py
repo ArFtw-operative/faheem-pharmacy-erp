@@ -52,7 +52,19 @@ PERMISSION_CATALOG: dict[str, tuple[str, str]] = {
     "expiry.settle": ("expiry", "Settle an expiry (debits stock)"),
     # Stock adjustments
     "adjustment.create": ("adjustment", "Record loose/damage write-offs"),
+    # Rack / box locations
+    "rack.view": ("rack", "See racks, boxes and product locations"),
+    "rack.create": ("rack", "Create racks"),
+    "rack.edit": ("rack", "Edit racks and location settings"),
+    "rack.disable": ("rack", "Disable and enable racks"),
+    "rack.assign": ("rack", "Assign or move a product's location"),
+    "rack.bulk_move": ("rack", "Move many products to a rack at once"),
+    "rack.history.view": ("rack", "See location history"),
+    "rack.report.view": ("rack", "Rack inventory reports"),
+    "rack.snapshot.view": ("rack", "Historical (as-of) rack inventory"),
+    "box.manage": ("rack", "Create, rename and disable boxes"),
 }
+RACK_PHARMACIST = {"rack.view", "rack.assign", "rack.bulk_move", "rack.history.view", "rack.report.view", "rack.snapshot.view"}
 
 ALL_PERMISSIONS = set(PERMISSION_CATALOG)
 
@@ -82,7 +94,7 @@ DEFAULT_ROLES: dict[str, dict] = {
             "reports.sales", "reports.expiry", "reports.export",
             "expiry.view", "expiry.snooze", "expiry.settle",
             "adjustment.create",
-            },
+            } | RACK_PHARMACIST,
     },
     "Sales Staff": {
         "description": "Baseline sales role: no sales history or profit/loss",
@@ -91,7 +103,7 @@ DEFAULT_ROLES: dict[str, dict] = {
             "inventory.view",
             "sales.create", "sales.view_own", "sales.discount", "sales.refund",
             "billing.print", "whatsapp.send",
-            "customers.create", "customers.view", "followups.manage",
+            "customers.create", "customers.view", "followups.manage", "rack.view",
             },
     },
     "Counter Manager": {
@@ -101,7 +113,7 @@ DEFAULT_ROLES: dict[str, dict] = {
             "inventory.view",
             "sales.create", "sales.view_own", "sales.view_history", "sales.discount", "sales.refund",
             "billing.print", "whatsapp.send",
-            "customers.create", "customers.view", "followups.manage",
+            "customers.create", "customers.view", "followups.manage", "rack.view",
             },
     },
     "Accountant": {
@@ -113,6 +125,7 @@ DEFAULT_ROLES: dict[str, dict] = {
             "reports.financials", "reports.export",
             "sales.view_history", "sales.view_profit", "sales.export",
             "inventory.view", "inventory.export",
+            "rack.view", "rack.history.view", "rack.report.view", "rack.snapshot.view",
             },
     },
 }

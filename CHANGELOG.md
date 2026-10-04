@@ -5,6 +5,24 @@ lists its database migrations. Upgrades keep all business history (see docs/UPGR
 
 ## Unreleased (next: 1.9.0)
 
+- **Racks and boxes (new Racks tab, Alt+Shift+K):** racks with optional boxes, every product's place,
+  its history and rack inventory on any past day (docs/LOCATIONS.md, DECISIONS D25–D30). Inventory:
+  Rack / Box columns, Location filter (unassigned, no box, any rack or box), sort by rack, F8 moves the
+  marked products (one request, validated, recorded), side panel shows the location and its history.
+  POS search, quick lookup and the bill show the rack code first (`R-A03 · Fever & Pain · B02`); a rack
+  or box code typed in POS lists what is kept there. Purchase review: Rack column (set / current /
+  suggested), filters (Find, Category, Rack, Form), Mark all shown, Set rack (Alt+L), Accept suggested
+  racks (Alt+Shift+L); confirmed racks are applied when the purchase posts. Reports → Rack Inventory
+  (as of any day, Σ racks + Unassigned = total stock) and Rack History. Inventory import reads Rack
+  Code / Box Code (unknown codes are queued, never created); export includes them. Permissions
+  `rack.*` and `box.manage`. Migration `e3a5c7e9b1d4` is additive: existing products start Unassigned.
+- **Inventory:** Starts with filter (A–Z, 0–9); bulk-action bar for marked products that offers only
+  what changes something ("Enable 3 disabled", "Disable 8 enabled", "Archive 4 with no stock").
+- **Keyboard:** tab switcher (Alt+Z: most recent first; hold Alt and tap Z, release to switch); holding
+  Alt+N / Alt+W opens / closes tabs one after another (stops at an unsaved bill and at 9 bills);
+  every key a screen handles is listed in Keyboard shortcuts. "Remove unreceived line" moved from
+  Alt+D (kept by the browser, never worked) to Ctrl+Delete.
+
 - **Inventory — complete product control in one place:** right-click (or Shift+F10) a product, or several
   marked with Ctrl+click / Shift+↑↓ / Space, to **change category** (drop-down of the live list, with
   "＋ New category…"; Purchases uses the same picker), **disable**

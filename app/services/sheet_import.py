@@ -65,6 +65,9 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "base_unit": ("baseunit", "stockunit", "saleunit", "sellingunit"),
     "pack_unit": ("packunit", "purchaseunit", "purchaseuom"),
     "form": ("form", "dosageform"),
+    # location (inventory sheets). No bare "box": on a supplier bill that can be a quantity in boxes.
+    "rack_code": ("rack", "rackcode", "rackno", "racklocation", "shelf", "shelfcode"),
+    "box_code": ("boxcode", "boxno", "bin", "binno", "bincode"),
 }
 _HEADER_KEYS: dict[str, str] = {}
 for _field, _names in _ALIASES.items():

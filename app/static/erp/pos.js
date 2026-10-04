@@ -12,6 +12,7 @@ import * as keys from "erp/keys";
 import { createStudio } from "erp/studio";
 import { followUpPopover } from "erp/followup";
 import { WA_ICON, askPhone, normalizePhone, prettyPhone, sendInvoice, waStatus } from "erp/whatsapp";
+import { locationHtml } from "erp/locations";
 import { $, $$, ApiError, api, daysUntil, debounce, describe, esc, lineAmount, fmtExp, fmtExpShort, h, money, num, parseQty, r2, rupees, uid, unitName } from "erp/core";
 
 // Bill numbers are slots among the POS tabs that are open right now: one tab is
@@ -278,7 +279,7 @@ export function create(ctx, params, root, saved) {
       : `<b>${l.qty}</b>`;
     return `<tr data-i="${i}" class="${i === sel ? "sel" : ""}${bad ? " bad" : ""}" title="${esc(bad)}">
       <td class="num muted">${i + 1}</td><td class="mono">${esc(l.code)}</td>
-      <td class="prod">${esc(l.name)}${l.upp > 1 && l.qty >= l.upp ? `<small>= ${esc(describe(l.qty, l.upp, l.base_unit, l.pack_unit))}</small>` : ""}</td>
+      <td class="prod">${esc(l.name)}${l.upp > 1 && l.qty >= l.upp ? `<small>= ${esc(describe(l.qty, l.upp, l.base_unit, l.pack_unit))}</small>` : ""}${l.rack ? `<small class="bill-loc" title="Rack / box">${esc(l.rack)}</small>` : ""}</td>
       <td class="mono">${esc(first.batch_no || "—")}${a.length > 1 ? ` <span class="tag">+${a.length - 1}</span>` : ""}${l.batch_id ? ' <span class="tag" title="Chosen by cashier">M</span>' : ""}</td>
       <td class="${near ? "warn" : ""}">${fmtExpShort(first.expiry)}</td>
       <td class="num">${upp(l)}</td>
@@ -394,7 +395,7 @@ export function create(ctx, params, root, saved) {
       <span>Available <b>${avail(l)}</b> (${esc(describe(avail(l), l.upp, l.base_unit, l.pack_unit))})</span>
       ${a.length ? `<span>From ${a.map((x) => `${esc(x.b.batch_no || "—")} ×${x.qty} @₹${money(x.b.unit_mrp)} · Exp ${fmtExp(x.b.expiry)}`).join(" · ")}</span>` : ""}
       ${l.content ? `<span>Content <b>${esc(l.content)}</b></span>` : ""}
-      ${l.rack ? `<span>Rack <b>${esc(l.rack)}</b></span>` : ""}`;
+      ${l.rack ? `<span>Location ${l.location ? locationHtml(l.location) : `<b>${esc(l.rack)}</b>`}</span>` : ""}`;
   }
 
   function payProblem(t = totals()) {
@@ -599,7 +600,7 @@ export function create(ctx, params, root, saved) {
   // ---------------------------------------------------------------- adding products
   function lineFrom(p) {
     return { item_id: p.id, code: p.code, name: p.name, pack_raw: p.pack_raw, upp: p.upp || 1, loose: !!p.loose,
-      base_unit: p.base_unit, pack_unit: p.pack_unit, form: p.form, rack: p.rack, batches: p.batches, batch_id: null, qty: 0,
+      base_unit: p.base_unit, pack_unit: p.pack_unit, form: p.form, rack: p.rack, location: p.location || null, batches: p.batches, batch_id: null, qty: 0,
       content: p.content || "", disc: 0, active: p.active !== false };
   }
   function addProduct(p) {
@@ -644,7 +645,7 @@ export function create(ctx, params, root, saved) {
           <td class="num">${p.active === false ? '<span class="bad-t">Disabled — not for sale</span>' : p.batches.length ? `${p.stock} ${esc(unitName(p.base_unit, p.stock))}<small>${esc(p.stock_label)}${inBill ? " · " + inBill + " in bill" : ""}</small>` : '<span class="bad-t">Out of stock</span>'}</td>
           <td class="${b && daysUntil(b.expiry) <= expiryDays ? "warn" : ""}">${b ? fmtExpShort(b.expiry) : "—"}</td>
           <td class="num">${b ? `₹${money(b.unit_mrp)}<small>${p.upp > 1 ? "/" + esc(unitName(p.base_unit, 1)) + " · ₹" + money(b.pack_mrp) + "/" + esc(unitName(p.pack_unit, 1)) : ""}</small>` : "—"}</td>
-          <td>${esc(p.rack || "")}</td></tr>`;
+          <td class="res-loc">${p.location ? locationHtml(p.location) : p.rack ? `<b class="loc-code">${esc(p.rack)}</b>` : '<span class="muted">—</span>'}</td></tr>`;
       }).join("")}${S.manual ? typedRow(results.length) : ""}</tbody></table><div class="drop-foot">${S.manual
         ? "Manual bill · ↑↓ choose · Enter add (stock is not checked or changed) · last row adds the typed name · Esc close"
         : "↑↓ choose · Enter add · Esc close"}</div>`
@@ -969,7 +970,7 @@ export function create(ctx, params, root, saved) {
         const fresh = await api(`/api/items/${c.item_id}/batches`);
         const batches = (fresh.batches || []).map((b) => ({ id: b.id, batch_no: b.batch_no, expiry: b.expiry, stock: b.quantity, pack_mrp: b.mrp, upp: b.units_per_pack, unit_mrp: b.unit_mrp }));
         lines.push({ ...lineFrom({ id: c.item_id, code: fresh.article_id, name: fresh.name, pack_raw: fresh.pack_size, upp: fresh.units_per_pack,
-          loose: fresh.loose_sale, base_unit: fresh.base_unit, pack_unit: fresh.pack_unit, form: fresh.dosage_form, rack: c.rack, batches }),
+          loose: fresh.loose_sale, base_unit: fresh.base_unit, pack_unit: fresh.pack_unit, form: fresh.dosage_form, rack: fresh.rack || c.rack, active: fresh.active, batches }),
         batch_id: batches.some((b) => b.id === c.batch_id) ? c.batch_id : null, qty: Number(c.qty || c.quantity) || 1,
         disc: Math.min(num(c.disc), MAXD) });
       }

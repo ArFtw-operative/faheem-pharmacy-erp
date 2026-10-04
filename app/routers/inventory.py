@@ -142,11 +142,13 @@ def _usable_batches(item: Item, today: date) -> list[Batch]:
     return sorted(batches, key=lambda b: (b.expiry_date is None, b.expiry_date or date.max, b.id))
 
 
-def _item_payload(item: Item, today: date) -> dict:
-    """What the counter needs: packaging, sellable batches, MRPs. Never cost."""
+def _item_payload(item: Item, today: date, rack: str = "") -> dict:
+    """What the counter needs: packaging, sellable batches, MRPs, where it is kept. Never cost."""
     batches = _usable_batches(item, today)
     stock = sum(b.quantity for b in batches)
     return {
+        "rack": rack,
+        "active": bool(item.is_active),
         "id": item.id,
         "article_id": item.article_id,
         "name": item.name,
@@ -253,9 +255,12 @@ def api_item_batches(
     db: Session = Depends(get_db),
     user: User = Depends(require_login),
 ):
+    from app.services import location_service
+
     item = db.get(Item, item_id)
     if item is None:
         raise HTTPException(404, "Item not found")
-    return _item_payload(item, date.today())
+    here = location_service.current(db, [item.id]).get(item.id)
+    return _item_payload(item, date.today(), here.short if here else "")
 
 

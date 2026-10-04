@@ -16,6 +16,7 @@ const MODULES = {
   sales: { label: "Sales", load: () => import("erp/sales") },
   customers: { label: "Customers", load: () => import("erp/customers") },
   reports: { label: "Reports", load: () => import("erp/reports") },
+  racks: { label: "Racks", key: "Alt+K", load: () => import("erp/racks") },
   masters: { label: "Categories & Forms", load: () => import("erp/masters") },
   settings: { label: "Settings", load: () => import("erp/settings") },
 };
@@ -190,7 +191,11 @@ async function open(module, params = {}, { id, focus = true, fresh = false } = {
   return tab;
 }
 
+const recent = [];          // tab ids, most recently used first (tab switcher order)
 function activate(tab, focus = true) {
+  const r = recent.indexOf(tab.id);
+  if (r >= 0) recent.splice(r, 1);
+  recent.unshift(tab.id);
   if (active && active !== tab) {
     active.el.hidden = true;
     if (active.screen.onHide) active.screen.onHide();
@@ -323,6 +328,7 @@ setInterval(tick, 1000);
 const COMMANDS = [
   { label: "Keyboard shortcuts", get key() { return keys.keyFor("app.shortcuts"); }, run: () => showShortcuts() },
   { label: "New POS bill tab (another customer)", get key() { return keys.keyFor("app.newBill"); }, run: () => newBill() },
+  { label: "Switch tab (open tabs, most recent first)", get key() { return keys.keyFor("app.tabSwitcher"); }, run: () => tabSwitcher() },
   { label: "Open POS", get key() { return keys.keyFor("app.pos"); }, run: () => open("pos") },
   { label: "New manual bill (items not in stock)", run: async () => { const t = await open("pos", {}, { fresh: true }); t && t.screen.manual && t.screen.manual(); } },
   { label: "Open Inventory", get key() { return keys.keyFor("app.inventory"); }, run: () => open("inventory") },
@@ -400,14 +406,71 @@ function lookup() {
   q.focus();
 }
 
+// ------------------------------------------------------------------ tab switcher (Alt+Z)
+// Opens on the previous tab, most recently used first. Hold Alt and tap Z again to step down;
+// releasing Alt switches (like Alt+Tab). Or type to filter, ↑↓ / 1–9 / Enter, Delete closes
+// the highlighted tab, Esc cancels.
+function tabSwitcher() {
+  if (tabs.length < 2) { status(tabs.length ? "Only one tab is open" : "No tabs open"); return; }
+  const prev = document.activeElement;
+  const order = () => [...recent.map((id) => tabs.find((t) => t.id === id)).filter(Boolean), ...tabs.filter((t) => !recent.includes(t.id))];
+  const label = (t) => (MODULES[t.module] || {}).label || t.module;
+  const el = h(`<div class="modal-backdrop tabsw-back"><div class="palette tabsw" role="dialog" aria-modal="true" aria-label="Switch tab">
+    <input class="tabsw-q" placeholder="Switch tab — type to filter · ↑↓ · 1–9 · Enter · Delete closes · Esc" autocomplete="off">
+    <div class="palette-list tabsw-list" role="listbox"></div></div></div>`);
+  const q = el.querySelector(".tabsw-q"), list = el.querySelector(".tabsw-list");
+  let shown = [], at = 0, typed = false, closed = false;
+  const altHeld = true;      // opened by Alt+Z: releasing Alt switches until the person types or clicks
+  const paint = () => {
+    const t = q.value.trim().toLowerCase();
+    shown = order().filter((x) => !t || `${x.title} ${label(x)}`.toLowerCase().includes(t));
+    at = Math.max(0, Math.min(at, shown.length - 1));
+    list.innerHTML = shown.map((x, i) => `<div class="palette-item tabsw-item${i === at ? " on" : ""}${x === active ? " cur" : ""}" role="option" data-i="${i}">
+      <span class="tabsw-n">${i < 9 ? i + 1 : ""}</span><span class="tabsw-t"><b>${esc(x.title)}</b>${x.dirty ? ' <span class="tag warn">unsaved</span>' : ""}</span>
+      <span class="muted">${esc(label(x))}${x === active ? " · current" : ""}</span></div>`).join("") || '<div class="muted tabsw-none">No tab matches</div>';
+    list.querySelector(".on")?.scrollIntoView({ block: "nearest" });
+  };
+  const close = () => { if (closed) return; closed = true; el.remove(); document.removeEventListener("keyup", up, true); };
+  const go = (i = at) => { const t = shown[i]; close(); if (t) activate(t); else if (prev && prev.focus) prev.focus(); };
+  const up = (e) => { if (e.key === "Alt" && altHeld && !typed) { e.preventDefault(); go(); } };
+  el.addEventListener("keydown", async (e) => {
+    e.stopPropagation();
+    const name = keyName(e);
+    if (keys.matches("app.tabSwitcher", name)) { e.preventDefault(); at = (at + (e.shiftKey ? -1 : 1) + shown.length) % shown.length; paint(); return; }
+    if (e.key === "Escape") { e.preventDefault(); close(); if (prev && prev.focus) prev.focus(); return; }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); at = (at + (e.key === "ArrowDown" ? 1 : -1) + shown.length) % shown.length; paint(); return; }
+    if (e.key === "Enter") { e.preventDefault(); go(); return; }
+    if (/^[1-9]$/.test(e.key) && !q.value) { e.preventDefault(); go(Number(e.key) - 1); return; }
+    if (e.key === "Delete" || keys.matches("app.closeTab", name)) {
+      e.preventDefault();
+      const t = shown[at];
+      if (!t) return;
+      typed = true;                         // a tab was closed from here: releasing Alt no longer switches
+      el.hidden = true;
+      await closeTab(t);                    // asks first when the tab has unsaved work
+      el.hidden = false;
+      if (tabs.length < 2) { close(); return; }
+      paint(); q.focus();
+    }
+  });
+  q.addEventListener("input", () => { typed = true; at = 0; paint(); });
+  list.addEventListener("click", (e) => { const o = e.target.closest("[data-i]"); if (o) go(Number(o.dataset.i)); });
+  el.addEventListener("mousedown", (e) => { if (e.target === el) { close(); if (prev && prev.focus) prev.focus(); } });
+  document.addEventListener("keyup", up, true);
+  document.body.append(el);
+  at = order()[0] === active ? 1 : 0;                            // start on the previous tab
+  paint();
+  q.focus();
+}
+
 // ------------------------------------------------------------------ global keys
 const showShortcuts = () => openShortcuts({ status, scope: active?.module });
 $("#st-shortcuts").onclick = showShortcuts;
 const GLOBAL = {
   "app.shortcuts": showShortcuts, "app.palette": paletteOpen, "app.lookup": lookup,
-  "app.newBill": newBill, "app.closeTab": () => closeTab(),
+  "app.newBill": newBill, "app.closeTab": () => closeTab(), "app.tabSwitcher": tabSwitcher,
   "app.nextTab": () => cycle(1), "app.prevTab": () => cycle(-1),
-  ...Object.fromEntries(["pos", "inventory", "history", "adjustments", "purchases", "customers", "reports", "masters"].map((m) => ["app." + m, () => open(m)])),
+  ...Object.fromEntries(["pos", "inventory", "history", "adjustments", "purchases", "customers", "reports", "masters", "racks"].map((m) => ["app." + m, () => open(m)])),
   "app.returns": () => open("sales"),
 };
 function refreshHints() {
@@ -421,6 +484,13 @@ function refreshHints() {
 }
 keys.onChange(refreshHints);
 refreshHints();
+// Holding these keys repeats them (closing tabs, opening bills, stepping through tabs): one at a
+// time, each after the previous has finished, at a steady pace. Everything else ignores
+// auto-repeat. A tab that asks before closing (unsaved bill) stops the run: its question opens
+// a dialog, and while a dialog is open no shortcut — held or not — reaches the tabs.
+const REPEATABLE = new Set(["app.closeTab", "app.newBill", "app.nextTab", "app.prevTab"]);
+const REPEAT_MS = 140;
+let repeatBusy = false, repeatAt = 0;
 document.addEventListener("keydown", (e) => {
   if (e.isComposing || e.getModifierState("AltGraph") || !palette.hidden || document.querySelector(".modal-backdrop, .ctx-menu")) return;
   const name = keyName(e);
@@ -428,6 +498,17 @@ document.addEventListener("keydown", (e) => {
   const tabKey = /^Alt\+[1-9]$/.test(name);
   if (!action && !tabKey && name !== "F1") return;
   e.preventDefault(); e.stopPropagation();
+  if (REPEATABLE.has(action) && GLOBAL[action]) {
+    const now = performance.now();
+    if (repeatBusy || (e.repeat && now - repeatAt < REPEAT_MS)) return;
+    // a held Alt+N stops at nine bills (what Alt+1…9 can reach); a deliberate single press still opens more
+    if (e.repeat && action === "app.newBill" && tabs.filter((t) => t.module === "pos").length >= 9) {
+      status("9 bills open — release the keys (another press opens one more)", "warn"); return;
+    }
+    repeatBusy = true; repeatAt = now;
+    Promise.resolve(GLOBAL[action]()).finally(() => { repeatBusy = false; });
+    return;
+  }
   if (e.repeat) return;
   if (active?.screen.prepareShortcut && !active.screen.prepareShortcut()) return;
   if (name === "F1") { showShortcuts(); return; }

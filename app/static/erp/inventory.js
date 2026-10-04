@@ -1,5 +1,6 @@
 import * as keys from "erp/keys";
 import { physicalEditor, pickCategory } from 'erp/physical-units';
+import { locationHtml, moveProducts } from 'erp/locations';
 // Inventory — product grid + batch pane + detail strip. Back-office control:
 // stock changes only through ledgered adjustments (F5), packaging through the
 // guarded product editor (Ctrl+E). Nothing here edits a stock number directly.
@@ -13,8 +14,9 @@ const title = (s) => String(s || "").charAt(0) + String(s || "").slice(1).toLowe
 export function create(ctx, params, root) {
   const CAN = BOOT.can || {};
   const saved = store.get("inv:filters", {});
-  const F = { q: "", form: "", loose: "", stock: "", expiry: "", category: "", supplier: "", state: "", packaging: "", ...saved, q: saved.q || "" };
-  const FILTERS = ["category", "form", "loose", "stock", "expiry", "supplier", "state", "packaging"];
+  const F = { q: "", form: "", loose: "", stock: "", expiry: "", category: "", supplier: "", state: "", packaging: "", location: "", sort: "", letter: "", ...saved, q: saved.q || "" };
+  if (params && params.location) F.location = params.location;
+  const FILTERS = ["letter", "category", "form", "loose", "stock", "expiry", "supplier", "state", "packaging", "location", "sort"];
   let total = 0, loading = false, detail = null, pane = "products";
   const details = new Map();
 
@@ -22,6 +24,8 @@ export function create(ctx, params, root) {
   <div class="inv">
     <div class="filters">
       <label>Search<input class="f-q" autocomplete="off" spellcheck="false" placeholder="name, generic, code, barcode" value="${esc(F.q)}"></label>
+      <label>Starts with<select class="f-letter" title="Products whose name starts with this letter"><option value="">All</option>
+        ${"ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map((c) => `<option value="${c}">${c}</option>`).join("")}<option value="#">0–9 / other</option></select></label>
       <label>Category<select class="f-category"><option value="">All</option></select></label>
       <label>Form<select class="f-form"><option value="">All</option>${(BOOT.units.forms || []).filter(Boolean).map((f) => `<option value="${f}">${title(f)}</option>`).join("")}</select></label>
       <label>Loose<select class="f-loose"><option value="">All</option><option value="yes">Yes</option><option value="no">No</option></select></label>
@@ -32,10 +36,15 @@ export function create(ctx, params, root) {
         <option value="generic">Counted as plain packs</option><option value="manual">Corrected by a user</option><option value="auto">Set automatically</option></select></label>
       <label>Show<select class="f-state"><option value="">Active + disabled</option><option value="active">Active only</option>
         <option value="disabled">Disabled</option><option value="deleted">Recycle bin</option></select></label>
+      ${CAN["rack.view"] ? `<label>Location<select class="f-location"><option value="">All</option><option value="assigned">Assigned</option>
+        <option value="unassigned">Unassigned</option><option value="nobox">In a rack, no box</option></select></label>` : '<select class="f-location" hidden><option value=""></option></select>'}
+      <label>Sort<select class="f-sort"><option value="">Name</option>${CAN["rack.view"] ? '<option value="rack">Rack / box</option>' : ""}
+        <option value="category">Category</option><option value="stock">Stock (high first)</option></select></label>
       <button type="button" class="btn f-reset">Reset</button>
       <button type="button" class="btn f-columns" title="Choose inventory columns">Columns ⚙</button>
       <span class="spacer"></span><span class="f-count muted"></span>
     </div>
+    <div class="bulkbar" hidden></div>
     <div class="split">
       <div class="pane products"><div class="pane-h">PRODUCTS</div></div>
       <div class="divider" title="Drag to resize"></div>
@@ -54,6 +63,16 @@ export function create(ctx, params, root) {
       cs.innerHTML = '<option value="">All</option>' + catOptions.map((x) => `<option value="${esc(x.code)}">${esc(x.name)}${x.active ? "" : " (inactive)"}</option>`).join("");
       ss.innerHTML = '<option value="">All</option>' + sp.suppliers.map((x) => `<option value="${x.id}">${esc(x.name)}</option>`).join("");
       cs.value = F.category || ""; ss.value = F.supplier || "";
+      if (CAN["rack.view"]) {
+        const o = await api("/api/erp/locations/options");
+        const ls = $(".f-location", root);
+        ls.innerHTML = `<option value="">All</option><option value="assigned">Assigned</option><option value="unassigned">Unassigned</option>`
+          + (o.config.location_boxes_enabled ? '<option value="nobox">In a rack, no box</option>' : "")
+          + (o.racks.length ? `<optgroup label="Rack">${o.racks.map((r) => `<option value="rack:${r.id}">${esc(r.code)}${r.name ? " · " + esc(r.name) : ""}</option>`).join("")}</optgroup>` : "")
+          + (o.config.location_boxes_enabled && o.racks.some((r) => r.boxes.length) ? `<optgroup label="Box">${o.racks.flatMap((r) => r.boxes.map((b) => `<option value="box:${b.id}">${esc(r.code)} / ${esc(b.code)}${b.name ? " · " + esc(b.name) : ""}</option>`)).join("")}</optgroup>` : "");
+        if (F.location && !ls.querySelector(`option[value="${F.location}"]`)) F.location = "";
+        ls.value = F.location || "";
+      }
     } catch (err) { ctx.status(err.message, "error"); }
   }
   loadChoices();
@@ -73,7 +92,11 @@ export function create(ctx, params, root) {
       { key: "equivalent", label: "Equivalent", width: 150, render: (r) => esc(r.equivalent || '—') },
       { key: "reorder", label: "Reorder", width: 64, align: "num", render: (r) => r.reorder || '<span class="muted">—</span>' },
       { key: "status", label: "Status", width: 96, cellClass: (r) => "st-" + r.status.toLowerCase(), render: (r) => STATUS[r.status] || r.status },
-      { key: "rack", label: "Rack", width: 56 },
+      ...(CAN["rack.view"] ? [
+        { key: "rack", label: "Rack", width: 70, render: (r) => (r.rack ? `<b class="mono">${esc(r.rack)}</b>${r.rack_active === false ? ' <span class="tag off" title="Rack disabled">off</span>' : ""}` : '<span class="muted">—</span>') },
+        { key: "rack_name", label: "Rack Name", width: 120, default: false, render: (r) => esc(r.rack_name || "") },
+        { key: "box", label: "Box", width: 56, render: (r) => (r.box ? `<b class="mono">${esc(r.box)}</b>` : "") },
+      ] : []),
     ],
     onSelect: (r) => showProduct(r),
     onActivate: () => focusPane("batches"),
@@ -82,7 +105,8 @@ export function create(ctx, params, root) {
     multi: true,                                   // Shift+↑↓ · Space · Ctrl+A · Ctrl+click mark products
     onMarks: (marked) => {
       const n = marked.length;
-      $(".f-count", root).innerHTML = n ? `<b>${n} selected</b> · right-click for actions · Esc clears` : `${total} product${total === 1 ? "" : "s"}`;
+      $(".f-count", root).innerHTML = n ? `<b>${n} selected</b> · Esc clears` : `${total} product${total === 1 ? "" : "s"}`;
+      renderBulk(marked);
     },
     contextMenu: (r) => [
       { label: "Stock adjustment", actionId: "inv.adjust", key: keys.keyFor("inv.adjust"), action: () => adjust() },
@@ -90,7 +114,8 @@ export function create(ctx, params, root) {
       { label: "Stock history", key: keys.keyFor("inv.history"), action: () => history() },
       { label: "Edit product", actionId: "inv.edit", key: keys.keyFor("inv.edit"), action: () => edit() },
       { label: "Packaging (units of measure)…", actionId: "inv.edit", action: () => edit("p") },
-      ...(CAN["inventory.edit"] ? [{ label: picked(r).length > 1 ? `Change category of ${picked(r).length} products…` : "Change category…", action: () => changeCategory(picked(r)) }] : []),
+      ...(CAN["rack.assign"] && (picked(r).length < 2 || CAN["rack.bulk_move"]) ? [{ label: picked(r).length > 1 ? `Move ${picked(r).length} products to rack…` : "Move to rack / box…", key: keys.keyFor("inv.moveRack"), action: () => moveRack(picked(r)) }] : []),
+      ...(CAN["inventory.edit"] ? [{ label: picked(r).length > 1 ? `Change category of ${picked(r).length} products…` : "Change category…", key: keys.keyFor("inv.category"), action: () => changeCategory(picked(r)) }] : []),
       ...(CAN["inventory.delete"] ? statusItems(picked(r)) : []),
     ].filter((x) => (x.actionId !== "inv.adjust" || CAN["adjustment.create"]) && (x.actionId !== "inv.edit" || CAN["inventory.edit"])),
   });
@@ -126,7 +151,7 @@ export function create(ctx, params, root) {
   const choices = {products: [...products.columns, ...extraPrices],
     batches: [...batches.columns, ...extraPrices.filter(c => c.key !== "pack_mrp"), ...provenance]};
   const order = {
-    products: ["code", "name", "upp", "purchase_rate", "pack_mrp", "stock", "equivalent", "form", "base_unit", "loose", "reorder", "status", "rack", "unit_purchase_rate", "purchase_invoice"],
+    products: ["code", "name", "rack", "box", "rack_name", "upp", "purchase_rate", "pack_mrp", "stock", "equivalent", "form", "base_unit", "loose", "reorder", "status", "unit_purchase_rate", "purchase_invoice"],
     batches: ["batch_no", "supplier", "stock", "expiry", "pack_mrp", "purchase_rate", "unit_mrp", "equivalent", "status", "received", "invoice", "unit_purchase_rate", "purchase_invoice"],
   };
   for (const p of Object.keys(choices)) choices[p].sort((a, b) => order[p].indexOf(a.key) - order[p].indexOf(b.key));
@@ -134,7 +159,9 @@ export function create(ctx, params, root) {
   const columnKey = p => `inventory-columns:${BOOT.user?.username}:${p}`;
   function chosenColumns(p) {
     const saved = store.get(columnKey(p), null);
-    const picked = choices[p].filter(c => Array.isArray(saved) ? saved.includes(c.key) || (p === 'batches' && c.key === 'supplier') : c.default !== false);
+    // a column added after the choice was saved follows its companion (Box follows Rack)
+    const picked = choices[p].filter(c => Array.isArray(saved) ? saved.includes(c.key) || (p === 'batches' && c.key === 'supplier')
+      || (p === 'products' && c.key === 'box' && saved.includes('rack') && !saved.includes('_box_seen')) : c.default !== false);
     return picked.length ? picked : choices[p].filter(c => c.default !== false);
   }
   for (const p of Object.keys(grids)) grids[p].setColumns(chosenColumns(p));
@@ -157,6 +184,7 @@ export function create(ctx, params, root) {
     }, onSubmit: form => {
       const selected = Object.fromEntries(Object.keys(grids).map(p => [p, new FormData(form).getAll(p)]));
       if (Object.values(selected).some(cols => !cols.length)) throw new Error("Select at least one column in each pane");
+      selected.products.push('_box_seen');                    // the person has now decided about Box
       for (const p of Object.keys(grids)) {store.set(columnKey(p), selected[p]); grids[p].setColumns(chosenColumns(p));}
       return true;
     }});
@@ -203,7 +231,7 @@ export function create(ctx, params, root) {
   let ctrl = null;
   function query(offset) {
     const u = new URLSearchParams({ q: F.q, form: F.form, loose: F.loose, stock: F.stock, expiry: F.expiry, category: F.category || "", supplier: F.supplier || "",
-      state: F.state || "", packaging: F.packaging || "", offset, limit: 200 });
+      state: F.state || "", packaging: F.packaging || "", location: F.location || "", sort: F.sort || "", letter: F.letter || "", offset, limit: 200 });
     return "/api/erp/inventory?" + u;
   }
   async function load({ keep = false } = {}) {
@@ -234,7 +262,7 @@ export function create(ctx, params, root) {
   });
   for (const k of FILTERS) $(".f-" + k, root).addEventListener("change", (e) => { F[k] = e.target.value; load(); });
   $(".f-reset", root).onclick = () => {
-    Object.assign(F, { q: "", form: "", loose: "", stock: "", expiry: "", category: "", supplier: "", state: "", packaging: "" });
+    Object.assign(F, { q: "", form: "", loose: "", stock: "", expiry: "", category: "", supplier: "", state: "", packaging: "", location: "", sort: "", letter: "" });
     qIn.value = ""; for (const k of FILTERS) $(".f-" + k, root).value = "";
     load(); qIn.focus();
   };
@@ -276,8 +304,26 @@ export function create(ctx, params, root) {
       ${fact('Current stock',`${d.stock} ${unitName(p.base_unit,d.stock)}`)}
       ${fact('Equivalent',d.equivalent || '—')}${fact('Available for sale', life ? `None (${d.lifecycle === 'DELETED' ? 'recycle bin' : 'disabled'})` : `${d.sellable} ${unitName(p.base_unit,d.sellable)}`)}
       ${fact('Packaging',p.pack_label || 'Not confirmed')}${p.content ? fact('Content',p.content) : ''}
-      ${fact('Rack',d.rack || '—')}${fact('Batches',`${allBatches.length} total · ${allBatches.filter(b => b.stock > 0).length} with stock`)}</div>
+      ${fact('Batches',`${allBatches.length} total · ${allBatches.filter(b => b.stock > 0).length} with stock`)}</div>
+      ${CAN["rack.view"] ? `<div class="inv-loc"><span class="muted">Location</span><span>${locationHtml(d)}${d.rack_active === false ? ' <span class="tag off">rack disabled</span>' : ''}</span>
+        ${CAN["rack.assign"] && !d.deleted ? `<button type="button" class="btn link inv-move">Move… <kbd>${esc(keys.keyFor("inv.moveRack"))}</kbd></button>` : ''}</div>
+        <div class="inv-lochist" data-id="${d.id}"></div>` : ''}
       ${d.generic ? `<p class="hint"><b>Composition</b> ${esc(d.generic)}</p>` : ''}`;
+    el.querySelector(".inv-move")?.addEventListener("click", () => moveRack([{ ...d, rack_id: d.rack_id, box_id: d.box_id }]));
+    if (CAN["rack.view"]) locationHistory(d.id);
+  }
+  const locCache = new Map();
+  async function locationHistory(id) {
+    const el = $(`.inv-lochist[data-id="${id}"]`, root);
+    if (!el) return;
+    try {
+      const d = locCache.get(id) || await api(`/api/erp/inventory/${id}/location`);
+      locCache.set(id, d);
+      if (!el.isConnected) return;
+      const hint = !d.current && d.suggested ? `<p class="hint">Suggested: <b class="mono">${esc(d.suggested.label)}</b> (${esc({ CATEGORY: "set for its category", USUAL: "where its category usually is", LAST: "where it was before" }[d.suggested.source] || d.suggested.source)}) — not assigned yet</p>` : "";
+      el.innerHTML = hint + (d.history.length ? `<details><summary>Location history (${d.history.length})</summary><table class="rawtab"><tbody>
+        ${d.history.map((e) => `<tr><td>${esc(fmtDateTime(e.at))}</td><td>${esc(e.from || "Unassigned")} → <b>${esc(e.to || "Unassigned")}</b></td><td>${esc(e.user)}</td><td class="muted">${esc([e.reason, e.reference].filter(Boolean).join(" · "))}</td></tr>`).join("")}</tbody></table></details>` : "");
+    } catch (err) { el.textContent = ""; }
   }
   async function refresh(id) {
     details.delete(id);
@@ -413,30 +459,58 @@ export function create(ctx, params, root) {
     const marked = products.markedRows;
     return marked.length && (!r || marked.some((m) => m.id === r.id)) ? marked : r ? [r] : [];
   };
+  /** Only the actions that change something, each saying exactly how many products it affects. */
   function statusItems(rows) {
     if (!rows.length) return [];
-    const n = rows.length, of = n > 1 ? ` ${n} products` : "";
-    const binned = rows.filter((x) => x.deleted).length, off = rows.filter((x) => !x.deleted && !x.active).length;
+    const one = rows.length === 1;
+    const binned = rows.filter((x) => x.deleted), live = rows.filter((x) => !x.deleted);
+    const on = live.filter((x) => x.active), off = live.filter((x) => !x.active);
+    const eligible = live.filter((x) => (x.stock || 0) <= 0);
+    const count = (list, word) => (one ? "" : ` ${list.length} ${word}`);
     const items = [];
-    if (binned) items.push({ label: `Restore${of} from recycle bin`, action: () => setStatus(rows, "restore") });
-    if (binned < n) {
-      if (off < n - binned) items.push({ label: `Disable${of} (not sold in POS)`, action: () => setStatus(rows, "disable") });
-      if (off) items.push({ label: `Enable${of}`, action: () => setStatus(rows, "enable") });
-      items.push({ label: `Move${of} to recycle bin`, action: () => setStatus(rows, "delete") });
-    }
+    if (binned.length) items.push({ label: `Restore${count(binned, "")} from recycle bin`.replace("  ", " "), action: () => setStatus(binned, "restore") });
+    if (off.length) items.push({ label: `Enable${count(off, "disabled")}`, action: () => setStatus(off, "enable") });
+    if (on.length) items.push({ label: `Disable${count(on, "enabled")} (not sold in POS)`, action: () => setStatus(on, "disable") });
+    if (eligible.length) items.push({ label: one ? "Move to recycle bin (archive)" : `Archive ${eligible.length} with no stock (recycle bin)`, action: () => setStatus(eligible, "delete") });
     return items;
+  }
+  /** The bar above the grid while products are marked: what can be done to exactly these products. */
+  function renderBulk(marked) {
+    const bar = $(".bulkbar", root);
+    if (!marked.length) { bar.hidden = true; bar.innerHTML = ""; return; }
+    const acts = [];
+    if (CAN["rack.assign"] && CAN["rack.bulk_move"] && marked.some((x) => !x.deleted)) acts.push({ label: `Move ${marked.length} to rack…`, key: keys.keyFor("inv.moveRack"), run: () => moveRack(marked) });
+    if (CAN["inventory.edit"]) acts.push({ label: "Change category…", key: keys.keyFor("inv.category"), run: () => changeCategory(marked) });
+    if (CAN["inventory.delete"]) acts.push(...statusItems(marked).map((x) => ({ label: x.label, run: x.action })));
+    bar.innerHTML = `<b>${marked.length} product${marked.length === 1 ? "" : "s"} selected</b>`
+      + acts.map((a, i) => `<button type="button" class="btn" data-i="${i}">${esc(a.label)}${a.key ? ` <kbd>${esc(a.key)}</kbd>` : ""}</button>`).join("")
+      + '<button type="button" class="btn link" data-clear>Clear selection <kbd>Esc</kbd></button>';
+    bar.hidden = false;
+    bar.onclick = (e) => {
+      const b = e.target.closest("button");
+      if (!b) return;
+      if (b.hasAttribute("data-clear")) { products.clearMarks(); products.focus(); return; }
+      acts[Number(b.dataset.i)].run();
+    };
+  }
+  async function moveRack(rows) {
+    rows = rows.filter((x) => !x.deleted);
+    if (!rows.length) { ctx.status("Select products first", "warn"); return; }
+    const out = await moveProducts(ctx, rows);
+    if (out) { rows.forEach((x) => { details.delete(x.id); locCache.delete(x.id); }); if (rows.length > 1) products.clearMarks(); await load({ keep: true }); if (detail) fetchDetail(detail.id); }
+    products.focus();
   }
   /** Disable / enable / recycle bin / restore — nothing is erased; history keeps pointing at the products. */
   async function setStatus(rows, action) {
     const who = rows.length > 1 ? `${rows.length} products` : rows[0].name;
-    const say = { disable: `Disable ${who}? They stay in stock and history but cannot be sold in POS until enabled.`,
-      delete: `Move ${who} to the recycle bin? They disappear from lists and POS; Show → Recycle bin restores them. Products with stock are skipped.` }[action];
+    const say = { disable: `Disable ${who}? They stay in stock, in their rack and in history, but cannot be sold in POS until enabled.`,
+      delete: `Archive ${who} to the recycle bin? Nothing is erased: sales, purchases, the stock ledger and location history keep pointing at them, and Show → Recycle bin restores them. Only products with no stock can be archived.` }[action];
     if (say && !(await window.erpConfirm(say))) return;
     try {
       const out = await api("/api/erp/inventory/bulk/status", { method: "POST", body: { action, ids: rows.map((x) => x.id) } });
       const verb = { disable: "disabled", enable: "enabled", delete: "moved to the recycle bin", restore: "restored" }[action];
-      ctx.status(`${out.done.length} ${verb}` + (out.refused.length ? ` · ${out.refused.length} skipped: ${out.refused[0].reason}` : ""),
-        out.refused.length ? "warn" : "ok");
+      ctx.status(`${out.done.length} ${verb}` + (out.unchanged?.length ? ` · ${out.unchanged.length} already so` : "")
+        + (out.refused.length ? ` · ${out.refused.length} not changed: ${out.refused[0].reason}` : ""), out.refused.length ? "warn" : "ok");
       rows.forEach((x) => details.delete(x.id));
       products.clearMarks();
       await load({ keep: true });
@@ -532,6 +606,8 @@ export function create(ctx, params, root) {
     "inv.ledger": () => ledger(),
     "inv.history": history,
     "inv.edit": edit,
+    "inv.moveRack": () => { const rows = products.markedRows.length ? products.markedRows : products.selected ? [products.selected] : []; if (CAN["rack.assign"]) moveRack(rows); },
+    "inv.category": () => { const rows = products.markedRows.length ? products.markedRows : products.selected ? [products.selected] : []; if (CAN["inventory.edit"] && rows.length) changeCategory(rows); },
     "inv.export": () => window.open("/inventory/export/xlsx?" + new URLSearchParams({ q: F.q }), "_blank"),
   };
   load().then(() => { if (!products.rows.length) ctx.status("No products yet — use New product or the command palette → Import opening stock"); });
@@ -544,5 +620,8 @@ export function create(ctx, params, root) {
       if (focus) setTimeout(() => qIn.focus(), 0);
     },
     adjust, newProduct, importSheet,
+    navigate(p) {
+      if (p && "location" in p) { F.location = p.location || ""; $(".f-location", root).value = F.location; load(); }
+    },
   };
 }

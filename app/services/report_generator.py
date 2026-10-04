@@ -80,6 +80,9 @@ for report in CATALOG:
 from app.services import report_extra  # noqa: E402  (inventory movement + customer reports)
 
 CATALOG += report_extra.REPORTS
+from app.services import location_report  # noqa: E402  (rack inventory + rack history)
+
+CATALOG += location_report.REPORTS
 BY_ID = {r['id']: r for r in CATALOG}
 
 
@@ -144,7 +147,15 @@ def options(db):
                 category_names=_category_names(db),
                 manufacturers=list(db.scalars(select(Item.manufacturer).where(Item.manufacturer!='').distinct().order_by(Item.manufacturer))),
                 suppliers=[dict(value=str(s.id),label=s.name) for s in db.scalars(select(Supplier).order_by(Supplier.name))],
-                operators=[dict(value=str(u.id),label=u.full_name or u.username) for u in db.scalars(select(User).order_by(User.username))], movements=[(m,MOVEMENT_LABELS[m]) for m in MOVEMENT_TYPES])
+                operators=[dict(value=str(u.id),label=u.full_name or u.username) for u in db.scalars(select(User).order_by(User.username))], movements=[(m,MOVEMENT_LABELS[m]) for m in MOVEMENT_TYPES],
+                **_rack_options(db))
+
+
+def _rack_options(db):
+    from app.models import Rack
+    racks=list(db.scalars(select(Rack).order_by(Rack.sort_order,Rack.code)))
+    return dict(racks=[dict(value=str(r.id),label=f"{r.code} · {r.name}"+('' if r.is_active else ' (disabled)')) for r in racks],
+                boxes=[dict(value=str(b.id),label=f"{r.code} / {b.code}"+(f" · {b.name}" if b.name else ''),rack=str(r.id)) for r in racks for b in r.boxes])
 
 
 def parameters(db, report, raw):
@@ -189,6 +200,7 @@ def parameters(db, report, raw):
         raise ReportError('Choose valid invoices')
     if p.get('invoice_ids') and not p.get('supplier'): raise ReportError('Choose a supplier for selected invoices')
     report_extra.validate(p, ReportError)
+    location_report.validate(p, ReportError)
     p.update({'from':first.isoformat(),'to':last.isoformat()})
     return p,start,end
 
@@ -503,7 +515,11 @@ def generate(db,rid,raw,selected=None,user=None):
         p['category']=known[wanted]
     if rid=='sales-summary' and p.get('view')=='detail':
         columns=BY_ID['bill-register']['columns']
-    if rid in report_extra.IDS: rows,_=report_extra.rows(db,rid,p,start,end,tz,_category_names(db))
+    if rid in location_report.IDS:
+        try: rows=location_report.rows(db,rid,p,start,end,tz)
+        except ValueError as exc: raise ReportError(str(exc))
+        note=location_report.note(db,rid,rows,p,end,tz)
+    elif rid in report_extra.IDS: rows,_=report_extra.rows(db,rid,p,start,end,tz,_category_names(db))
     elif rid.startswith('purchase') or rid=='supplier-purchases': rows=purchase_rows(db,rid,p,start,end,tz)
     elif rid in ('current-stock','batch-stock','expiry','low-stock'):
         rows=stock_rows(db,rid,p,end,tz)

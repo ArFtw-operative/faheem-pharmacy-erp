@@ -672,7 +672,8 @@ def api_sale_edit_payload(sale_id: int, db: Session = Depends(get_db),
         lines.append({
             "item_id": item.id, "code": item.article_id, "name": item.name, "pack_raw": item.pack_size, "upp": item.units_per_pack or 1,
             "loose": bool(item.loose_sale), "base_unit": item.base_unit, "pack_unit": item.pack_unit, "form": item.dosage_form,
-            "rack": item.rack or "", "content": pv["content"], "batch_id": line.batch_id, "qty": line.quantity, "disc": pct,
+            "rack": _rack_label(db, item.id), "active": bool(item.is_active),
+            "content": pv["content"], "batch_id": line.batch_id, "qty": line.quantity, "disc": pct,
             "batches": [{"id": b.id, "batch_no": b.batch_no, "expiry": b.expiry_date.isoformat() if b.expiry_date else "",
                          "stock": b.quantity + own.get(b.id, 0), "pack_mrp": str(b.mrp), "upp": b.units_per_pack or 1,
                          "unit_mrp": str(units.display_unit_price(b.mrp, b.units_per_pack or 1))} for b in batches],
@@ -877,3 +878,10 @@ def export_sales(
         wb.save(out)
         return Response(out.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": "attachment; filename=sales.xlsx"})
     raise HTTPException(400, "Unsupported format")
+
+
+def _rack_label(db: Session, item_id: int) -> str:
+    from app.services import location_service
+
+    here = location_service.current(db, [item_id]).get(item_id)
+    return here.short if here else ""

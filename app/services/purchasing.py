@@ -1254,11 +1254,13 @@ def post(db: Session, purchase: Purchase, *, user: User | None = None, accept_di
         raise PurchaseError(f"Supplier total ₹{info['supplier_total']} and calculated total ₹{info['calculated_total']} "
                             f"differ by ₹{info['difference']}. Correct the lines or post with the difference acknowledged.",
                             "TOTAL_DIFFERENCE", info)
+    _check_locations(db, target)
     first = purchase.reference_no is None
     reference = purchase.reference_no or f"PUR-{next_number(db, 'purchase_ref'):06d}"
     try:
         with db.begin_nested():
             created_items = {}
+            placed: dict[tuple, list[int]] = {}
             from app.services import purchase_adjustment
             for adjusted in target:
                 stamp=(adjusted.corrections or {}).get('_physical_adjustment')
@@ -1304,11 +1306,20 @@ def post(db: Session, purchase: Purchase, *, user: User | None = None, accept_di
                                  after={"notes": notes}, details=f"Restock of {item.name}: " + "; ".join(notes))
                 batch.rate_basis = "INCL_GST" if cost_incl else "EXCL_GST"
                 line.batch_id, line.status = batch.id, POSTED
+                if line.rack_id:
+                    placed.setdefault((line.rack_id, line.box_id), []).append(item.id)
                 _remember_mapping(db, purchase, line, user)
                 db.flush()
                 receipt_decision.remember(db, purchase, line)
                 from app.services import mapping_store
                 mapping_store.remember_posted_line(db, purchase, line, user=user)
+            from app.services import location_service
+            for (rack_id, box_id), ids in placed.items():   # the confirmed shelf, in the same transaction as the stock
+                try:
+                    location_service.assign(db, ids, rack_id, box_id, source="PURCHASE", reference=reference,
+                                            reason=f"Received on {reference}", user=user, atomic=True)
+                except location_service.LocationError as exc:
+                    raise PurchaseError(f"Location: {exc}", "LOCATION")
             if differs and accept_difference:
                 purchase.difference_ack = True
             purchase.reference_no = reference
@@ -1473,6 +1484,97 @@ def set_category(db: Session, purchase: Purchase, line_ids: list[int], category:
                  after={"lines": [l.line_no for l in lines], "category": code, "products": sorted(items)},
                  details=f"Category set to {code} on {len(lines)} line(s), {products} product(s) updated")
     return {"lines": len(lines), "changed": changed, "products": products, "category": code}
+
+
+def _check_locations(db: Session, lines: list[PurchaseItem]) -> None:
+    """Before any stock moves: the chosen racks / boxes are still usable, and, when the pharmacy
+    requires it, every received product has a rack (its own, or one chosen on the line)."""
+    from app.services import location_service
+
+    for line in lines:
+        if line.rack_id:
+            try:
+                location_service._target(db, line.rack_id, line.box_id)
+            except location_service.LocationError as exc:
+                raise PurchaseError(f"Line {line.line_no}: {exc}", "LOCATION", {"lines": [line.line_no]})
+    if location_service.config(db)["location_require_rack_on_receipt"]:
+        here = location_service.current(db, [l.item_id for l in lines if l.item_id])
+        missing = [l.line_no for l in lines if not l.rack_id and l.item_id not in here]
+        if missing:
+            raise PurchaseError(f"{len(missing)} line(s) have no rack: {', '.join(map(str, missing[:12]))}. "
+                                "Set rack… (or accept the suggested racks) before posting.", "LOCATION_REQUIRED", {"lines": missing})
+
+
+def location_suggestions(db: Session, purchase: Purchase) -> dict[int, dict]:
+    """Line → where its stock goes: CONFIRMED on the line, the product's CURRENT place, or a
+    SUGGESTED one (with why). A suggestion is shown, never applied by itself."""
+    from app.models import Rack, RackBox
+    from app.services import location_service
+
+    lines = list(purchase.items)
+    items = [l.item for l in lines if l.item is not None]
+    by_item = location_service.suggest(db, items)
+    by_cat = location_service.category_suggestions(db, {l.category for l in lines if l.item is None and l.category})
+    racks = {r.id: r for r in db.scalars(select(Rack).where(Rack.id.in_({l.rack_id for l in lines if l.rack_id})))}
+    boxes = {b.id: b for b in db.scalars(select(RackBox).where(RackBox.id.in_({l.box_id for l in lines if l.box_id})))}
+    out = {}
+    for l in lines:
+        if l.rack_id and l.rack_id in racks:
+            r, b = racks[l.rack_id], boxes.get(l.box_id)
+            out[l.id] = {"state": "CONFIRMED", "rack_id": r.id, "box_id": b.id if b else None,
+                         "label": r.code + (f" / {b.code}" if b else ""), "rack_name": r.name}
+            continue
+        hint = by_item.get(l.item_id) if l.item_id else by_cat.get(l.category)
+        if hint:
+            out[l.id] = {"state": "CURRENT" if hint["source"] == "CURRENT" else "SUGGESTED", "source": hint["source"],
+                         "rack_id": hint["rack_id"], "box_id": hint["box_id"], "label": hint["label"], "rack_name": hint["rack_name"]}
+        else:
+            out[l.id] = {"state": "NONE"}
+    return out
+
+
+def set_location(db: Session, purchase: Purchase, line_ids: list[int], rack_id: Any, box_id: Any = None, *,
+                 suggested: bool = False, user: User | None = None) -> dict:
+    """Choose where the selected lines' stock goes (``rack_id`` None clears it). ``suggested``:
+    take each line's own suggestion instead of one rack. Open lines keep it until they post;
+    already received lines move their product now (it is only a location: stock is untouched)."""
+    from app.services import location_service
+
+    by_id = {l.id: l for l in purchase.items}
+    wanted = [int(i) for i in line_ids or []]
+    if not wanted or any(i not in by_id for i in wanted):
+        raise PurchaseError("Select lines on this purchase", "BAD_LINES")
+    lines = [by_id[i] for i in wanted]
+    hints = location_suggestions(db, purchase) if suggested else {}
+    changed, moved, skipped = 0, 0, 0
+    try:
+        for line in lines:
+            if suggested:
+                h = hints.get(line.id, {})
+                if h.get("state") != "SUGGESTED":
+                    skipped += 1
+                    continue
+                target = (h["rack_id"], h["box_id"])
+            else:
+                target = (int(rack_id), int(box_id) if box_id else None) if rack_id else (None, None)
+            if target[0]:
+                location_service._target(db, *target)
+            if line.status in DONE:
+                if line.item_id and target[0]:
+                    out = location_service.assign(db, [line.item_id], *target, source="PURCHASE",
+                                                  reference=purchase.reference_no or "", reason="Set on the purchase", user=user)
+                    moved += out["processed"]
+                continue
+            if (line.rack_id, line.box_id) != target:
+                line.rack_id, line.box_id = target
+                changed += 1
+    except location_service.LocationError as exc:
+        raise PurchaseError(str(exc), "LOCATION")
+    db.flush()
+    audit.record(db, action=audit.A_UPDATE, entity_type="purchase", entity_id=purchase.reference_no or purchase.id, user=user,
+                 after={"lines": [l.line_no for l in lines], "rack_id": rack_id, "box_id": box_id, "suggested": suggested},
+                 details=f"Location set on {changed} line(s)" + (f", {moved} received product(s) moved" if moved else ""))
+    return {"lines": len(lines), "changed": changed, "moved": moved, "skipped": skipped}
 
 
 def close_remaining(db: Session, purchase: Purchase, *, reason: str, user: User | None = None) -> Purchase:

@@ -218,6 +218,7 @@ def create_app() -> FastAPI:
         erp,
         financials,
         inventory,
+        locations,
         purchases,
         reports,
         sales,
@@ -232,6 +233,7 @@ def create_app() -> FastAPI:
     for router in (
         auth.router,
         erp.router,
+        locations.router,
         assets.router,
         inventory.router,
         sales.router,
