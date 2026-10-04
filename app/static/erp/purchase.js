@@ -243,7 +243,7 @@ export function create(ctx, params, root) {
     const rows = view === "all" ? lines : view === "SELECTED" ? lines.filter((l) => markedIds.has(l.id))
       : view === "ATTENTION" ? lines.filter(needsAttention)
       : view === "PROPOSED" ? lines.filter(isProposed)
-      : view === "GATE_WARN" ? lines.filter((l) => !DONE.includes(l.status) && gateOf(l) === "AUTO_ACCEPT_WITH_WARNING")
+      : view === "GATE_WARN" ? lines.filter((l) => !DONE.includes(l.status) && gateOf(l) === "AUTO_ACCEPT_WITH_WARNING" && !isProposed(l))
       : view === "GATE_AUTO" ? lines.filter((l) => !DONE.includes(l.status) && gateOf(l) === "AUTO_ACCEPT")
       : lines.filter((l) => l.status === view);
     switching = true;
@@ -270,16 +270,18 @@ export function create(ctx, params, root) {
     const postBtn = isOpen() && CAN["purchase.post"]
       ? marked.length
         ? `<button type="button" class="btn primary p-post" ${markedReady === marked.length ? "" : "disabled"} title="${markedReady === marked.length ? "" : "Only Ready or Corrected lines can be posted"}">Post ${marked.length} selected <kbd>${esc(keys.keyFor("purchase.post"))}</kbd></button>`
-        : `<button type="button" class="btn primary p-post" ${s.postable ? "" : "disabled"} title="${s.postable ? "" : "Every open line must be Ready or Corrected — or select the ready ones (Shift+↑↓) and post those"}">${p.status === "PARTIAL" ? `Post remaining ${s.open}` : "Post to stock"} <kbd>${esc(keys.keyFor("purchase.post"))}</kbd></button>`
+        : s.postable
+          ? `<button type="button" class="btn primary p-post">${p.status === "PARTIAL" ? `Post remaining ${s.open}` : "Post to stock"} <kbd>${esc(keys.keyFor("purchase.post"))}</kbd></button>`
+          : `<button type="button" class="btn primary p-post" ${s.partly_postable && s.ready ? "" : "disabled"} title="${s.ready ? `${s.blocking} line(s) need you first; the ready ones can go to stock now` : "Every open line needs attention first"}">Post ${s.ready} ready <kbd>${esc(keys.keyFor("purchase.post"))}</kbd></button>`
       : "";
     const chip = (v, label, n, tone = "") => `<button type="button" class="chip ${tone}${view === v ? " on" : ""}" data-view="${v}" ${n || v === "all" || view === v ? "" : "disabled"} aria-pressed="${view === v}" title="${v === "all" ? "Show every line" : `Show only ${label.toLowerCase()} lines`}">${label} ${n}</button>`;
     const g = s.gate || {};
     const openCount = (g.AUTO_ACCEPT || 0) + (g.AUTO_ACCEPT_WITH_WARNING || 0) + (g.REVIEW || 0) + (g.BLOCK || 0);
     const inbox = isOpen() && openCount ? `<span class="inbox-sum" title="Confidence gate: lines are auto-accepted only when product, quantity, batch, expiry and pack conversion are all certain">
-        ${openCount} open · <b class="ok">${g.AUTO_ACCEPT || 0} auto</b> · <b class="warn">${g.AUTO_ACCEPT_WITH_WARNING || 0} warning</b> · <b class="${(g.REVIEW || 0) + (g.BLOCK || 0) ? "bad" : "ok"}">${(g.REVIEW || 0) + (g.BLOCK || 0)} need you</b></span>
+        ${openCount} open · <b class="ok">${lines.filter((l) => !DONE.includes(l.status) && l.stock?.resolved).length} counted</b> · <b class="warn">${lines.filter(isProposed).length} proposed</b> · <b class="${(g.REVIEW || 0) + (g.BLOCK || 0) ? "bad" : "ok"}">${(g.REVIEW || 0) + (g.BLOCK || 0)} need you</b></span>
       ${chip("ATTENTION", "Needs attention", (g.REVIEW || 0) + (g.BLOCK || 0), (g.REVIEW || 0) + (g.BLOCK || 0) ? "warn" : "")}
       ${chip("PROPOSED", "Proposed — check", lines.filter(isProposed).length, lines.some(isProposed) ? "warn" : "")}
-      ${chip("GATE_WARN", "Warnings", g.AUTO_ACCEPT_WITH_WARNING || 0)}${chip("GATE_AUTO", "Auto-accepted", g.AUTO_ACCEPT || 0, "ok")}
+      ${chip("GATE_WARN", "Warnings", lines.filter((l) => !DONE.includes(l.status) && gateOf(l) === "AUTO_ACCEPT_WITH_WARNING" && !isProposed(l)).length)}${chip("GATE_AUTO", "Auto-accepted", g.AUTO_ACCEPT || 0, "ok")}
       <span class="sep"></span>` : "";
     bar.innerHTML = `${inbox}
       ${chip("all", "All lines", s.rows)}
@@ -295,7 +297,7 @@ export function create(ctx, params, root) {
       <span class="spacer"></span>
       ${s.gst && (s.gst.problems.length || s.gst.missing_rate_lines) ? `<button type="button" class="chip warn gst-chip" title="GST details (${esc(keys.keyFor("purchase.gst"))})">GST ⚠ ${s.gst.problems.length + (s.gst.missing_rate_lines ? 1 : 0)}</button>` : ""}
       ${p.warnings ? `<span class="hint" title="${esc(p.warnings)}">⚠ file notes</span>` : ""}
-      ${s.automation?.mode !== "off" && s.automation && isOpen() ? `<button type="button" class="chip automation-chip">Automatic ${s.automation.resolved_rows}/${s.automation.total_rows} · ${s.automation.exceptions.length} exceptions</button>` : ""}
+      ${s.automation?.mode !== "off" && s.automation && isOpen() ? `<button type="button" class="chip automation-chip" title="Lines certain enough to post without anyone (unattended mode)">Unattended-ready ${s.automation.resolved_rows}/${s.automation.total_rows}</button>` : ""}
       ${isOpen() && CAN["purchase.create"] && queued().length ? `<button type="button" class="btn p-queue" title="Products prepared from the invoice that are not in the catalogue yet">Confirm ${queued().length} new product${queued().length === 1 ? "" : "s"}…</button>` : ""}
       ${["POSTED", "PARTIAL"].includes(p.status) && CAN["purchase.post"] && c.POSTED ? `<button type="button" class="btn p-rollback" title="Take posted lines out of stock and back to review">Roll back to draft <kbd>${esc(keys.keyFor("purchase.rollback"))}</kbd></button>` : ""}
       ${postBtn}`;

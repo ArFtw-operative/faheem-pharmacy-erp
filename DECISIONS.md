@@ -169,3 +169,61 @@ The repository is public, so real supplier invoices are never committed. `tests/
 models the real layouts (Marg CSV, Excel, computer PDF, photographed receipt) with expected
 results per line and runs in the build (`tests/test_purchase_corpus.py`). Private files can be
 staged locally with `PHARMACY_SUPPLIER_CORPUS_DIR=… python scripts/purchase_corpus.py --private`.
+
+## D18. Every line arrives counted (the client reviews briefly and posts)
+
+Requested 2026-10-04: text PDF / CSV / Excel only, every item counted automatically, a person
+reviews and posts. When nothing certain decides how many stock units one invoice Qty is,
+`receipt_proposer` scores every reading the printed pack and the product allow with evidence
+learned from the pharmacy's own data — the supplier's posted nested-pack billing, the other
+certain lines of the same invoice, the product's known MRP, the reference catalogue's MRP per
+pack, the MRP per unit typical in the pharmacy's batches, whole-unit physics — and proposes the
+best, with its confidence and reasons. Weights are a setting (`purchase_count_weights`). When no
+evidence decides, the line is counted in whole packs (strips for solid doses): always physically
+right, refinable later in Inventory. Proposals apply only with automatic intake on; they are
+postable by a person but never posted unattended. A posted proposal becomes a supplier packing
+alias with trust 0.9, fully trusted after a second posting. Measured: all 305 open lines of the
+four drafts on the dev database counted, 5 left for a person (definitions that are really wrong).
+
+## D19. Price plausibility as a sanity check
+
+The MRP per stock unit is compared with what that unit (tablet, tube, piece …) usually costs in
+the pharmacy's own batches (robust median and spread). A line is flagged only when it is far
+off (|z| > 3) *and* another reading of the same printed pack would be normal; the message names
+that reading. Such a line is not accepted in bulk at posting. This caught hand-typed "1 tablet
+per strip" definitions and catalogue boxes of 20–25 tubes at ₹2–5 a tube, with no false alarms
+on cheap generics.
+
+## D20. Restock never stops on price or expiry
+
+Restocking a batch already on the shelf with a different MRP or expiry is reconciled by rule
+(`stock_ledger.resolve_batch(adapt=…)`), shown before posting and audited: with stock on hand the
+batch keeps its expiry and the lower of the two MRPs (no pack is sold above its printed price);
+an empty batch takes the incoming values. A pack-size clash with stock still on hand stays a
+review item. Routine warnings (expiry soon, GST rate changed, MRP below rate …) are accepted
+when a person posts; the post dialog says so.
+
+## D21. Size variants
+
+A matched product printed in another size or pack (15GM against 10GM, 15S against 14S) is a
+different stock item: it is proposed as its own product under its own name with the form and
+category of the original, and reused on the next invoice. A person's explicit match always wins.
+
+## D22. Matching by words
+
+Same words in another order are the same product (certain). A name equal to another plus only
+descriptive words (form / container: IV, FLUID, BALM, TABLET …), with every number equal, no
+release marker differing and exactly one such product, is a *proposed* match. The corpus showed
+the need: four existing products were otherwise proposed as new.
+
+## D23. Scans switched off
+
+The pharmacy imports text PDFs, CSV and Excel only. Photo / scanned-PDF import is off by
+default (`purchase_scan_import=on` re-enables the OCR route kept from D15).
+
+## D24. Reference prices
+
+The reference catalogue now stores the MRP of each listed pack (`scripts/import_medicine_reference.py
+--file Extensive_A_Z_medicines_dataset_of_India.xlsx`, CSV or XLSX). The lookup requires the
+same identity and the same dosage form (a syrup is never priced from the tablet). The data file
+is not in Git; on the appliance it must be imported once.

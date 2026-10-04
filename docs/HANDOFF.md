@@ -117,8 +117,14 @@ product packs (`product_packagings`), supplier invoice profiles (layout + invoic
 the supplier when the file has no GSTIN), column roles (F9). `manage.py purchases bootstrap` rebuilds
 them from history; `manage.py purchases metrics` prints straight-through per supplier.
 
-**Scans and photos** go through the bundled OCR (`tools/tesseract`; on Windows set `PHARMACY_TESSERACT`);
-rows whose qty × rate ≠ amount wait for a person.
+**Every line is counted.** A pack nothing certain decides gets a *proposed* count from weighed evidence
+(`receipt_proposer.py`; reasons in the line's side panel; weights: `purchase_count_weights`); the
+"Proposed — check" chip lists them, F12 posts ("Post N ready" when some lines need a person). Proposals
+never post unattended; posting teaches the supplier. Restocking a batch at another MRP/expiry is
+reconciled by rule (shown before posting). Reference MRPs: `python scripts/import_medicine_reference.py
+--file Extensive_A_Z_medicines_dataset_of_India.xlsx` (once per install).
+
+**Scans and photos** are switched off (`purchase_scan_import=on` enables the bundled OCR route).
 
 **Review screen keys:**
 - **Enter** corrects a line; the supplier's value is kept, with who and when.

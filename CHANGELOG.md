@@ -28,8 +28,15 @@ lists its database migrations. Upgrades keep all business history (see docs/UPGR
   product packaging store and a mapping store with trust and history; GS1 barcodes fill a blank batch/expiry.
   New products the automation prepares wait in a **new-product queue** ("Confirm N new products…", one
   click for the category); `purchase_auto_create_products=on` restores automatic creation.
-- **Scans and photos** are read by the bundled OCR (Tesseract) and every row is checked by arithmetic;
-  rows that do not reconcile wait for a person. Text PDFs are never OCR'd.
+- **Every line counted:** when nothing certain decides a pack, the count is proposed from weighed evidence
+  (supplier history, the invoice's other lines, product and reference MRP, typical unit prices) with its
+  reasons; otherwise whole packs / strips are counted. The client reviews ("Proposed — check") and posts;
+  posting teaches the supplier. Implausibly priced counts and wrong catalogue packs are flagged.
+- **Smart restock:** a batch restocked at another MRP or expiry is reconciled by rule (lower printed MRP
+  while stock remains), never an error; routine warnings are accepted when posting; a different size of a
+  product becomes its own product; "Post N ready" posts what is ready while the rest waits.
+- **Scans and photos:** an OCR route exists but is switched off (`purchase_scan_import`); this pharmacy
+  imports text PDF, CSV and Excel.
 - **Ledger:** purchase receipts record purchase, retail and base quantities beside base units.
 - **Regression corpus** in the build (zero wrong auto-accepts), `scripts/purchase_corpus.py` report,
   `manage.py purchases bootstrap|metrics`.

@@ -96,15 +96,18 @@ def main() -> None:
         st = "n/a" if s["known_straight_through"] is None else f"{s['known_straight_through']}%"
         out.append(f"| {names[route]} | {t}% | {s['known_lines']} | {st} | {s['all_lines_straight_through']}% | {s['wrong_auto_accepts']} |")
     out += ["", f"**Wrong auto-accepts on the whole corpus: {summary['wrong_auto_accepts_total']}.**", "",
-            "## Per invoice", "", "| Invoice | Route | First / recurring | Lines | Auto | Warning | Review | Blocked | Packs resolved | Product right | ms |",
-            "|---|---|---|---|---|---|---|---|---|---|---|"]
+            f"**Lines arriving counted: {summary['counted_total']}%** of {summary['lines_total']}; "
+            f"{summary['proposed_total']} counted by a proposal (a person posts them), of which "
+            f"{summary['proposals_wrong_total']} wrong.", "",
+            "## Per invoice", "", "| Invoice | Route | First / recurring | Lines | Auto | Warning | Proposed | Review | Blocked | Counted | Product right | ms |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in results:
-        out.append(f"| {r.invoice} | {r.route} | {'recurring' if r.recurring else 'first'} | {r.lines} | {r.auto} | {r.warning} | {r.review} | "
-                   f"{r.blocked} | {r.packs_resolved} | {r.product_right} | {r.ms} |")
-    out += ["", "Lines left for a person on recurring invoices are the deliberate traps: a strength the catalogue does not "
-            "carry (5 mg against 10 mg), a missing release marker (plain against SR), an unreadable pack (`10ML57`) and a "
-            "product the pharmacy has never stocked. First invoices from a supplier go to review until a person confirms "
-            "products and packs once; that is what makes the recurring ones pass.", "",
+        out.append(f"| {r.invoice} | {r.route} | {'recurring' if r.recurring else 'first'} | {r.lines} | {r.auto} | {r.warning} | {r.proposed} | "
+                   f"{r.review} | {r.blocked} | {r.counted} | {r.product_right} | {r.ms} |")
+    out += ["", "Proposed lines on recurring invoices are the deliberate traps — a strength the catalogue does not carry "
+            "(5 mg against 10 mg), a missing release marker (plain against SR), an unreadable pack (`10ML57`), a product "
+            "never stocked: each arrives counted as a proposed new product for a person to check, never auto-accepted. "
+            "On first invoices, what a person posts teaches the supplier, which is what makes the recurring ones pass.", "",
             "## Resource use", "",
             f"CPU time {cpu:.2f} s (including the OCR engine), wall time {wall:.2f} s for the whole corpus, "
             f"peak memory {_peak_mb()} MB (Python process, including the app). OCR runs only for scans; nothing runs while idle. No GPU, no network."]
