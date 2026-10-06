@@ -16,7 +16,7 @@ Map: [README](README.md) · [PRD](PRD.md) · [ARCHITECTURE](ARCHITECTURE.md) · 
 | Repository | GitHub `ArFtw-operative/faheem-pharmacy-erp`; branches **`dev`** (work) and **`prod`** (what the PC installs) |
 | Architecture | FastAPI + SQLAlchemy + Alembic backend; plain-JS ES-module single-page workspace; PostgreSQL 17 in Docker Compose on the appliance; SQLite for development and tests |
 | Released | **1.9.2** (`ff68a2d`) on `prod` and the pharmacy PC |
-| In progress | **1.10.0**: implemented and tested, **uncommitted** in the dev working tree at the time of writing; see [TASKS.md TASK-001](TASKS.md#task-001--release-1100) |
+| In progress | **1.10.0**: implemented, tested and pushed to `dev` (4cd8992); not yet released to `prod`; see [TASKS.md TASK-001](TASKS.md#task-001--release-1100) |
 | Schema head | `a8c0e2f4b6d8` (dev) · `f6b8d0a2c4e7` (1.9.2) |
 
 ---
@@ -194,6 +194,6 @@ workflows not on `dev`/`prod`; PyMuPDF licence; remote support not activated; id
 |---|---|
 | Last documentation review | 2026-10-06 |
 | Architecture status | Stable: appliance in production since 1.4.0; guarded upgrades; 49 tables; 217 endpoints |
-| Active development | 1.10.0 (Udhaar ledger, Counter Report, manual bills separation, stock totals, POS pick fix): implemented and tested, waiting to be committed and released |
+| Active development | 1.10.0 (Udhaar ledger, Counter Report, manual bills separation, stock totals, POS pick fix): implemented, tested and on `dev`; waiting for release |
 | Next steps | TASK-001 release 1.10.0 → TASK-004 CI → TASK-002 on-site remote support |
-| Moving to a new machine | Copy the repository *including the uncommitted working tree* (or commit 1.10.0 first), create `.venv` from `requirements.txt`, install Node Playwright for browser checks, log in to GitHub with `gh`, and re-create any scratch PostgreSQL cluster. Paths in older notes (`/home/abdurftw/…`, WSL, `/mnt/c/…`) belong to the original development PC. |
+| Moving to a new machine | Clone the repository and check out `dev`, create `.venv` from `requirements.txt`, install Node Playwright for browser checks, log in to GitHub with `gh`, and re-create any scratch PostgreSQL cluster. Paths in older notes (`/home/abdurftw/…`, WSL, `/mnt/c/…`) belong to the original development PC. |

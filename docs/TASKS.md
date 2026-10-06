@@ -18,11 +18,11 @@ Status: Open · Priority: P0 · Area: Release
 Relevant files: `CHANGELOG.md` (section *Unreleased (next: 1.10.0)*), `app/config.py` (`APP_VERSION`), `alembic/versions/a8c0e2f4b6d8_udhaar_manual_bills_counter.py`, `scripts/make_release_fixture.py`
 
 Problem: the Udhaar ledger, Counter Report, manual bills separation, stock totals and the **POS item-pick fix**
-are finished and tested (872 tests on SQLite and PostgreSQL 18, browser scripts) but exist only as **uncommitted
-changes on the development machine**. The pharmacy still runs 1.9.2, which has the POS bug where the 4th item picked
+are finished, tested (872 tests on SQLite and PostgreSQL 18, browser scripts) and pushed to `dev` (4cd8992),
+but not released. The pharmacy still runs 1.9.2, which has the POS bug where the 4th item picked
 with the arrow keys is not added or replaces another line.
 
-Expected result: 1.10.0 committed, released to `prod`, installed on the pharmacy PC.
+Expected result: 1.10.0 released to `prod` and installed on the pharmacy PC.
 
 Acceptance criteria:
 - `APP_VERSION = "1.10.0"`, CHANGELOG dated, release fixture `tests/fixtures/releases/1.10.0.db` added (never regenerated).
