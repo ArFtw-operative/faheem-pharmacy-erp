@@ -144,8 +144,8 @@ def compare(before: dict, after: dict, exempt: dict | None = None) -> list[str]:
     for key, old in before.items():
         rule = exempt.get(key)
         if isinstance(rule, dict) and rule.get("moved_to"):
-            # moved, not lost: what left this figure must be exactly what the other table now holds
-            moved = after.get(rule["moved_to"], 0) or 0
+            # moved, not lost: what left this figure must be exactly what arrived in the other table
+            moved = float(after.get(rule["moved_to"], 0) or 0) - float(before.get(rule["moved_to"], 0) or 0)
             if abs(float(after.get(key, 0) or 0) + float(moved) - float(old)) > 0.005:
                 problems.append(f"{key}: {old} → {after.get(key)} (+ {moved} in {rule['moved_to']}) does not reconcile")
             continue

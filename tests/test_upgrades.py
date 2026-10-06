@@ -68,8 +68,10 @@ def test_every_release_upgrades_to_this_one_with_history_intact(fixture, tmp_pat
     # only figures a migration declares (RECONCILE_EXEMPT) may change — and those must still reconcile
     assert up.compare(before, after, up._exemptions(_all_revisions())) == []
     if "count:manual_bills" in after:                               # 1.10.0: manual bills left sales, nothing lost
-        assert before.get("count:sales", 0) == after["count:sales"] + after["count:manual_bills"]
-        assert round(before.get("sum:sales.total", 0), 2) == round(after["sum:sales.total"] + after["sum:manual_bills.total"], 2)
+        moved = after["count:manual_bills"] - before.get("count:manual_bills", 0)
+        moved_total = after["sum:manual_bills.total"] - before.get("sum:manual_bills.total", 0)
+        assert before.get("count:sales", 0) == after["count:sales"] + moved
+        assert round(before.get("sum:sales.total", 0), 2) == round(after["sum:sales.total"] + moved_total, 2)
         con = sqlite3.connect(db)
         assert con.execute("SELECT COUNT(*) FROM sales WHERE invoice_type = 'MANUAL'").fetchone()[0] == 0
         con.close()
