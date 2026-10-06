@@ -169,6 +169,8 @@ workflows not on `dev`/`prod`; PyMuPDF licence; remote support not activated; id
 - New shortcut: `keymap_service.ACTIONS` + `keys.js` short label; never take a key the owner already assigned personally (e.g. Alt+Q).
 - New permission: `app/permissions.py` (catalogue + roles) **and** a migration that inserts it and grants it (pattern in `a8c0e2f4b6d8`).
 - New table/column: model + Alembic migration (SQLite and PostgreSQL) + add history tables to `snapshot.HISTORY_TABLES/SUMS` if they hold business history + `data_reset.WIPE_TABLES` + `sync_service.TABLE_AREAS`.
+- Category / item-form choosers: read `BOOT.category_options` / `BOOT.item_forms` when the chooser opens, never a copy taken when the screen was created. The shell re-reads both (`physical-units.refreshMasters`) whenever the `masters` area changes, before any screen's `onDataChanged`; a screen showing category names also refreshes on `masters`.
+- Live refresh: the page starts from `BOOT.sync` (the versions it was built with), and every non-GET `api()` call starts a round at once (`erp:saved`). Raw `fetch` writes (uploads, workspace autosave) do not; the 4-second round covers them.
 
 ---
 

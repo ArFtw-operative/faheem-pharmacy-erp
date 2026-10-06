@@ -90,7 +90,10 @@ function categoriesPanel(ctx, el, CAN) {
     try { const d = await fn(); rows = d.categories; grid.setRows(rows, { keep: true }); count(); if (done) ctx.status(done, "ok"); return d; }
     catch (err) { ctx.status(err.message, "error"); return null; }
   }
-  const count = () => { $(".c-count", el).textContent = `${rows.length} categories · ${rows.filter((r) => r.active).length} active`; };
+  const count = () => {
+    $(".c-count", el).textContent = `${rows.length} categories · ${rows.filter((r) => r.active).length} active`;
+    BOOT.category_options = rows.filter((r) => r.active).map((r) => ({ code: r.code, name: r.name }));   // every chooser in this window
+  };
   const load = () => run(() => api("/api/erp/categories"));
   const guard = () => { if (!CAN["inventory.edit"]) { ctx.status("Managing categories needs inventory edit rights", "warn"); return false; } return true; };
 
@@ -110,7 +113,7 @@ function categoriesPanel(ctx, el, CAN) {
       body: `<div class="form-grid"><label class="full">Name<input name="name" maxlength="60" value="${esc(r.name)}" required autofocus></label><p class="full hint">Code <b class="mono">${esc(r.code)}</b> stays the same; ${r.products} product(s) and all reports show the new name.</p></div>`,
       onSubmit: (form) => api(`/api/erp/categories/${encodeURIComponent(r.code)}`, { method: "PUT", body: { name: form.name.value } }),
     });
-    if (out) { rows = out.categories; grid.setRows(rows, { keep: true }); ctx.status("Category renamed", "ok"); grid.focus(); }
+    if (out) { rows = out.categories; grid.setRows(rows, { keep: true }); count(); ctx.status("Category renamed", "ok"); grid.focus(); }
   }
   const toggle = (r) => r && guard() && run(() => api(`/api/erp/categories/${encodeURIComponent(r.code)}`, { method: "PUT", body: { active: !r.active } }),
     `${r.name} ${r.active ? "deactivated" : "activated"}`);

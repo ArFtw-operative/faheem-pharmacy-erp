@@ -64,6 +64,12 @@ export function create(ctx, params, root) {
       cs.innerHTML = '<option value="">All</option>' + catOptions.map((x) => `<option value="${esc(x.code)}">${esc(x.name)}${x.active ? "" : " (inactive)"}</option>`).join("");
       ss.innerHTML = '<option value="">All</option>' + sp.suppliers.map((x) => `<option value="${x.id}">${esc(x.name)}</option>`).join("");
       cs.value = F.category || ""; ss.value = F.supplier || "";
+      // forms the pharmacy added in Categories & Forms since this page was opened
+      const fs = $(".f-form", root), known = (BOOT.units.forms || []).filter(Boolean);
+      const added = (BOOT.item_forms || []).filter((f) => f.dosage_form && !known.includes(f.dosage_form));
+      fs.innerHTML = '<option value="">All</option>' + known.map((f) => `<option value="${f}">${title(f)}</option>`).join("")
+        + added.map((f) => `<option value="${esc(f.dosage_form)}">${esc(f.name)}</option>`).join("");
+      fs.value = F.form || "";
       if (CAN["rack.view"]) {
         const o = await api("/api/erp/locations/options");
         const ls = $(".f-location", root);

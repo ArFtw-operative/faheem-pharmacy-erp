@@ -35,6 +35,7 @@ export async function api(url, { method = "GET", body, signal } = {}) {
     const msg = typeof d === "string" ? d : (d && d.message) || `Request failed (${res.status})`;
     throw new ApiError(msg, res.status, d);
   }
+  if (method !== "GET") window.dispatchEvent(new Event("erp:saved"));     // the shell refreshes the other tabs now
   return data;
 }
 

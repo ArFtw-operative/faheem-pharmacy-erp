@@ -5,6 +5,13 @@ import { BOOT, api, esc, h, modal, toBase, unitName } from 'erp/core';
 export const NEW_FORM = '__new__';
 const units = () => BOOT.units || { base: [], pack: [] };
 export const forms = () => (BOOT.item_forms || []).filter((f) => f.active !== false);
+
+/** Re-read the category and item-form choices (the shell calls it when Categories & Forms changed anywhere). */
+export async function refreshMasters() {
+  const [c, f] = await Promise.all([api('/api/erp/categories'), api('/api/erp/item-forms')]);
+  BOOT.category_options = c.categories.filter((x) => x.active).map((x) => ({ code: x.code, name: x.name }));
+  BOOT.item_forms = f.forms;
+}
 const byCode = (code) => forms().find((f) => f.code === code);
 
 /** The form a product is stocked as: its dosage form, else the unit it is counted in. */

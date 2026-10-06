@@ -57,6 +57,20 @@ def test_sync_endpoint(client, db):
     assert set(out) == set(sync_service.AREAS)
 
 
+def test_the_page_starts_live_refresh_from_its_own_versions(client, db):
+    """A change made before the first refresh round (seconds after opening) must still be noticed."""
+    import json
+    import re
+
+    login(client)
+    page = client.get("/app/inventory").text
+    boot = json.loads(re.search(r"window\.ERP_BOOT = (\{.*?\});</script>", page).group(1))
+    assert boot["sync"] == client.get("/api/erp/sync").json()["versions"]
+    assert client.post("/api/erp/categories", json={"name": "Sync Probe"}).status_code == 200
+    now = client.get("/api/erp/sync").json()["versions"]
+    assert now["masters"] > boot["sync"]["masters"] and now["inventory"] > boot["sync"]["inventory"]
+
+
 def test_a_counter_in_use_keeps_its_tabs_a_quiet_one_hands_them_over(client, db):
     login(client)
     client.put("/api/erp/workspace", json={"terminal": "pc-shop", "data": {"tabs": [{"module": "pos"}], "states": {}}})

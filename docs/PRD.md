@@ -77,7 +77,7 @@ Roles in the software are listed in [§4](#4-user-roles).
 - Customers: directory, invoices, activity, follow-ups (inbox and calendar).
 - Reports: 34 reports with column choice and PDF / Excel / CSV / text export.
 - WhatsApp invoices (customer-requested), invoice templates, pharmacy logo and payment QR code on invoices.
-- Two counters at once with live refresh (changes from one PC appear on the other within 3–4 seconds).
+- Two counters at once with live refresh (changes from one PC appear on the other within 3–4 seconds; in the other tabs of the same window at once).
 - Crash safety: open tabs and unfinished bills are saved continuously and restored at the next login.
 - Appliance: installer, automatic start, daily 05:00 maintenance, backups, guarded updates with rollback, health checks.
 
@@ -346,7 +346,7 @@ sequenceDiagram
 |---|---|---|
 | WhatsApp delivery queue | Continuously | `app/worker.py`, `app/services/whatsapp/service.py` |
 | Counter day close, automatic Udhaar reminders (if switched on) | Every few minutes (1.10.0) | `app/main.py` (`_whatsapp_worker`), `counter_service`, `udhaar_service` |
-| Live refresh between counters | Every 4 seconds | `app/static/erp/shell.js`, `app/services/sync_service.py` |
+| Live refresh between counters and tabs | Every 4 seconds; at once after a change saved in the same window (1.10.1) | `app/static/erp/shell.js`, `app/services/sync_service.py` |
 | Workspace save (tabs, unfinished bills) | Continuously | `app/routers/workspace.py` |
 | Daily maintenance (backup, health, reboot) | 05:00 store time | `deploy/appliance/systemd/faheem-erp-maintenance.timer` |
 | Snapshots during development use | Periodically and at shutdown (SQLite) | `app/main.py`, `app/snapshot.py` |

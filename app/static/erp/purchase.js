@@ -1137,7 +1137,7 @@ export function create(ctx, params, root) {
       return false;
     },
     // another counter changed purchases / stock / racks: show the current state (selection kept)
-    onDataChanged(areas) { if (areas.some((a) => ["purchases", "inventory", "locations"].includes(a))) load(); },
+    onDataChanged(areas) { if (areas.some((a) => ["purchases", "inventory", "locations", "masters"].includes(a))) load(); },
     onShow({ focus }) { if (focus) setTimeout(() => grid.focus(), 0); },
   };
 }

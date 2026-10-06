@@ -3,6 +3,17 @@
 Release notes for Faheem Pharmacy. Versions follow semantic versioning; every release
 lists its database migrations. Upgrades keep all business history (see docs/UPGRADES.md).
 
+## 1.10.1 (2026-10-06)
+
+- **Categories and item forms reach every chooser at once:** a category or item form added, renamed, hidden or merged
+  in Categories & Forms is offered straight away by the purchase line's new-product Category and Form choosers, by
+  "Create selected lines as new products" and by the Inventory Form filter — in the same window at once, on another
+  PC within one refresh round. Before, these choosers kept the list from when the ERP was opened until a reload.
+- **An open Inventory tab shows what a purchase just created:** live refresh now starts from the state the page was
+  opened with (a purchase posted in the first seconds after opening was missed until a new tab was opened), and a
+  change saved in one tab refreshes the other tabs of the same window at once instead of within 4 seconds.
+- No database migration.
+
 ## 1.10.0 (2026-10-06)
 
 - **POS item search:** Enter adds the row picked with ↑↓ (it re-ran the search, went back to the first row and

@@ -22,7 +22,7 @@ from app.deps import client_ip, require_login, require_permission
 from app.models import Batch, Item, ItemLocation, Rack, RackBox, User
 from app.permissions import has_permission
 from app.routing import OffloadRoute
-from app.services import search, category_service, keymap_service, parking_service, settings_service, units, form_service
+from app.services import search, category_service, keymap_service, parking_service, settings_service, sync_service, units, form_service
 from app.services import inventory_service as inv, inventory_pricing, location_service as loc
 from app.services.settings_service import get_int
 from app.web import render
@@ -73,6 +73,7 @@ def _boot(request: Request, db: Session, user: User) -> dict:
         "keymap": keymap_service.payload(db, user),
         "categories": inv.categories(db),
         "category_options": category_service.options(db),
+        "sync": sync_service.versions(db),          # live refresh starts from what this page was built with
     }
 
 
@@ -181,7 +182,6 @@ async def erp_item_form_update(code: str, request: Request, db: Session = Depend
 @router.get("/api/erp/sync")
 def erp_sync(db: Session = Depends(get_db), user: User = Depends(require_login)):
     """What changed anywhere (a counter per area): open screens on every PC refresh what moved."""
-    from app.services import sync_service
     return {"versions": sync_service.versions(db)}
 
 

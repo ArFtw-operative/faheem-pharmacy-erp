@@ -1,5 +1,6 @@
 import * as keys from "erp/keys";
 import { openShortcuts } from "erp/shortcuts";
+import { refreshMasters } from "erp/physical-units";
 // ERP shell: module bar, workspace tabs (state kept alive while switching),
 // global keyboard map, command palette (Ctrl+K), quick product lookup (Ctrl+F),
 // status bar. Screens are ES modules exporting create(ctx, params, saved).
@@ -200,30 +201,45 @@ const recent = [];          // tab ids, most recently used first (tab switcher o
 // Every few seconds: what changed anywhere (GET /api/erp/sync, one tiny query). The screen on show
 // refreshes the areas that moved; screens in other tabs refresh when shown. Never while a dialog is
 // open (someone is in the middle of something) — that waits for the next round.
-let syncSeen = null;
+// The versions the page was built with are the starting point: a change made before the first round
+// (e.g. a purchase posted seconds after opening) is still noticed. A change saved from this window
+// starts a round at once instead of waiting for the next one.
+let syncSeen = BOOT.sync || null;
+let syncing = false, syncAgain = false;
 const pendingAreas = new Map();      // tab id → Set(areas) not yet shown to that tab
 function deliver(tab, areas) {
   if (!areas.length || !tab.screen.onDataChanged) return;
   try { tab.screen.onDataChanged(areas); } catch (err) { console.error(err); }
 }
 async function syncTick() {
+  if (syncing) { syncAgain = true; return; }             // one round at a time; run again once it ends
   if (document.hidden || !tabs.length) return;
-  let now;
-  try { now = (await api("/api/erp/sync")).versions; } catch { return; }
-  if (syncSeen === null) { syncSeen = now; return; }
-  const changed = Object.keys(now).filter((a) => now[a] !== syncSeen[a]);
-  if (!changed.length) return;
-  if (document.querySelector(".modal-backdrop, .ctx-menu")) return;          // try again next round
-  syncSeen = now;
-  for (const t of tabs) {
-    const set = pendingAreas.get(t.id) || new Set();
-    changed.forEach((a) => set.add(a));
-    pendingAreas.set(t.id, set);
+  syncing = true;
+  try {
+    let now;
+    try { now = (await api("/api/erp/sync")).versions; } catch { return; }
+    if (syncSeen === null) { syncSeen = now; return; }
+    const changed = Object.keys(now).filter((a) => now[a] !== syncSeen[a]);
+    if (!changed.length) return;
+    if (document.querySelector(".modal-backdrop, .ctx-menu")) return;          // try again next round
+    // category / item-form choices first, so every screen that refreshes below already offers them
+    if (changed.includes("masters")) { try { await refreshMasters(); } catch { return; } }
+    syncSeen = now;
+    for (const t of tabs) {
+      const set = pendingAreas.get(t.id) || new Set();
+      changed.forEach((a) => set.add(a));
+      pendingAreas.set(t.id, set);
+    }
+    if (active) { deliver(active, [...pendingAreas.get(active.id)]); pendingAreas.delete(active.id); }
+  } finally {
+    syncing = false;
+    if (syncAgain) { syncAgain = false; setTimeout(syncTick, 0); }
   }
-  if (active) { deliver(active, [...pendingAreas.get(active.id)]); pendingAreas.delete(active.id); }
 }
 setInterval(syncTick, 4000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) syncTick(); });
+let savedTimer = null;
+window.addEventListener("erp:saved", () => { clearTimeout(savedTimer); savedTimer = setTimeout(syncTick, 300); });
 
 function activate(tab, focus = true) {
   if (pendingAreas.has(tab.id)) {     // changes made elsewhere while this tab was in the background
