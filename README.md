@@ -14,6 +14,8 @@ A keyboard-first pharmacy ERP: POS with loose-tablet billing, a ledger-based inv
 supplier-invoice import and review with a GST engine, sales history with returns and exchanges,
 stock adjustments, WhatsApp invoices and reports in ERP document format — all in the browser at `/app`.
 
+**Documentation home: [docs/README.md](docs/README.md)** (product, architecture, rules, design, tasks, project memory).
+
 | | |
 |---|---|
 | Install, tokens, other PCs and the store VPN | [docs/INSTALL.md](docs/INSTALL.md) |
