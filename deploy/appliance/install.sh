@@ -10,7 +10,7 @@
 #
 #    --registry-token-file FILE   or env FAHEEM_REGISTRY_TOKEN (GHCR read:packages; only for private images)
 #    --version X.Y.Z              default: the newest release
-#    --owner-username ID          default syed.faheem      --owner-name "NAME"  default "Syed Faheem"
+#    --owner-username ID          default owner             --owner-name "NAME"  default "Owner"
 #                                 password: asked (hidden), or env FAHEEM_OWNER_PASSWORD
 #    --import-sqlite FILE         bring an existing pharmacy.db (its users come with it; no owner prompt)
 #    --lan | --no-lan             HTTPS access from the shop network / store VPN   (asked; default yes)
@@ -42,7 +42,7 @@ main() {
   FAHEEM_LOGS=/var/log/faheem-erp FAHEEM_BACKUPS=/var/backups/faheem-erp
   ENV_FILE="$FAHEEM_ETC/faheem.env" TOKEN_FILE="$FAHEEM_ETC/registry.token"
 
-  local counter_user="" token_file="" version="" owner_user="syed.faheem" owner_name="Syed Faheem" import="" lan="" static="" whatsapp=""
+  local counter_user="" token_file="" version="" owner_user="owner" owner_name="Owner" import="" lan="" static="" whatsapp=""
   local kiosk=1 port=8000 reboot=true yes=0 build_source=0 support_url="" support_file="" support_name="" support=1
   while [ $# -gt 0 ]; do
     case "$1" in

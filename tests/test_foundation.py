@@ -38,10 +38,10 @@ def test_seed_defaults(db):
     from app.security import find_user, verify_password
     from app.seed import DEFAULT_ADMIN
 
-    admin = db.scalar(select(User).where(User.username == "Syeed Faheem"))
-    assert admin is not None and admin.full_name == "Syeed Faheem"
+    admin = db.scalar(select(User).where(User.username == "Owner"))
+    assert admin is not None and admin.full_name == "Owner"
     assert verify_password(DEFAULT_ADMIN["password"], admin.password_hash) and not admin.must_change_password
-    assert find_user(db, "  syeed   FAHEEM ") is admin  # case and spacing do not matter at sign-in
+    assert find_user(db, "  OWNER ") is admin  # case and spacing do not matter at sign-in
     assert admin.employee_id == "EMP0001"
     assert admin.role.name == "Administrator"
     assert len(admin.role.permissions) == len(PERMISSION_CATALOG)

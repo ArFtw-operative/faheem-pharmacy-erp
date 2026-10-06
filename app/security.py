@@ -41,7 +41,7 @@ def session_expiry() -> datetime:
 
 
 def find_user(db, username: str | None):
-    """User by username, ignoring letter case and extra spaces ("Syeed  faheem" finds "Syeed Faheem")."""
+    """User by username, ignoring letter case and extra spaces ("Front  desk" finds "Front Desk")."""
     from sqlalchemy import func, select
 
     from app.models import User

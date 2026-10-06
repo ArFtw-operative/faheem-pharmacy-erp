@@ -67,7 +67,7 @@ def test_cli_user_control_password_name_and_two_step(db):
     assert weak.returncode != 0 and "not accepted" in (weak.stdout + weak.stderr)
     ok = run("passwd", u.username, FAHEEM_NEW_PASSWORD="Counter2026x")
     assert ok.returncode == 0 and "Counter2026x" not in ok.stdout                       # a typed password is never echoed
-    assert run("rename", u.username, "--name", "Syed  Faheem ").returncode == 0
+    assert run("rename", u.username, "--name", "Test  Owner ").returncode == 0
     listed = run("list").stdout
     assert u.username in listed and "2FA on" in listed                                   # the Users menu shows the 2FA state
     u.failed_logins = 5
@@ -76,5 +76,5 @@ def test_cli_user_control_password_name_and_two_step(db):
     assert "2FA not set up" in run("list").stdout
     db.expire_all()
     u = db.get(User, u.id)
-    assert verify_password("Counter2026x", u.password_hash) and u.full_name == "Syed Faheem"
+    assert verify_password("Counter2026x", u.password_hash) and u.full_name == "Test Owner"
     assert u.mfa_enabled is False and u.failed_logins == 0 and not u.must_change_password

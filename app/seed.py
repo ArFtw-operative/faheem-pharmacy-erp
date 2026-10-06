@@ -40,8 +40,8 @@ DEFAULT_SETTINGS: list[tuple[str, str, str, str]] = [
 
 # First account on a brand-new database (never added to a database that already has users).
 DEFAULT_ADMIN = {
-    "username": "Syeed Faheem",
-    "full_name": "Syeed Faheem",
+    "username": "Owner",
+    "full_name": "Owner",
     "password": os.environ.get("PHARMACY_ADMIN_PASSWORD", ""),
     "role": "Administrator",
 }

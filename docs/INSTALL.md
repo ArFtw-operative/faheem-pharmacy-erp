@@ -36,7 +36,7 @@ It asks for:
 | Question | Default |
 |---|---|
 | Registry token (hidden) — only if the images are private | — |
-| Owner user ID / full name / password (typed twice, hidden; 8+ characters, letters and numbers) | `syed.faheem` / `Syed Faheem` |
+| Owner user ID / full name / password (typed twice, hidden; 8+ characters, letters and numbers) | `owner` / `Owner` (change with `--owner-username` / `--owner-name`) |
 | WhatsApp invoices | no |
 | Use the ERP from other PCs / phones on the shop network or store VPN | yes |
 | Pin this PC's address | yes |
