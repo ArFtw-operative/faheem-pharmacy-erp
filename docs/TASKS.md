@@ -14,7 +14,7 @@ Labels: **Confirmed** = verified in the code or repository. **Needs investigatio
 ### P0 — Critical
 
 ### TASK-001 — Release 1.10.0
-Status: Open · Priority: P0 · Area: Release
+Status: Released to `prod` 2026-10-06; waiting for *Force Update ERP* on the PC · Priority: P0 · Area: Release
 Relevant files: `CHANGELOG.md` (section *Unreleased (next: 1.10.0)*), `app/config.py` (`APP_VERSION`), `alembic/versions/a8c0e2f4b6d8_udhaar_manual_bills_counter.py`, `scripts/make_release_fixture.py`
 
 Problem: the Udhaar ledger, Counter Report, manual bills separation, stock totals and the **POS item-pick fix**
@@ -113,7 +113,7 @@ Problem: the export doubles as the re-import template, so totals were not added 
 
 | ID | Bug | Status |
 |---|---|---|
-| TASK-001 | POS: item picked with arrow keys not added / replaces another line (fixed in 1.10.0, not yet released) | Fixed in dev |
+| TASK-001 | POS: item picked with arrow keys not added / replaces another line (fixed in 1.10.0) | Released; PC update pending |
 | TASK-009 | PDF invoice shows raw payment codes | Open |
 | TASK-011 | Udhaar return above the remaining balance cannot be done in one step | Open |
 

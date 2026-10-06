@@ -15,9 +15,9 @@ Map: [README](README.md) · [PRD](PRD.md) · [ARCHITECTURE](ARCHITECTURE.md) · 
 | Customer | One retail pharmacy (Faheem Pharmacy, Hyderabad), on its own Linux PC (the *appliance*) |
 | Repository | GitHub `ArFtw-operative/faheem-pharmacy-erp`; branches **`dev`** (work) and **`prod`** (what the PC installs) |
 | Architecture | FastAPI + SQLAlchemy + Alembic backend; plain-JS ES-module single-page workspace; PostgreSQL 17 in Docker Compose on the appliance; SQLite for development and tests |
-| Released | **1.9.2** (`ff68a2d`) on `prod` and the pharmacy PC |
-| In progress | **1.10.0**: implemented, tested and pushed to `dev` (4cd8992); not yet released to `prod`; see [TASKS.md TASK-001](TASKS.md#task-001--release-1100) |
-| Schema head | `a8c0e2f4b6d8` (dev) · `f6b8d0a2c4e7` (1.9.2) |
+| Released | **1.10.0** on `prod` (2026-10-06); the pharmacy PC gets it with *Force Update ERP* (it ran 1.9.2 `ff68a2d`) |
+| In progress | Nothing unreleased; see [TASKS.md](TASKS.md) |
+| Schema head | `a8c0e2f4b6d8` (1.10.0) · `f6b8d0a2c4e7` (1.9.2) |
 
 ---
 
@@ -136,7 +136,7 @@ follow-ups. **Racks/boxes** and dated **item locations** say where things are. *
 
 ## 8. Known problems
 
-See [TASKS.md](TASKS.md). Most important: 1.10.0 not yet released (the POS item-pick bug is live in 1.9.2); CI
+See [TASKS.md](TASKS.md). Most important: confirm the pharmacy PC is on 1.10.0 after *Force Update ERP*; CI
 workflows not on `dev`/`prod`; PyMuPDF licence; remote support not activated; idle-lock settings without effect.
 
 ---
@@ -145,7 +145,7 @@ workflows not on `dev`/`prod`; PyMuPDF licence; remote support not activated; id
 
 ### Working on a development machine
 - **Dev server:** `./launch.sh start` (port 8781, data in `./data`). `run.py --port 8000` is the older way. The dev database is migrated on start (snapshot first).
-- **Tests:** `.venv/bin/python -m pytest -q tests` (SQLite, about 6 minutes). PostgreSQL: start a scratch PostgreSQL 18 cluster on TCP `127.0.0.1:55432` (user `postgres`, trust auth, database `faheem_test`) and set `PHARMACY_TEST_DATABASE_URL=postgresql+psycopg://postgres@127.0.0.1:55432/faheem_test`. Use TCP: Unix socket paths inside deep folders are too long.
+- **Tests:** `.venv/bin/python -m pytest -q tests` (SQLite, about 6 minutes). PostgreSQL: start a scratch PostgreSQL 18 cluster on TCP `127.0.0.1:55432` (user `postgres`, trust auth, database `faheem_test`) and set `PHARMACY_TEST_DATABASE_URL=postgresql+psycopg://postgres@127.0.0.1:55432/faheem_test`. Use TCP: Unix socket paths inside deep folders are too long. Also point `PHARMACY_TEST_PG_URL` at a second, empty database: `tests/test_snapshot_pg.py` (PostgreSQL snapshots, rehearsal, automatic restore) is skipped without it.
 - **Browser checks:** Playwright scripts in `scripts/test-*-browser.mjs` against a running server. Run them on a **copy** of the database with a scratch server (`PHARMACY_DATA_DIR`, `PHARMACY_SNAPSHOT_DIR`, `PHARMACY_ENV_FILE=/dev/null` pointed at a temp folder), never on the owner's live data. Do not close the owner's workspace tabs.
 - **Stopping a server:** kill by port (`ss -ltnp | grep :<port>`), never `pkill -f <pattern>`: the pattern also matches your own shell command and kills it.
 - **Dev login:** ask the owner. Never write credentials into the repository (it may be public).
@@ -156,9 +156,9 @@ workflows not on `dev`/`prod`; PyMuPDF licence; remote support not activated; id
 1. Bump `APP_VERSION` in `app/config.py`; date the CHANGELOG section.
 2. `PHARMACY_ADMIN_PASSWORD=<pw> python scripts/make_release_fixture.py X.Y.Z tests/fixtures/releases/X.Y.Z.db`, then `git add -f` it (`*.db` is ignored). Never regenerate an old fixture.
 3. Full suite on SQLite **and** PostgreSQL 18.
-4. Rehearsal on a copy of the pharmacy's data: worktree of `origin/prod` → `python -m app.import_sqlite <snapshot>` into a fresh PostgreSQL database → fingerprint → new code `scripts/manage.py upgrade --check`, `python -m app.production migrate|schema|smoke` → business fingerprint identical (or declared and reconciled) → run the app and exercise POS / purchases / inventory. Write `docs/REHEARSAL-X.Y.Z.md`.
+4. Rehearsal on a copy of the pharmacy's data (when none is at hand: 1.9.2-style data built through the old image, as in [REHEARSAL-1.10.0](REHEARSAL-1.10.0.md)): worktree of `origin/prod` → `python -m app.import_sqlite <snapshot>` into a fresh PostgreSQL database → fingerprint → new code `scripts/manage.py upgrade --check`, `python -m app.production migrate|schema|smoke` → business fingerprint identical (or declared and reconciled) → run the app and exercise POS / purchases / inventory. Write `docs/REHEARSAL-X.Y.Z.md`.
 5. Commit with author `ArFtw-operative <arfwtw@users.noreply.github.com>`. Push `dev`, then `dev:prod` **only with the owner's explicit consent each time**. Never print tokens. On the original WSL machine pushes used a one-off credential helper reading the Linux `gh` token; on a new machine use its own `gh auth login`.
-6. The pharmacy PC updates with *Force Update ERP* (desktop) or `sudo faheem-erp force-update`.
+6. The pharmacy PC updates with *Force Update ERP* (desktop) or `sudo faheem-erp force-update`. With no published GHCR release this rebuilds from the newest `prod` commit (`--build-from-source`) and skips `upgrade --check`, so step 4 is the only rehearsal.
 
 ### On-site checklist
 [ONSITE-PENDING.md](ONSITE-PENDING.md): support VPS and DNS, enrolment, `faheem-erp import-medicine-reference`,
@@ -194,6 +194,6 @@ workflows not on `dev`/`prod`; PyMuPDF licence; remote support not activated; id
 |---|---|
 | Last documentation review | 2026-10-06 |
 | Architecture status | Stable: appliance in production since 1.4.0; guarded upgrades; 49 tables; 217 endpoints |
-| Active development | 1.10.0 (Udhaar ledger, Counter Report, manual bills separation, stock totals, POS pick fix): implemented, tested and on `dev`; waiting for release |
-| Next steps | TASK-001 release 1.10.0 → TASK-004 CI → TASK-002 on-site remote support |
+| Active development | none; 1.10.0 released 2026-10-06 ([rehearsal](REHEARSAL-1.10.0.md)) |
+| Next steps | Force Update the pharmacy PC to 1.10.0 → TASK-004 CI → TASK-002 on-site remote support |
 | Moving to a new machine | Clone the repository and check out `dev`, create `.venv` from `requirements.txt`, install Node Playwright for browser checks, log in to GitHub with `gh`, and re-create any scratch PostgreSQL cluster. Paths in older notes (`/home/abdurftw/…`, WSL, `/mnt/c/…`) belong to the original development PC. |

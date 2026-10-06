@@ -82,8 +82,13 @@ def test_postgres_fresh_install_upgrade_rehearsal_and_rollback(tmp_path, monkeyp
     head, = up.code_heads()
     from alembic.script import ScriptDirectory
     prev = ScriptDirectory.from_config(up._alembic_config()).get_revision(head).down_revision
-    db.execute('ALTER TABLE purchase_items DROP COLUMN receipt_decision')             # the newest migration's columns
-    db.execute('ALTER TABLE supplier_product_maps DROP COLUMN receipt_conventions')
+    # the newest migration's tables and columns (a8c0e2f4b6d8; update with every migration)
+    for table in ("counter_day_closes", "udhaar_reminders", "udhaar_payments"):
+        db.execute(f"DROP TABLE {table}")
+    db.execute("ALTER TABLE whatsapp_messages DROP COLUMN kind, DROP COLUMN udhaar_entry_id, DROP COLUMN manual_bill_id")
+    for table in ("udhaar_entries", "manual_bill_items", "manual_bills"):
+        db.execute(f"DROP TABLE {table}")
+    db.execute("ALTER TABLE customers DROP COLUMN udhaar_limit, DROP COLUMN udhaar_days")
     db.execute("UPDATE alembic_version SET version_num = ?", (prev,))
     db.execute("INSERT INTO categories (code, name, is_active, sort_order, created_at) VALUES ('MEDICINE', 'Medicine', true, 10, now())")
     assert up.state(db)["state"] == "pending"

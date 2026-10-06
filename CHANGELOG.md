@@ -33,7 +33,10 @@ lists its database migrations. Upgrades keep all business history (see docs/UPGR
   and MRP, for exactly the filtered rows.
 - The pharmacy logo shows when every tab is closed.
 - Migration a8c0e2f4b6d8: Udhaar tables and customer limit / days, manual-bill tables (+ move), counter day closes,
-  WhatsApp message kind; `RECONCILE_MOVED` lets a migration move documents only if the figures reconcile exactly.
+  WhatsApp message kind; `RECONCILE_MOVED` lets a migration move documents only if the figures reconcile exactly
+  (against what arrived in the target table, so a database that already holds manual bills reconciles too).
+- Owner account defaults at a first install are generic (`owner` / `Owner`); existing installs are unchanged.
+- Upgrade rehearsal: [docs/REHEARSAL-1.10.0.md](docs/REHEARSAL-1.10.0.md).
 
 ## 1.9.2 (2026-10-04)
 
