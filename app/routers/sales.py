@@ -417,6 +417,8 @@ async def api_create_sale(
             line.pop("discount_pct", None)
     request_id = payload.get("client_request_id") or None
     parked_id = payload.get("parked_id")
+    if str(payload.get("invoice_type") or "").upper() == "MANUAL":
+        return _create_manual_bill(db, payload, user, client_ip(request))   # a POS screen from before 1.10.0
 
     try:
         customer_id = _resolve_bill_customer(db, payload, user, client_ip(request))
@@ -436,7 +438,7 @@ async def api_create_sale(
             ip_address=client_ip(request),
             cash_received=payload.get("cash_received"),
             client_request_id=request_id,
-            invoice_type=payload.get("invoice_type") or "INVENTORY",
+            udhaar=payload.get("udhaar") or None,
         )
         db.commit()
     except IntegrityError:
@@ -460,6 +462,15 @@ async def api_create_sale(
             parking_service.complete_parked(db, parked, sale.id, user=user)
             db.commit()
 
+    return _completed(db, sale)
+
+
+def _completed(db: Session, sale: Sale) -> dict:
+    """What the POS shows after a bill: amount, how it was paid, and what is still owed (Udhaar)."""
+    from app.services import udhaar_service
+
+    entry = udhaar_service.entry_for_sale(db, sale.id)
+    owed = entry if entry is not None and entry.status != "CANCELLED" else None
     return {
         "ok": True,
         "sale_id": sale.id,
@@ -468,7 +479,40 @@ async def api_create_sale(
         "tendered": str(sale.tendered_amount) if sale.tendered_amount is not None else None,
         "change": str(sale.change_amount) if sale.change_amount is not None else None,
         "customer": customer_service.customer_payload(sale.customer) if sale.customer else None,
+        "payment_mode": sale.payment_mode,
+        "payment_label": sales_service.payment_label(sale),
+        "payments": [{"mode": p.mode, "amount": str(p.amount)} for p in sale.payments],
+        "paid": str(sale.total - (owed.amount if owed else 0)),
+        "udhaar": {"amount": str(owed.amount), "due_date": owed.due_date.isoformat(),
+                   "reminder_date": owed.reminder_date.isoformat()} if owed else None,
     }
+
+
+def _create_manual_bill(db: Session, payload: dict, user: User, ip: str) -> dict:
+    from sqlalchemy.exc import IntegrityError
+
+    from app.services import manual_bill_service
+
+    try:
+        customer_id = _resolve_bill_customer(db, payload, user, ip)
+        bill = manual_bill_service.create(
+            db, lines=payload.get("lines") or [], user=user, customer_id=customer_id,
+            customer_type=payload.get("customer_type", "WALK_IN"), payment_mode=payload.get("payment_mode", "CASH"),
+            payments=payload.get("payments") or None, discount_pct=payload.get("discount_pct"), notes=payload.get("notes", ""),
+            round_off_mode=settings_service.get_setting(db, "round_off_mode", "NEAREST_RUPEE"),
+            cash_received=payload.get("cash_received"), client_request_id=payload.get("client_request_id") or None, ip_address=ip)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(400, "Duplicate manual bill submission")
+    except (sales_service.SaleError, customer_service.CustomerError) as exc:
+        db.rollback()
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "manual_bill_id": bill.id, "invoice_no": bill.invoice_no, "total": str(bill.total),
+            "tendered": str(bill.tendered_amount) if bill.tendered_amount is not None else None,
+            "change": str(bill.change_amount) if bill.change_amount is not None else None,
+            "customer": customer_service.customer_payload(bill.customer) if bill.customer else None,
+            "payment_mode": bill.payment_mode, "paid": str(bill.total), "udhaar": None}
 
 
 @router.get("/sales")
@@ -502,7 +546,11 @@ def sale_invoice_document(
     user: User = Depends(require_permission("sales.view_own")),
 ):
     """The invoice rendered by the studio engine — shown inside the ERP tab (POS or Sales)."""
-    sale = _visible_sale(db, sale_id, user)
+    return invoice_page(request, db, _visible_sale(db, sale_id, user), user, size=size, mono=mono, expiry=expiry, autoprint=autoprint)
+
+
+def invoice_page(request: Request, db: Session, sale, user: User, *, size: str = "A4", mono: int = 0, expiry: int = 1, autoprint: int = 0):
+    """A sale's — or a manual bill's — invoice page (same layouts)."""
     size = size.upper() if size.upper() in INVOICE_SIZES else "A4"
     if size == "ERP":                     # the plain ERP document of this one bill
         from app.services import report_document
@@ -519,22 +567,29 @@ def sale_invoice_document(
 def sale_invoice_export(sale_id: int, fmt: str, db: Session = Depends(get_db),
                         user: User = Depends(require_permission("sales.view_own"))):
     """One invoice as Excel or CSV: header facts, lines, totals and payments."""
-    sale = _visible_sale(db, sale_id, user)
+    return export_document(db, _visible_sale(db, sale_id, user), fmt, user)
+
+
+def export_document(db: Session, sale, fmt: str, user: User):
+    """A sale or a manual bill as Excel / CSV."""
+    manual = sale.invoice_type == "MANUAL"
     if fmt not in ("csv", "xlsx"):
         raise HTTPException(400, "Choose Excel or CSV")
-    head = [("Invoice", sale.invoice_no), ("Type", "Manual bill" if sale.invoice_type == "MANUAL" else "Stock bill"),
+    head = [("Invoice", sale.invoice_no), ("Type", "Manual bill (record only)" if manual else "Stock bill"),
             ("Date", sale.sale_date.strftime("%d-%m-%Y %H:%M")), ("Customer", sale.customer.name if sale.customer else "Walk-in"),
-            ("Mobile", sale.customer.mobile if sale.customer else ""), ("Status", "Voided" if sale.payment_status == "CANCELLED" else "Completed")]
+            ("Mobile", sale.customer.mobile if sale.customer else ""),
+            ("Status", ("Deleted" if manual else "Voided") if sale.payment_status == "CANCELLED" else "Completed")]
     cols = ["Sr", "Item", "Pack", "Batch", "Expiry", "Qty", "Unit", "Rate", "Discount", "Amount"]
     lines = [[i + 1, l.product_name, l.pack_size, l.batch_no, l.expiry_date.strftime("%m/%Y") if l.expiry_date else "",
               l.quantity, (l.base_unit or "UNIT").lower(), float(l.rate), float(l.discount), float(l.line_total)]
              for i, l in enumerate(sorted(sale.items, key=lambda l: (l.line_no or 0, l.id)))]
     totals = [("Items total", float(sale.subtotal)), ("Bill discount", float(sale.discount or 0)),
               ("Round off", float(sale.round_off or 0)), ("Bill amount", float(sale.total))]
-    pays = [(f"Paid by {p.mode.title()}", float(p.amount)) for p in sale.payments]
+    pays = [("Udhaar (owed)" if p.mode == "UDHAAR" else f"Paid by {sales_service.MODE_NAMES.get(p.mode, p.mode.title())}", float(p.amount))
+            for p in sale.payments]
     if sale.tendered_amount is not None:
         pays += [("Received", float(sale.tendered_amount)), ("Change", float(sale.change_amount or 0))]
-    audit.record(db, action=audit.A_EXPORT, entity_type="sale", entity_id=sale.invoice_no, user=user,
+    audit.record(db, action=audit.A_EXPORT, entity_type="manual_bill" if manual else "sale", entity_id=sale.invoice_no, user=user,
                  details=f"Invoice exported as {fmt.upper()}", commit=True)
     if fmt == "csv":
         buf = io.StringIO()
@@ -589,12 +644,16 @@ def sale_pdf(
     scope = _visible_sales_scope(user)
     if scope is not None and sale.user_id != scope:
         raise HTTPException(403, "Not permitted")
+    return pdf_document(db, sale, user)
+
+
+def pdf_document(db: Session, sale, user: User):
     profile = settings_service.get_profile(db)
     qr = settings_service.qr_png_bytes(db)
     pdf = invoice_render.build_invoice_pdf(sale, profile, qr)
     audit.record(
-        db, action=audit.A_EXPORT, entity_type="sale", entity_id=sale.invoice_no, user=user,
-        details="Invoice PDF generated", commit=True,
+        db, action=audit.A_EXPORT, entity_type="manual_bill" if sale.invoice_type == "MANUAL" else "sale",
+        entity_id=sale.invoice_no, user=user, details="Invoice PDF generated", commit=True,
     )
     return Response(
         pdf,
@@ -656,7 +715,7 @@ def api_sale_edit_payload(sale_id: int, db: Session = Depends(get_db),
     for line in sorted(sale.items, key=lambda l: (l.line_no or 0, l.id)):
         gross = (line.line_total or 0) + (line.discount or 0)
         pct = float(round(line.discount / gross * 100, 2)) if gross else 0.0
-        if (sale.invoice_type or "INVENTORY") == "MANUAL" or not line.item_id:
+        if not line.item_id:                       # a typed line on a bill from before manual bills left sales
             item = db.get(Item, line.item_id) if line.item_id else None
             lines.append({"manual": True, "name": line.product_name, "qty": line.quantity, "rate": float(line.rate), "disc": pct,
                           "item_id": item.id if item else None, "code": line.item_code or "",
@@ -678,6 +737,9 @@ def api_sale_edit_payload(sale_id: int, db: Session = Depends(get_db),
                          "stock": b.quantity + own.get(b.id, 0), "pack_mrp": str(b.mrp), "upp": b.units_per_pack or 1,
                          "unit_mrp": str(units.display_unit_price(b.mrp, b.units_per_pack or 1))} for b in batches],
         })
+    from app.services import udhaar_service
+
+    owed = udhaar_service.entry_for_sale(db, sale.id)
     items_total = sum((l.line_total or 0 for l in sale.items), 0)
     bill_pct = float(round(sale.discount / items_total * 100, 2)) if items_total and sale.discount else 0.0
     return {
@@ -686,6 +748,8 @@ def api_sale_edit_payload(sale_id: int, db: Session = Depends(get_db),
         "customer_type": sale.customer_type or "WALK_IN", "discount_pct": bill_pct, "notes": sale.notes or "",
         "payment_mode": sale.payment_mode, "payments": [{"mode": p.mode, "amount": str(p.amount), "reference": p.reference} for p in sale.payments],
         "tendered": str(sale.tendered_amount) if sale.tendered_amount is not None else None, "total": str(sale.total),
+        "udhaar": {"due_date": owed.due_date.isoformat(), "reminder_date": owed.reminder_date.isoformat()}
+                  if owed is not None and owed.status != "CANCELLED" else None,
     }
 
 
@@ -715,7 +779,7 @@ async def api_sale_amend(sale_id: int, request: Request, db: Session = Depends(g
             discount=payload.get("discount", 0), discount_pct=payload.get("discount_pct"), notes=payload.get("notes"),
             round_off_mode=settings_service.get_setting(db, "round_off_mode", "NEAREST_RUPEE"),
             cash_received=payload.get("cash_received"), reason=str(payload.get("reason") or "")[:200],
-            ip_address=client_ip(request),
+            ip_address=client_ip(request), udhaar=payload.get("udhaar") or None,
         )
         db.commit()
     except (sales_service.SaleError, customer_service.CustomerError) as exc:
@@ -724,13 +788,7 @@ async def api_sale_amend(sale_id: int, request: Request, db: Session = Depends(g
     except HTTPException:
         db.rollback()
         raise
-    sale = sales_service.get_sale(db, sale_id)
-    return {
-        "ok": True, "sale_id": sale.id, "invoice_no": sale.invoice_no, "total": str(sale.total),
-        "tendered": str(sale.tendered_amount) if sale.tendered_amount is not None else None,
-        "change": str(sale.change_amount) if sale.change_amount is not None else None,
-        "customer": customer_service.customer_payload(sale.customer) if sale.customer else None,
-    }
+    return _completed(db, sales_service.get_sale(db, sale_id))
 
 
 @router.get("/api/sales/{sale_id}/refundable")

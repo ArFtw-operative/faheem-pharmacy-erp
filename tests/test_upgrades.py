@@ -49,6 +49,12 @@ def shop(tmp_path, store, monkeypatch):
     return db
 
 
+def _all_revisions() -> list[str]:
+    from alembic.script import ScriptDirectory
+
+    return [r.revision for r in ScriptDirectory.from_config(up._alembic_config()).walk_revisions()]
+
+
 # --------------------------------------------------------------------------- acceptance
 @pytest.mark.parametrize("fixture", FIXTURES, ids=[f.stem for f in FIXTURES])
 def test_every_release_upgrades_to_this_one_with_history_intact(fixture, tmp_path, store):
@@ -58,7 +64,15 @@ def test_every_release_upgrades_to_this_one_with_history_intact(fixture, tmp_pat
     out = up.upgrade(db)
     assert out["status"] in ("upgraded", "current")
     assert up.state(db)["state"] == "current"
-    assert up.compare(before, up.fingerprint(db)) == []
+    after = up.fingerprint(db)
+    # only figures a migration declares (RECONCILE_EXEMPT) may change — and those must still reconcile
+    assert up.compare(before, after, up._exemptions(_all_revisions())) == []
+    if "count:manual_bills" in after:                               # 1.10.0: manual bills left sales, nothing lost
+        assert before.get("count:sales", 0) == after["count:sales"] + after["count:manual_bills"]
+        assert round(before.get("sum:sales.total", 0), 2) == round(after["sum:sales.total"] + after["sum:manual_bills.total"], 2)
+        con = sqlite3.connect(db)
+        assert con.execute("SELECT COUNT(*) FROM sales WHERE invoice_type = 'MANUAL'").fetchone()[0] == 0
+        con.close()
     if out["status"] == "upgraded":
         shot = snapshot.verify(out["backup"])                       # the pre-upgrade snapshot is complete and valid
         assert shot["reason"] == "pre-upgrade" and shot["fingerprint"] == before

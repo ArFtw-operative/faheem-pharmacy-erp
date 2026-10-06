@@ -18,7 +18,8 @@ from app.models import User
 
 # children before parents
 WIPE_TABLES = (
-    "workspace_snapshots", "whatsapp_messages", "customer_followups", "item_uoms",
+    "workspace_snapshots", "udhaar_reminders", "whatsapp_messages", "udhaar_payments", "udhaar_entries",
+    "manual_bill_items", "manual_bills", "counter_day_closes", "customer_followups", "item_uoms",
     "mapping_history", "import_metrics", "supplier_packaging_aliases", "supplier_invoice_profiles", "product_packagings",
     "sale_return_items", "sale_returns", "sale_payments",
     "parked_sales", "inventory_movements", "stock_adjustments", "expiry_alerts",

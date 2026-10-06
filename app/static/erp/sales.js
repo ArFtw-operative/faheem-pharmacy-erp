@@ -6,9 +6,9 @@ import * as keys from "erp/keys";
 //   Ctrl+P reprint              Alt+X void (stock goes back to its batches)
 //
 // A return never edits the bill: it is its own document (SR-…) with its own
-// refund method; manual-bill lines never touch stock. An exchange is exactly a
+// refund method (a bill on Udhaar refunds by reducing what is owed). An exchange is exactly a
 // return followed by a new sale — two documents, nothing netted in secret.
-import { $, BOOT, api, debounce, esc, fmtDateTime, fmtExpShort, h, modal, money, store } from "erp/core";
+import { $, BOOT, api, debounce, esc, fmtDateTime, fmtExpShort, h, modal, money, num, store } from "erp/core";
 import { Grid } from "erp/grid";
 import { createStudio } from "erp/studio";
 import { WA_ICON, askPhone, deliveriesHtml, sendInvoice, waStatus } from "erp/whatsapp";
@@ -23,7 +23,7 @@ export function create(ctx, params, root) {
   const CAN = BOOT.can || {};
   const today = new Date();
   const F = { q: "", start: iso(new Date(today.getFullYear(), today.getMonth(), today.getDate() - 6)), end: iso(today),
-    payment: "", status: "", type: "" };
+    payment: "", status: "" };
   let rows = [], total = 0, detail = null, ctrl = null, loading = false;
   const cache = new Map();
 
@@ -32,8 +32,7 @@ export function create(ctx, params, root) {
       <label>From<input type="date" class="f-start" value="${F.start}"></label>
       <label>To<input type="date" class="f-end" value="${F.end}"></label>
       <label>Search<input class="f-q" autocomplete="off" spellcheck="false" placeholder="bill no., customer, mobile, product or batch"></label>
-      <label>Payment<select class="f-pay"><option value="">All</option><option value="CASH">Cash</option><option value="UPI">UPI</option><option value="CARD">Card</option><option value="SPLIT">Split</option></select></label>
-      <label>Bill type<select class="f-type"><option value="">All</option><option value="INVENTORY">Stock bills</option><option value="MANUAL">Manual bills</option></select></label>
+      <label>Payment<select class="f-pay"><option value="">All</option><option value="CASH">Cash</option><option value="UPI">UPI</option><option value="CARD">Card</option><option value="UDHAAR">Udhaar</option><option value="SPLIT">Split</option></select></label>
       <label>Status<select class="f-status"><option value="">All</option><option value="PAID">Completed</option><option value="CANCELLED">Voided</option><option value="RETURNED">With returns</option></select></label>
       <span class="spacer"></span><span class="s-sum muted"></span>
     </div>
@@ -83,11 +82,11 @@ export function create(ctx, params, root) {
     label: "Bills", storageKey: "sales-register", empty: "No bills in this period.",
     columns: [
       { key: "date", label: "Date / time", width: 128, render: (r) => esc(fmtDateTime(r.date)) },
-      { key: "invoice_no", label: "Bill no.", width: 142, render: (r) => `<span class="mono">${esc(r.invoice_no)}</span>${r.type === "MANUAL" ? ' <span class="tag">manual</span>' : ""}` },
+      { key: "invoice_no", label: "Bill no.", width: 142, render: (r) => `<span class="mono">${esc(r.invoice_no)}</span>` },
       { key: "customer", label: "Customer", width: 170, render: (r) => `${esc(r.customer)}${r.mobile ? ` <span class="muted">${esc(r.mobile)}</span>` : ""}` },
       { key: "items", label: "Items", width: 52, align: "num" },
       { key: "total", label: "Amount", width: 90, align: "num", render: (r) => `<b>${money(r.total)}</b>` },
-      { key: "payment", label: "Paid by", width: 150, render: (r) => esc(r.payment) },
+      { key: "payment", label: "Paid by", width: 150, render: (r) => (/Udhaar/.test(r.payment) ? `<b class="ud-tag">${esc(r.payment)}</b>` : esc(r.payment)) },
       { key: "status", label: "Status", width: 96, cellClass: (r) => (r.status === "CANCELLED" ? "st-out" : r.returned ? "ps-warn" : "st-ok"),
         render: (r) => (r.status === "CANCELLED" ? "Voided" : r.returned ? "Returns" : "Completed") },
       { key: "user", label: "Cashier", width: 90 },
@@ -152,7 +151,7 @@ export function create(ctx, params, root) {
     const returns = d.returns.map((r) => `<li><span class="mono">${esc(r.return_no)}</span> · ${esc(r.business_date)} · ₹${money(r.total_refund)} ${esc(r.refund_method)}
       ${r.reason_code ? `· ${esc(REASONS[r.reason_code] || r.reason_code)}` : ""}</li>`).join("");
     side.innerHTML = `
-      <h3><span class="mono">${esc(d.invoice_no)}</span> ${d.status === "CANCELLED" ? '<span class="doc-st ds-cancelled">VOIDED</span>' : d.type === "MANUAL" ? '<span class="doc-st ds-draft">MANUAL</span>' : ""}</h3>
+      <h3><span class="mono">${esc(d.invoice_no)}</span> ${d.status === "CANCELLED" ? '<span class="doc-st ds-cancelled">VOIDED</span>' : d.udhaar && num(d.udhaar.balance) > 0 ? '<span class="doc-st ud-st">UDHAAR OWED</span>' : ""}</h3>
       <p class="muted">${esc(fmtDateTime(d.date))} · ${esc(d.customer)}${d.mobile ? " · " + esc(d.mobile) : ""} · ${esc(d.customer_type === "HOME_DELIVERY" ? "Home delivery" : "Walk-in")} · by ${esc(d.user || "—")}</p>
       <table class="rawtab bill"><thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Disc</th><th class="num">Amount</th></tr></thead><tbody>${lines}</tbody></table>
       <table class="kvtab">
@@ -161,6 +160,7 @@ export function create(ctx, params, root) {
         ${Number(d.round_off) ? `<tr><th>Round off</th><td class="num">${money(d.round_off)}</td></tr>` : ""}
         <tr><th>Bill amount</th><td class="num"><b>₹${money(d.total)}</b></td></tr>
         <tr><th>Paid by</th><td class="num">${esc(d.payment)}</td></tr>
+        ${d.udhaar ? `<tr class="ud-row"><th>Udhaar</th><td class="num">₹${money(d.udhaar.amount)} · paid ₹${money(d.udhaar.paid)} · <b>owed ₹${money(d.udhaar.balance)}</b><br><small>due ${esc(d.udhaar.due_date)} · ${esc(d.udhaar.status)}</small></td></tr>` : ""}
         ${d.tendered ? `<tr><th>Received / change</th><td class="num">${money(d.tendered)} / ${money(d.change || 0)}</td></tr>` : ""}
         ${Number(d.refunded) ? `<tr><th>Refunded</th><td class="num warn">−${money(d.refunded)}</td></tr>` : ""}
       </table>
@@ -269,10 +269,10 @@ export function create(ctx, params, root) {
         <div class="form-grid three">
           <label>Reason<select name="reason">${Object.entries(REASONS).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("")}</select></label>
           <label>Returned goods<select name="disposition">${Object.entries(DISPOSITION).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("")}</select></label>
-          <label>Refund by<select name="method"><option value="CASH">Cash</option><option value="UPI">UPI</option><option value="CARD">Card</option></select></label>
+          <label>Refund by<select name="method">${r.payment && /Udhaar/.test(r.payment) ? '<option value="UDHAAR">Udhaar — reduce what is owed</option>' : ""}<option value="CASH">Cash</option><option value="UPI">UPI</option><option value="CARD">Card</option></select></label>
           <label class="full">Note<input name="note" maxlength="300" placeholder="required when the reason is Other"></label>
         </div>
-        <p class="hint"><b class="r-total">Refund ₹0.00</b> · Tab moves between quantities · manual-bill lines never change stock${exchange ? " · after the return a new bill opens for the same customer" : ""}</p>`,
+        <p class="hint"><b class="r-total">Refund ₹0.00</b> · Tab moves between quantities${exchange ? " · after the return a new bill opens for the same customer" : ""}</p>`,
       onOpen: (form) => {
         const upd = () => {
           let t = 0;
@@ -342,7 +342,7 @@ export function create(ctx, params, root) {
   const later = debounce(() => { F.q = q.value.trim(); reload(); }, 200);
   q.addEventListener("input", later);
   q.addEventListener("keydown", (e) => { if (e.key === "ArrowDown" || e.key === "Enter") { e.preventDefault(); later.flush(); grid.focus(); } });
-  for (const [cls, key] of [["f-start", "start"], ["f-end", "end"], ["f-pay", "payment"], ["f-type", "type"], ["f-status", "status"]]) {
+  for (const [cls, key] of [["f-start", "start"], ["f-end", "end"], ["f-pay", "payment"], ["f-status", "status"]]) {
     $("." + cls, root).addEventListener("change", (e) => { F[key] = e.target.value; reload(); });
   }
   // opened on one bill (from a report or another screen): find it whatever the current filters

@@ -36,11 +36,13 @@ def test_edit_keeps_number_and_reposts_stock(db):
 
 
 def test_manual_bill_edit_never_touches_stock(db):
-    sale = sales_service.create_sale(db, lines=[{"name": "Crepe bandage", "quantity": 1, "rate": "85"}], invoice_type="MANUAL")
+    from app.services import manual_bill_service
+
+    bill = manual_bill_service.create(db, lines=[{"name": "Crepe bandage", "quantity": 1, "rate": "85"}])
     db.commit()
-    sales_service.amend_sale(db, sale, lines=[{"name": "Crepe bandage", "quantity": 2, "rate": "85"}])
+    manual_bill_service.amend(db, bill, lines=[{"name": "Crepe bandage", "quantity": 2, "rate": "85"}])
     db.commit()
-    assert sale.total == Decimal("170.00") and db.query(InventoryMovement).count() == 0
+    assert bill.total == Decimal("170.00") and db.query(InventoryMovement).count() == 0
 
 
 def test_returned_or_voided_bills_cannot_be_edited(db):

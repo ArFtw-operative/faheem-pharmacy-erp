@@ -72,6 +72,22 @@ async def _whatsapp_worker() -> None:
             wa.keep_connected(db)
         finally:
             db.close()
+        daily()
+
+    def daily() -> None:
+        """Close finished business days (Counter Report) and send automatic Udhaar reminders."""
+        from app.services import counter_service, udhaar_service
+
+        db = SessionLocal()
+        try:
+            if counter_service.close_finished_days(db):
+                db.commit()
+            udhaar_service.send_due_reminders(db)
+        except Exception:  # pragma: no cover - logged, retried at the next check
+            db.rollback()
+            logger.exception("Day close / Udhaar reminders failed; retrying later")
+        finally:
+            db.close()
 
     first, last_check = True, 0.0
     while True:
@@ -230,6 +246,8 @@ def create_app() -> FastAPI:
         whatsapp,
         invoice_store,
         workspace,
+        udhaar,
+        manual_bills,
     )
 
     for router in (
@@ -249,6 +267,8 @@ def create_app() -> FastAPI:
         whatsapp.router,
         invoice_store.router,
         workspace.router,
+        udhaar.router,
+        manual_bills.router,
     ):
         app.include_router(router)
 

@@ -46,6 +46,7 @@ export function createStudio({ ctx, onClose = null, closeLabel = "Close" } = {})
       kv("Items", `${d.items ?? (d.lines || []).length}${d.units ? ` · ${d.units} units` : ""}`),
       kv("Amount", `₹${money(d.total)}`, "amt"),
       kv("Paid by", esc(d.payment || "")),
+      d.udhaar && d.udhaar.status !== "Cancelled" ? kv("Udhaar", `₹${money(d.udhaar.balance)} owed · due ${esc(d.udhaar.due_date)} · ${esc(d.udhaar.status)}`, "warn") : "",
       d.tendered ? kv("Received / change", `₹${money(d.tendered)} / ₹${money(d.change || 0)}`) : "",
       Number(d.refunded) ? kv("Refunded", `−₹${money(d.refunded)}`, "warn") : "",
       d.user ? kv("Billed by", esc(d.user)) : "",
@@ -67,17 +68,21 @@ export function createStudio({ ctx, onClose = null, closeLabel = "Close" } = {})
     if (reload && sale) show(sale); else call("setSize", size);
   }
   let showing = 0;
+  // a manual bill (kind "manual") is its own document with its own addresses
+  const paths = (s) => (s.kind === "manual"
+    ? { facts: `/api/erp/manual-bills/${s.id}`, page: `/manual-bills/${s.id}/invoice`, pdf: `/manual-bills/${s.id}/pdf`, exp: `/api/erp/manual-bills/${s.id}/export.` }
+    : { facts: `/api/erp/sales/${s.id}`, page: `/sales/${s.id}/invoice`, pdf: `/sales/${s.id}/pdf`, exp: `/api/erp/sales/${s.id}/export.` });
   async function show(s, { autoprint = false } = {}) {
     sale = s;
     const mine = ++showing;
     renderFacts(s && s.invoice_no ? s : null);
     if (s && s.id && !s.lines) {              // full bill facts for the header
-      api(`/api/erp/sales/${s.id}`).then((d) => { if (mine === showing) { sale = { ...s, ...d }; renderFacts(sale); } }).catch(() => {});
+      api(paths(s).facts).then((d) => { if (mine === showing) { sale = { ...s, ...d }; renderFacts(sale); } }).catch(() => {});
     }
     if (!s) { stage.innerHTML = '<p class="hint studio-empty">Select a bill to see its invoice.</p>'; frame = null; return; }
-    if (s.status === "CANCELLED") { stage.innerHTML = `<p class="hint studio-empty">${esc(s.invoice_no)} was voided — its invoice cannot be printed.</p>`; frame = null; return; }
+    if (s.status === "CANCELLED") { stage.innerHTML = `<p class="hint studio-empty">${esc(s.invoice_no)} was ${s.kind === "manual" ? "deleted" : "voided"} — its invoice cannot be printed.</p>`; frame = null; return; }
     const qs = new URLSearchParams({ size: pref.size, mono: pref.mono ? 1 : 0, expiry: pref.expiry ? 1 : 0, autoprint: autoprint ? 1 : 0 });
-    frame = h(`<iframe class="studio-frame" title="Invoice ${esc(s.invoice_no)}" src="/sales/${s.id}/invoice?${qs}"></iframe>`);
+    frame = h(`<iframe class="studio-frame" title="Invoice ${esc(s.invoice_no)}" src="${paths(s).page}?${qs}"></iframe>`);
     stage.replaceChildren(frame);
     info.textContent = "Rendering…";
   }
@@ -88,7 +93,7 @@ export function createStudio({ ctx, onClose = null, closeLabel = "Close" } = {})
   }
   function exportAs(fmt) {
     if (!sale) { ctx.status("Select a bill first", "warn"); return; }
-    const url = fmt === "pdf" ? `/sales/${sale.id}/pdf` : `/api/erp/sales/${sale.id}/export.${fmt}`;
+    const url = fmt === "pdf" ? paths(sale).pdf : paths(sale).exp + fmt;
     const a = document.createElement("a"); a.href = url; a.download = ""; document.body.append(a); a.click(); a.remove();
     ctx.status(`Downloading ${sale.invoice_no} as ${fmt.toUpperCase()}`, "ok");
   }

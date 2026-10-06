@@ -118,8 +118,12 @@ def create_return(
         raise RefundError("Select at least one item to return")
     if reason_code == "OTHER" and not (reason_note or "").strip():
         raise RefundError("A reason note is required when the reason is Other")
-    if refund_method not in ("CASH", "UPI", "CARD"):
+    if refund_method not in ("CASH", "UPI", "CARD", "UDHAAR"):
         raise RefundError("Unsupported refund method")
+    from app.services import udhaar_service
+
+    owed_entry = udhaar_service.entry_for_sale(db, sale.id)
+    owed = (owed_entry.amount - owed_entry.paid) if owed_entry is not None and owed_entry.status == "OPEN" else 0
 
     refundable = {r["sale_item_id"]: r for r in refundable_lines(db, sale)}
     items_by_id = {i.id: i for i in sale.items}
@@ -180,18 +184,26 @@ def create_return(
             _restock_line(db, line, qty, return_doc, user=user)
 
     total = money(total)
+    if owed > 0 and refund_method != "UDHAAR":
+        # money is never paid out for goods the customer has not paid for yet (no override: refund by Udhaar)
+        raise RefundError(f"₹{owed} is still owed on this bill as Udhaar — refund by Udhaar (it reduces what is owed)")
     if not allow_override:
         if manager_threshold and total > to_decimal(manager_threshold):
             raise RefundError(
                 f"Refunds above {money(manager_threshold)} require manager approval"
             )
         paid_with = {p.mode for p in sale.payments} or {sale.payment_mode}
-        if refund_method not in paid_with and paid_with & {"CASH", "UPI", "CARD"}:
+        if refund_method not in paid_with and paid_with & {"CASH", "UPI", "CARD", "UDHAAR"}:
             raise RefundError(
                 "The refund method must be one the bill was paid with unless a manager overrides it"
             )
     return_doc.total_refund = total
     db.flush()
+    if refund_method == "UDHAAR":
+        try:
+            udhaar_service.apply_return(db, sale, return_doc, user=user)
+        except udhaar_service.UdhaarError as exc:
+            raise RefundError(str(exc))
 
     audit.record(
         db, action=audit.A_CREATE, entity_type="sale_return", entity_id=return_doc.return_no,

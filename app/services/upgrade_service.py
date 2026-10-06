@@ -26,6 +26,9 @@ Snapshots (``app.snapshot``) live in an isolated store outside the application.
 
 A migration that must change a fingerprinted figure on purpose declares it in
 its module, with the reason, e.g. ``RECONCILE_EXEMPT = {"sum:sales.total": "..."}``.
+A migration that moves documents to another table declares the move instead,
+``RECONCILE_MOVED = {"sum:sales.total": "sum:manual_bills.total"}``: the figure
+may only drop by exactly what arrived in the other table (before = after + moved).
 """
 from __future__ import annotations
 
@@ -122,13 +125,15 @@ def pending_revisions(db=None) -> list[str]:
     return [r.revision for r in reversed(out)]
 
 
-def _exemptions(revisions: list[str]) -> dict[str, str]:
+def _exemptions(revisions: list[str]) -> dict:
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(_alembic_config())
-    out: dict[str, str] = {}
+    out: dict = {}
     for rev in revisions:
-        out.update(getattr(script.get_revision(rev).module, "RECONCILE_EXEMPT", {}) or {})
+        module = script.get_revision(rev).module
+        out.update(getattr(module, "RECONCILE_EXEMPT", {}) or {})
+        out.update({k: {"moved_to": v} for k, v in (getattr(module, "RECONCILE_MOVED", {}) or {}).items()})
     return out
 
 
@@ -137,6 +142,13 @@ def compare(before: dict, after: dict, exempt: dict | None = None) -> list[str]:
     exempt = exempt or {}
     problems = []
     for key, old in before.items():
+        rule = exempt.get(key)
+        if isinstance(rule, dict) and rule.get("moved_to"):
+            # moved, not lost: what left this figure must be exactly what the other table now holds
+            moved = after.get(rule["moved_to"], 0) or 0
+            if abs(float(after.get(key, 0) or 0) + float(moved) - float(old)) > 0.005:
+                problems.append(f"{key}: {old} → {after.get(key)} (+ {moved} in {rule['moved_to']}) does not reconcile")
+            continue
         if key in exempt:
             continue
         if key.startswith("check:"):

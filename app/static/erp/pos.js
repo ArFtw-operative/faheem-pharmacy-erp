@@ -27,7 +27,10 @@ function takeSlot(preferred) {
 }
 const SALE_TYPES = { WALK_IN: "Walk-in", HOME_DELIVERY: "Home delivery" };
 const saleType = (value) => value === "HOME_DELIVERY" ? value : "WALK_IN";
-const MODES = { CASH: "Cash", UPI: "UPI", CARD: "Card", SPLIT: "Split" };
+const MODES = { CASH: "Cash", UPI: "UPI", CARD: "Card", SPLIT: "Split", UDHAAR: "Udhaar" };
+const SPLIT_MODES = ["CASH", "UPI", "CARD", "UDHAAR"];
+// "12 OCT 2026" from 2026-10-12
+const LONG_DAY = (iso) => (iso ? new Date(iso + "T00:00:00").toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }).toUpperCase() : "");
 
 export function create(ctx, params, root, saved) {
   const B = ctx.boot, CAN = B.can || {};
@@ -37,7 +40,7 @@ export function create(ctx, params, root, saved) {
   // store policy: the most any line, or the bill, may be discounted — the server enforces the same
   const MAXD = Number((B.settings && B.settings.max_discount_pct) ?? 20);
 
-  const blank = () => ({ slot: billNo, manual: false, lines: [], customer: null, saleType: "WALK_IN", saleTypeExplicit: false, discount: 0, discountPct: null, mode: "CASH", received: "", ref: "", split: { CASH: "", UPI: "", CARD: "" }, parked: null, requestId: uid() });
+  const blank = () => ({ slot: billNo, manual: false, lines: [], customer: null, saleType: "WALK_IN", saleTypeExplicit: false, discount: 0, discountPct: null, mode: "CASH", received: "", ref: "", split: { CASH: "", UPI: "", CARD: "", UDHAAR: "" }, udhaar: null, parked: null, requestId: uid() });
   let S = saved && saved.lines ? Object.assign(blank(), saved) : blank();
   // opened for an exchange: the returning customer is already on the new bill
   if (!(saved && saved.lines) && params && params.customer) { S.customer = params.customer; S.exchangeNote = params.note || ""; }
@@ -116,6 +119,7 @@ export function create(ctx, params, root, saved) {
           <button type="button" data-mode="UPI">UPI <kbd data-shortcut="pos.upi">${esc(keys.keyFor("pos.upi"))}</kbd></button>
           <button type="button" data-mode="CARD">Card <kbd data-shortcut="pos.card">${esc(keys.keyFor("pos.card"))}</kbd></button>
           <button type="button" data-mode="SPLIT">Split <kbd data-shortcut="pos.split">${esc(keys.keyFor("pos.split"))}</kbd></button>
+          <button type="button" data-mode="UDHAAR" class="pm-udhaar" title="Customer pays later — needs the customer, a due date and a reminder date">Udhaar <small>pay later</small> <kbd data-shortcut="pos.udhaar">${esc(keys.keyFor("pos.udhaar"))}</kbd></button>
         </div>
         <div class="pay pay-cash">
           <label>Received<input class="p-recv num" inputmode="decimal" placeholder="exact"></label>
@@ -126,9 +130,17 @@ export function create(ctx, params, root, saved) {
           <label>Cash<input class="s-amt num" data-split="CASH" inputmode="decimal"></label>
           <label>UPI<input class="s-amt num" data-split="UPI" inputmode="decimal"></label>
           <label>Card<input class="s-amt num" data-split="CARD" inputmode="decimal"></label>
+          <label class="s-ud">Udhaar<input class="s-amt num" data-split="UDHAAR" inputmode="decimal" title="Part the customer pays later"></label>
           <label>Cash received<input class="s-recv num" inputmode="decimal" placeholder="exact"></label>
           <div class="t-row"><span class="s-left-l">Remaining</span><b class="s-left">0.00</b></div>
           <div class="t-row"><span>Change to return</span><b class="s-change">0.00</b></div>
+        </div>
+        <div class="pay pay-udhaar" hidden>
+          <div class="ud-head">UDHAAR — money not received now</div>
+          <div class="ud-info"></div>
+          <label>Due date<input type="date" class="ud-due" required></label>
+          <label>Reminder on<input type="date" class="ud-rem" required></label>
+          <small class="muted">Both are required. Reminder goes on WhatsApp / is shown in the Udhaar Ledger.</small>
         </div>
         <p class="pay-err" role="alert"></p>
         <button type="button" class="btn primary finalize">Complete sale <kbd data-shortcut="pos.save">${esc(keys.keyFor("pos.save"))}</kbd></button>
@@ -358,7 +370,7 @@ export function create(ctx, params, root, saved) {
     $(".p-change", root).classList.toggle("neg", change < 0);
     if (S.mode === "SPLIT") {
       $$(".s-amt", root).forEach((inp) => { if (document.activeElement !== inp) inp.value = S.split[inp.dataset.split]; });
-      const paid = r2(["CASH", "UPI", "CARD"].reduce((n, m) => n + num(S.split[m]), 0));
+      const paid = r2(SPLIT_MODES.reduce((n, m) => n + num(S.split[m]), 0));
       const left = r2(t.net - paid);
       $(".s-left-l", root).textContent = left < 0 ? "Over by" : "Remaining";
       $(".s-left", root).textContent = money(Math.abs(left));
@@ -369,8 +381,56 @@ export function create(ctx, params, root, saved) {
       $(".s-change", root).textContent = money(Math.max(r2(num(S.splitRecv || cashPart) - cashPart), 0));
     }
     $(".p-ref", root).value = S.ref || "";
+    $(".pm-udhaar", root).hidden = S.manual;            // a manual bill is a record, never Udhaar
+    $(".s-ud", root).hidden = S.manual;
+    renderUdhaar(t);
     $(".pay-err", root).textContent = payProblem(t) || "";
     $(".finalize", root).disabled = !S.lines.length || busy;
+  }
+
+  // ---------------------------------------------------------------- Udhaar (customer pays later)
+  const udhaarPart = (t = totals()) => (S.manual ? 0 : S.mode === "UDHAAR" ? t.net : S.mode === "SPLIT" ? r2(num(S.split.UDHAAR)) : 0);
+  let udInfo = null, udFor = null;          // the customer's Udhaar position and proposed dates
+  async function loadUdhaar() {
+    const cid = S.customer ? S.customer.id : null;
+    if (cid === udFor) return;
+    udFor = cid; udInfo = null;
+    if (!cid) return;
+    try {
+      const d = await api(`/api/erp/udhaar/customers/${cid}`);
+      if (udFor !== cid) return;
+      udInfo = d;
+      if (!S.udhaar || S.udhaar.cid !== cid) S.udhaar = { cid, due: d.due_date, reminder: d.reminder_date };
+      renderTotals(); ctx.save(S);
+    } catch (err) { udFor = null; ctx.status(err.message, "error"); }
+  }
+  function renderUdhaar(t = totals()) {
+    const box = $(".pay-udhaar", root), part = udhaarPart(t);
+    box.hidden = !(part > 0);
+    $(".pos .totals", root).classList.toggle("udhaar-on", part > 0);
+    if (box.hidden) return;
+    if (S.customer && S.customer.id !== udFor) loadUdhaar();
+    const info = $(".ud-info", box);
+    if (!S.customer) info.innerHTML = `<b class="warn">Select the customer (${esc(keys.keyFor("pos.customer"))}) — Udhaar needs a name and mobile</b>`;
+    else if (!udInfo) info.textContent = "Checking what the customer owes…";
+    else info.innerHTML = `<b>${esc(S.customer.name)}</b> ${esc(S.customer.mobile || "")} already owes <b>₹${money(udInfo.outstanding)}</b>`
+      + (num(udInfo.overdue) ? ` · <span class="warn">₹${money(udInfo.overdue)} overdue</span>` : "")
+      + (udInfo.limit !== null ? ` · limit ₹${money(udInfo.limit)}` : "")
+      + `<br>This bill on Udhaar: <b class="ud-amt">₹${money(part)}</b>`;
+    const due = $(".ud-due", box), rem = $(".ud-rem", box);
+    if (document.activeElement !== due) due.value = (S.udhaar && S.udhaar.due) || "";
+    if (document.activeElement !== rem) rem.value = (S.udhaar && S.udhaar.reminder) || "";
+  }
+  function udhaarProblem(t) {
+    const part = udhaarPart(t);
+    if (!(part > 0)) return "";
+    if (!S.customer) return `Udhaar needs a customer — press ${keys.keyFor("pos.customer")} to select or add one`;
+    if (!S.customer.mobile) return `${S.customer.name} has no mobile number — add it before giving Udhaar`;
+    if (!S.udhaar || !S.udhaar.due || !S.udhaar.reminder) return "Enter the Udhaar due date and reminder date";
+    if (S.udhaar.reminder > S.udhaar.due) return "The reminder date must be on or before the due date";
+    if (udInfo && udInfo.limit !== null && !S.editing && r2(num(udInfo.outstanding) + part) > num(udInfo.limit))
+      return `Udhaar limit for ${S.customer.name} is ₹${money(udInfo.limit)} — already owes ₹${money(udInfo.outstanding)}`;
+    return "";
   }
 
   function renderDetail() {
@@ -404,9 +464,11 @@ export function create(ctx, params, root, saved) {
     if (bad) return bad;
     const dp = billDiscProblem(t);
     if (dp) return dp;
+    const up = udhaarProblem(t);
+    if (up) return up;
     if (S.mode === "CASH" && S.received !== "" && num(S.received) < t.net) return `Received is ₹${money(t.net - num(S.received))} short`;
     if (S.mode === "SPLIT") {
-      const paid = r2(["CASH", "UPI", "CARD"].reduce((n, m) => n + num(S.split[m]), 0));
+      const paid = r2(SPLIT_MODES.reduce((n, m) => n + num(S.split[m]), 0));
       if (paid !== t.net) return `Split must add up to ₹${money(t.net)} (now ₹${money(paid)})`;
       if (S.splitRecv && num(S.splitRecv) < num(S.split.CASH)) return "Cash received is less than the cash part";
     }
@@ -520,6 +582,7 @@ export function create(ctx, params, root, saved) {
   function toggleManual() {
     if (S.lines.length) { ctx.status(`Finish, hold or clear this bill before switching to ${S.manual ? "a stock bill" : "a manual bill"} (Alt+N opens another bill)`, "warn"); return; }
     S.manual = !S.manual;
+    if (S.manual && S.mode === "UDHAAR") S.mode = "CASH";      // a manual bill is never Udhaar
     render(); q.focus();
     ctx.status(S.manual ? "Manual bill: items not kept in stock · no inventory effect · numbered MB-…" : "Back to a normal stock bill", "ok");
   }
@@ -607,7 +670,8 @@ export function create(ctx, params, root, saved) {
     if (p.active === false) { ctx.status(`${p.name} is disabled in Inventory — not for sale. Enable it there (right-click → Enable) to sell it.`, "error"); return; }
     if (!p.batches.length) { ctx.status(`${p.name} has no sellable stock (out of stock or only expired batches)`, "error"); return; }
     let i = S.lines.findIndex((l) => l.item_id === p.id && !l.batch_id);
-    if (i >= 0) {
+    const already = i >= 0;
+    if (already) {
       S.lines[i].batches = p.batches;           // fresh stock figures
     } else {
       const l = lineFrom(p);
@@ -621,7 +685,8 @@ export function create(ctx, params, root, saved) {
     editQty(i);
     const l = S.lines[i];
     const b = l.batches[0];
-    if (b) ctx.status(l.loose
+    if (already) ctx.status(`${l.name} is already on the bill (line ${i + 1}, qty ${l.qty}) — type its new total quantity`, "warn");
+    else if (b) ctx.status(l.loose
       ? `${l.name}: qty in ${unitName(l.base_unit)} · 1 ${unitName(l.pack_unit, 1)} = ${l.upp} · ₹${money(b.unit_mrp)} per ${unitName(l.base_unit, 1)} (strip MRP ₹${money(b.pack_mrp)} ÷ ${l.upp}) · 1s = full ${unitName(l.pack_unit, 1)}`
       : `${l.name}: sold per ${unitName(l.base_unit, 1)}${l.content ? " (" + l.content + ")" : ""} · ₹${money(b.pack_mrp)}`);
   }
@@ -787,18 +852,22 @@ export function create(ctx, params, root, saved) {
     if (!term) { closeDrop(); return; }
     ctrl = new AbortController();
     const key = term.toLowerCase();
+    // the same list again (stock refreshed): the row the cashier moved to stays highlighted
+    const keep = mode === "items" && lastTerm === term && !drop.hidden && results[at] ? results[at].id : null;
     try {
-      mode = "items";
-      lastTerm = term;
+      let items;
       const hit = cache.get(key);
-      if (hit && Date.now() - hit.t < 20000) results = hit.items;
+      if (hit && Date.now() - hit.t < 20000) items = hit.items;
       else {
-        results = (await api("/api/erp/pos/search?q=" + encodeURIComponent(term), { signal: ctrl.signal })).items;
-        cache.set(key, { t: Date.now(), items: results });
+        items = (await api("/api/erp/pos/search?q=" + encodeURIComponent(term), { signal: ctrl.signal })).items;
+        cache.set(key, { t: Date.now(), items });
         if (cache.size > 200) cache.delete(cache.keys().next().value);
       }
       if (q.value.trim() !== term) return;   // a newer keystroke is in flight
-      if (S.manual) {                        // manual bill: exact name first, else the first match, else the typed row
+      mode = "items"; results = items; lastTerm = term;   // lastTerm = the term the list on screen is for
+      at = keep === null ? -1 : results.findIndex((p) => p.id === keep);
+      if (at >= 0) { /* kept */ }
+      else if (S.manual) {                   // manual bill: exact name first, else the first match, else the typed row
         at = results.findIndex((p) => p.name.toLowerCase() === key);
         if (at < 0) at = 0;
       } else {
@@ -847,10 +916,14 @@ export function create(ctx, params, root, saved) {
       if (!drop.hidden && (mode === "parked" || mode === "batch")) { await chooseDrop(); return; }
       const term = q.value.trim();
       if (!term) { if (S.lines.length) { $(".p-recv", root).focus(); } return; }
-      if (S.manual) { search.cancel(); await runSearch(); await chooseDrop(); return; }
-      // scanner / fast typist: search now, then add an exact single match
-      if (mode !== "parked") { search.cancel(); await runSearch(); }
-      if (mode === "items" && results.length === 1 && results[0].batches.length) { addProduct(results[0]); return; }
+      // the list on screen is for this term: Enter adds the row the cashier highlighted (↑↓), never
+      // a fresh search's first row. Otherwise (scanner / fast typist) search now and take its best row.
+      const shown = mode === "items" && !drop.hidden && lastTerm === term;
+      search.cancel();
+      if (!shown) await runSearch();
+      if (q.value.trim() !== term || mode !== "items") return;   // typed on meanwhile: the next Enter decides
+      if (S.manual) { await chooseDrop(); return; }
+      if (!shown && results.length === 1 && results[0].batches.length) { addProduct(results[0]); return; }
       await chooseDrop();
     } else if (e.key === "Escape") {
       e.preventDefault();
@@ -989,11 +1062,25 @@ export function create(ctx, params, root, saved) {
 
   // ---------------------------------------------------------------- payment & finalize
   function setMode(m) {
+    if (m === "UDHAAR" && S.manual) { ctx.status("A manual bill is a record only — it cannot be on Udhaar", "warn"); return; }
     S.mode = m;
     render();
     if (m === "CASH") { const r = $(".p-recv", root); r.focus(); r.select(); }
-    else if (m === "SPLIT") { const t = totals(); if (!["CASH", "UPI", "CARD"].some((k) => num(S.split[k]))) S.split = { CASH: "", UPI: "", CARD: "" }; renderTotals(); $(".s-amt", root).focus(); ctx.status(`Split ₹${money(t.net)} across Cash / UPI / Card`); }
+    else if (m === "SPLIT") { const t = totals(); if (!SPLIT_MODES.some((k) => num(S.split[k]))) S.split = { CASH: "", UPI: "", CARD: "", UDHAAR: "" }; renderTotals(); $(".s-amt", root).focus(); ctx.status(`Split ₹${money(t.net)} across Cash / UPI / Card / Udhaar`); }
+    else if (m === "UDHAAR") {
+      if (!S.customer) { ctx.status("Udhaar: select or add the customer first", "warn"); chooseCustomer(); return; }
+      const d = $(".ud-due", root); d.focus();
+      ctx.status(`Udhaar ₹${money(totals().net)} for ${S.customer.name} — confirm the due date and the reminder date`, "warn");
+    }
     else { const r = $(".p-ref", root); r.focus(); }
+  }
+  for (const [cls, key] of [["ud-due", "due"], ["ud-rem", "reminder"]]) {
+    const inp = $("." + cls, root);
+    inp.addEventListener("change", () => { S.udhaar = { ...(S.udhaar || { cid: S.customer ? S.customer.id : null }), [key]: inp.value }; renderTotals(); ctx.save(S); });
+    inp.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); inp.dispatchEvent(new Event("change")); if (cls === "ud-due") $(".ud-rem", root).focus(); else finalize(); }
+      else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); q.focus(); }
+    });
   }
   $(".paymodes", root).addEventListener("click", (e) => { const b = e.target.closest("[data-mode]"); if (b) setMode(b.dataset.mode); });
   const recv = $(".p-recv", root);
@@ -1010,7 +1097,7 @@ export function create(ctx, params, root, saved) {
       if (e.key === "Enter") {
         e.preventDefault(); e.stopPropagation();
         const t = totals();
-        const others = r2(["CASH", "UPI", "CARD"].filter((m) => m !== inp.dataset.split).reduce((n, m) => n + num(S.split[m]), 0));
+        const others = r2(SPLIT_MODES.filter((m) => m !== inp.dataset.split).reduce((n, m) => n + num(S.split[m]), 0));
         if (!inp.value.trim() && others < t.net) { S.split[inp.dataset.split] = String(r2(t.net - others)); renderTotals(); }
         (all[i + 1] || $(".s-recv", root)).focus();
       } else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); q.focus(); }
@@ -1110,15 +1197,23 @@ export function create(ctx, params, root, saved) {
     kv("NET PAYABLE", money(t.net));
     out.push(" ".repeat(W - 44) + "-".repeat(44));
     if (S.mode === "SPLIT") {
-      for (const m of ["CASH", "UPI", "CARD"]) if (num(S.split[m]) > 0) kv(`Paid by ${MODES[m]}`, money(S.split[m]));
+      for (const m of SPLIT_MODES) if (num(S.split[m]) > 0) kv(m === "UDHAAR" ? "Udhaar (pay later)" : `Paid by ${MODES[m]}`, money(S.split[m]));
       if (S.splitRecv && num(S.splitRecv) > num(S.split.CASH)) { kv("Cash received", money(S.splitRecv)); kv("Change to return", money(num(S.splitRecv) - num(S.split.CASH))); }
     } else {
-      kv("Paid by", MODES[S.mode]);
+      kv("Paid by", S.mode === "UDHAAR" ? "Udhaar (pay later)" : MODES[S.mode]);
       if (S.mode === "CASH") {
         const recv = S.received === "" ? t.net : r2(num(S.received));
         kv("Received", money(recv));
         kv("Change to return", money(Math.max(0, r2(recv - t.net))));
       } else if (S.ref) kv("Reference", S.ref.slice(0, 14));
+    }
+    const owed = udhaarPart(t);
+    if (owed > 0 && S.udhaar) {
+      out.push(" ".repeat(W - 44) + "=".repeat(44));
+      kv("UDHAAR OUTSTANDING", money(owed));
+      kv("Due date", LONG_DAY(S.udhaar.due));
+      kv("Reminder on", LONG_DAY(S.udhaar.reminder));
+      out.push(" ".repeat(W - 44) + "=".repeat(44), `Udhaar for ${S.customer ? S.customer.name : ""} — money is NOT received now.`);
     }
     if (t.gross - t.net > 0.009) out.push("", `Customer saves Rs. ${money(t.gross - t.net)} on MRP.`);
     return out.join("\n");
@@ -1129,6 +1224,7 @@ export function create(ctx, params, root, saved) {
     $(".pos", root).append(overlay);
     ctx.setKeys();
     const sheet = overlay.querySelector(".pos-sheet");
+    sheet.focus();                                   // now: an Enter typed right after F12 belongs to the sheet
     setTimeout(() => sheet.focus(), 0);
     return sheet;
   }
@@ -1151,9 +1247,21 @@ export function create(ctx, params, root, saved) {
   }
   // after the sale: Print invoice or WhatsApp invoice (or neither). WhatsApp is queued and
   // delivered in the background — the next bill starts at once, the sale never waits for it.
+  // after the sale: one line that says how it was paid — Udhaar stands out (money not received yet)
+  function doneBanner(d, manual) {
+    if (manual) return `<div class="done-banner manual" role="status">MANUAL BILL SAVED — ₹${money(d.total)} — RECORD ONLY<small>Not a sale: no stock, cash or report effect</small></div>`;
+    const mode = String(d.payment_mode || "").toUpperCase();
+    if (d.udhaar) {
+      const paid = num(d.paid);
+      return `<div class="done-banner udhaar" role="status">SALE COMPLETED — ${esc(mode === "SPLIT" ? "SPLIT" : "UDHAAR")} — ${paid > 0 ? `₹${money(paid)} PAID · ` : ""}₹${money(d.udhaar.amount)} OUTSTANDING — DUE ${LONG_DAY(d.udhaar.due_date)}`
+        + `<small>Money NOT received · reminder on ${LONG_DAY(d.udhaar.reminder_date)} · see Udhaar Ledger</small></div>`;
+    }
+    return `<div class="done-banner paid" role="status">SALE COMPLETED — ${esc(mode)} — ₹${money(d.total)} PAID${mode === "SPLIT" && d.payment_label ? `<small>${esc(d.payment_label)}</small>` : ""}</div>`;
+  }
   function askFollowUp(d, summary, wasEdit) {
-    if (!CAN["followups.manage"] || !summary.customer_id) { askInvoice(d, summary, wasEdit); return; }
+    if (!CAN["followups.manage"] || !summary.customer_id || summary.kind === "manual") { askInvoice(d, summary, wasEdit); return; }
     const sheet = showOverlay(`<header class="pos-sheet-h"><b>✓ ${esc(d.invoice_no)} completed</b><span class="muted">${esc(summary.customer)}</span></header>
+      ${doneBanner(d, false)}
       <p class="pos-ask">Set up a follow-up?</p><footer>
       <button type="button" class="btn primary" data-a="yes">Yes <kbd>Y</kbd></button>
       <button type="button" class="btn" data-a="no">No <kbd>N</kbd></button></footer>`);
@@ -1178,9 +1286,11 @@ export function create(ctx, params, root, saved) {
 
   function askInvoice(d, summary, wasEdit) {
     const change = num(d.change);
-    const canWa = !!CAN["whatsapp.send"];
+    const manual = summary.kind === "manual";
+    const canWa = !!CAN["whatsapp.send"] && !manual;
     const saved = normalizePhone(summary.mobile);
-    const sheet = showOverlay(`<header class="pos-sheet-h"><b>✓ ${esc(d.invoice_no)} ${wasEdit ? "updated" : "completed"}</b><span class="muted">₹${money(d.total)} · ${esc(summary.payment)} · ${esc(summary.customer)}</span></header>
+    const sheet = showOverlay(`<header class="pos-sheet-h"><b>✓ ${esc(d.invoice_no)} ${wasEdit ? "updated" : manual ? "saved" : "completed"}</b><span class="muted">₹${money(d.total)} · ${esc(summary.payment)} · ${esc(summary.customer)}</span></header>
+      ${doneBanner(d, manual)}
       ${change > 0 ? `<p class="pos-change">Return change <b>₹${money(change)}</b></p>` : ""}
       <p class="pos-ask">Invoice for the customer</p>
       <div class="pos-choices">
@@ -1233,8 +1343,8 @@ export function create(ctx, params, root, saved) {
     const t = totals();
     const err = payProblem(t);
     if (err) { ctx.status(err, "error"); return; }
+    const owed = udhaarPart(t);
     const body = {
-      invoice_type: S.manual ? "MANUAL" : "INVENTORY",
       lines: S.lines.map((l) => (l.manual
         ? { name: l.name, item_id: l.item_id || null, code: l.code || "", pack: l.pack || "", batch: l.batch || "", expiry: l.expiry || "",
             quantity: l.qty, rate: num(l.rate), discount_pct: CAN["sales.discount"] ? num(l.disc) : 0 }
@@ -1249,36 +1359,44 @@ export function create(ctx, params, root, saved) {
     };
     if (S.mode === "SPLIT") {
       body.payment_mode = "SPLIT";
-      body.payments = ["CASH", "UPI", "CARD"].filter((m) => num(S.split[m]) > 0).map((m) => ({ mode: m, amount: r2(num(S.split[m])), reference: m !== "CASH" ? S.ref || "" : "" }));
+      body.payments = SPLIT_MODES.filter((m) => num(S.split[m]) > 0 && !(S.manual && m === "UDHAAR"))
+        .map((m) => ({ mode: m, amount: r2(num(S.split[m])), reference: m !== "CASH" && m !== "UDHAAR" ? S.ref || "" : "" }));
       if (S.splitRecv) body.cash_received = r2(num(S.splitRecv));
     } else {
       body.payment_mode = S.mode;
-      body.payments = [{ mode: S.mode, amount: t.net, reference: S.mode !== "CASH" ? S.ref || "" : "" }];
+      body.payments = [{ mode: S.mode, amount: t.net, reference: S.mode !== "CASH" && S.mode !== "UDHAAR" ? S.ref || "" : "" }];
       if (S.mode === "CASH") body.cash_received = S.received === "" ? t.net : r2(num(S.received));
     }
+    if (owed > 0) body.udhaar = { due_date: S.udhaar.due, reminder_date: S.udhaar.reminder };
     if (!(await review(t))) { ctx.status("Back to the bill — adjust it and press Complete sale again"); q.focus(); return; }
     busy = true; renderTotals(); renderSaleType();
     ctx.status("Completing sale…");
     const billed = { customer: S.customer ? S.customer.name : "Walk-in", mobile: S.customer ? S.customer.mobile || "" : "",
       customer_type: S.saleType, type: S.manual ? "MANUAL" : "INVENTORY", items: S.lines.length,
       units: S.lines.reduce((n, l) => n + l.qty, 0), payment: S.mode === "SPLIT" ? "Split" : MODES[S.mode] };
+    const manual = S.manual;
     try {
-      const d = S.editing
-        ? await api(`/api/sales/${S.editing.id}`, { method: "PUT", body: { ...body, reason: "Edited from Sales" } })
-        : await api("/api/sales", { method: "POST", body });
+      // a manual bill is its own document (never a sale): its own API
+      const url = manual ? (S.editing ? `/api/erp/manual-bills/${S.editing.id}` : "/api/erp/manual-bills")
+        : (S.editing ? `/api/sales/${S.editing.id}` : "/api/sales");
+      const d = await api(url, { method: S.editing ? "PUT" : "POST", body: S.editing ? { ...body, reason: "Edited from Sales" } : body });
       const wasEdit = S.editing;
-      try { const m = JSON.parse(sessionStorage.getItem("erp:saleTabs") || "{}"); m[d.sale_id] = ctx.tabId; sessionStorage.setItem("erp:saleTabs", JSON.stringify(m)); } catch { /* private mode */ }
-      lastBill = { no: d.invoice_no, total: d.total, change: d.change, mode: S.mode, id: d.sale_id, customer_id: S.customer ? S.customer.id : null };
+      const docId = manual ? d.manual_bill_id : d.sale_id;
+      if (!manual) try { const m = JSON.parse(sessionStorage.getItem("erp:saleTabs") || "{}"); m[d.sale_id] = ctx.tabId; sessionStorage.setItem("erp:saleTabs", JSON.stringify(m)); } catch { /* private mode */ }
+      lastBill = { no: d.invoice_no, total: d.total, change: d.change, mode: S.mode, id: docId, customer_id: S.customer ? S.customer.id : null };
       const box = $(".last-bill", root);
       box.hidden = false;
-      box.innerHTML = `Last bill <b>${esc(d.invoice_no)}</b> · ₹${money(d.total)} ${esc(MODES[S.mode])}${d.change && num(d.change) > 0 ? ` · <b class="change">Return ₹${money(d.change)}</b>` : ""} · <a href="#" class="reprint">invoice / reprint</a>`;
-      const summary = { ...billed, customer_id: S.customer ? S.customer.id : null, id: d.sale_id, invoice_no: d.invoice_no, total: d.total, tendered: d.tendered, change: d.change,
+      box.classList.toggle("udhaar", !!d.udhaar);
+      box.innerHTML = `Last ${manual ? "manual bill" : "bill"} <b>${esc(d.invoice_no)}</b> · ₹${money(d.total)} ${d.udhaar ? `<b class="ud-owed">₹${money(d.udhaar.amount)} UDHAAR · due ${LONG_DAY(d.udhaar.due_date)}</b>` : esc(MODES[S.mode] || "")}${d.change && num(d.change) > 0 ? ` · <b class="change">Return ₹${money(d.change)}</b>` : ""} · <a href="#" class="reprint">invoice / reprint</a>`;
+      const summary = { ...billed, kind: manual ? "manual" : "sale", customer_id: S.customer ? S.customer.id : null, id: docId, invoice_no: d.invoice_no, total: d.total, tendered: d.tendered, change: d.change,
         date: new Date().toISOString(), status: "PAID" };
       box.querySelector(".reprint").onclick = (e) => { e.preventDefault(); openStudio(summary); };
-      ctx.status(`✓ Bill ${d.invoice_no} ${wasEdit ? "updated (stock re-posted to its batches)" : "completed"} · ₹${money(d.total)}${d.change && num(d.change) > 0 ? ` · return ₹${money(d.change)}` : ""}`, "ok");
+      ctx.status(manual ? `✓ Manual bill ${d.invoice_no} ${wasEdit ? "updated" : "saved"} · ₹${money(d.total)} · record only (not a sale)`
+        : d.udhaar ? `✓ Bill ${d.invoice_no} ${wasEdit ? "updated" : "completed"} · ₹${money(d.udhaar.amount)} on UDHAAR — not received · due ${LONG_DAY(d.udhaar.due_date)}`
+        : `✓ Bill ${d.invoice_no} ${wasEdit ? "updated (stock re-posted to its batches)" : "completed"} · ₹${money(d.total)} paid${d.change && num(d.change) > 0 ? ` · return ₹${money(d.change)}` : ""}`, d.udhaar ? "warn" : "ok");
       cache.clear();
       const wasManual = S.manual && !wasEdit;
-      S = blank(); S.manual = wasManual; sel = -1; editing = null; discEditing = null; rateEditing = null; metaEditing = null;
+      S = blank(); S.manual = wasManual; sel = -1; editing = null; discEditing = null; rateEditing = null; metaEditing = null; udFor = null; udInfo = null;
       render();
       askFollowUp(d, summary, wasEdit);
     } catch (ex) {
@@ -1399,18 +1517,19 @@ export function create(ctx, params, root, saved) {
     "pos.cash": () => setMode("CASH"),
     "pos.card": () => setMode("CARD"),
     "pos.split": () => setMode("SPLIT"),
+    "pos.udhaar": () => setMode("UDHAAR"),
     "pos.save": finalize,
     "pos.hold": hold,
     "pos.resume": showParked,
     "pos.customer": () => chooseCustomer(),
     "pos.walkin": () => { if (S.customer) { S.customer = null; render(); ctx.status("Walk-in customer"); } },
   };
-  async function loadForEdit(id) {
+  async function loadForEdit(id, manual = false) {
     try {
-      const d = await api(`/api/erp/sales/${id}/edit`);
+      const d = await api(manual ? `/api/erp/manual-bills/${id}/edit` : `/api/erp/sales/${id}/edit`);
       S = blank();
-      S.editing = { id: d.sale_id, invoice_no: d.invoice_no };
-      S.manual = d.invoice_type === "MANUAL";
+      S.editing = { id: manual ? d.manual_bill_id : d.sale_id, invoice_no: d.invoice_no, manual };
+      S.manual = manual;
       S.lines = d.lines.map((l) => (l.manual
         ? { manual: true, name: l.name, code: l.code || "", pack: l.pack || "", batch: l.batch || "", expiry: l.expiry || "", qty: l.qty, rate: l.rate, disc: Math.min(num(l.disc), MAXD), item_id: l.item_id || null, batch_id: null, batches: [], base_unit: "UNIT", pack_unit: "UNIT", upp: 1 }
         : { ...lineFrom({ id: l.item_id, code: l.code, name: l.name, pack_raw: l.pack_raw, upp: l.upp, loose: l.loose, base_unit: l.base_unit,
@@ -1420,7 +1539,8 @@ export function create(ctx, params, root, saved) {
       S.saleType = saleType(d.customer_type); S.saleTypeExplicit = true;
       S.discountPct = d.discount_pct || null;
       if (d.payment_mode === "SPLIT") { S.mode = "SPLIT"; for (const p of d.payments) S.split[p.mode] = String(p.amount); }
-      else { S.mode = ["CASH", "UPI", "CARD"].includes(d.payment_mode) ? d.payment_mode : "CASH"; if (S.mode === "CASH" && d.tendered) S.received = String(d.tendered); }
+      else { S.mode = SPLIT_MODES.includes(d.payment_mode) ? d.payment_mode : "CASH"; if (S.mode === "CASH" && d.tendered) S.received = String(d.tendered); }
+      if (d.udhaar && S.customer) S.udhaar = { cid: S.customer.id, due: d.udhaar.due_date, reminder: d.udhaar.reminder_date };
       sel = S.lines.length - 1;
       render(); q.focus();
       ctx.status(`Editing ${d.invoice_no}: change lines, quantity, discount or payment, then F12 saves it under the same number`, "ok");
@@ -1428,13 +1548,16 @@ export function create(ctx, params, root, saved) {
   }
   render();
   if (!(saved && saved.lines) && params && params.edit) loadForEdit(params.edit);
+  if (!(saved && saved.lines) && params && params.editManual) loadForEdit(params.editManual, true);
   if (S.exchangeNote) setTimeout(() => ctx.status(S.exchangeNote, "ok"), 0);
   return {
     navigate(target) {
-      if (!target || !target.edit) return true;
-      if (S.lines.length && !(S.editing && S.editing.id === target.edit)) return false;   // busy with another bill
+      const id = target && (target.edit || target.editManual), manual = !!(target && target.editManual);
+      if (!id) return true;
+      const same = S.editing && S.editing.id === id && !!S.editing.manual === manual;
+      if (S.lines.length && !same) return false;   // busy with another bill
       if (studioOpen) closeStudio();
-      if (!(S.editing && S.editing.id === target.edit)) loadForEdit(target.edit);
+      if (!same) loadForEdit(id, manual);
       return true;
     },
     manual: () => { if (!S.manual) toggleManual(); },

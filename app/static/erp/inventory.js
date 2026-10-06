@@ -50,6 +50,7 @@ export function create(ctx, params, root) {
       <div class="divider" title="Drag to resize"></div>
       <div class="pane batches"><section class="inv-detail" aria-label="Product specifications"></section><div class="pane-h">BATCHES <span class="b-title muted"></span>${CAN["purchase.view"] && CAN["inventory.edit"] ? ' <button type="button" class="btn b-cost">Verify cost</button>' : ""}</div></div>
     </div>
+    <div class="inv-totals" aria-label="Totals of the filtered products"></div>
   </div>`;
   for (const k of FILTERS) $(".f-" + k, root).value = F[k] || "";
 
@@ -244,7 +245,18 @@ export function create(ctx, params, root) {
       total = d.total;
       products.setRows(d.rows, { keep });
       $(".f-count", root).textContent = `${total} product${total === 1 ? "" : "s"}`;
+      renderTotals(d.totals);
     } catch (err) { if (err.name !== "AbortError") ctx.status(err.message, "error"); }
+  }
+  // footer: every product the filters match (not only the rows loaded), valued batch by batch
+  function renderTotals(t) {
+    const box = $(".inv-totals", root);
+    if (!t) { box.innerHTML = ""; return; }
+    const cell = (label, value) => `<div><span>${label}</span><b>${value}</b></div>`;
+    box.innerHTML = cell("Total Items", Number(t.items).toLocaleString("en-IN"))
+      + cell("Total Quantity", Number(t.quantity).toLocaleString("en-IN"))
+      + (t.rate_value !== null ? cell("Total Rate Value", "₹" + money(t.rate_value)) : "")
+      + cell("Total MRP Value", "₹" + money(t.mrp_value));
   }
   async function loadMore() {
     if (loading || products.rows.length >= total) return;

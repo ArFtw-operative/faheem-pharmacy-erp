@@ -65,6 +65,8 @@ def customer_payload(c: Customer) -> dict:
         "notes": c.notes,
         "customer_type": c.customer_type,
         "customer_type_label": customer_type_label(c.customer_type),
+        "udhaar_limit": str(c.udhaar_limit) if c.udhaar_limit is not None else None,
+        "udhaar_days": c.udhaar_days,
     }
 
 

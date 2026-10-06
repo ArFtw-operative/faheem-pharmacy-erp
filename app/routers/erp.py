@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
+
+from app.utils import money
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -31,7 +33,7 @@ MODULE_PERMS = {
     "pos": "sales.create", "inventory": "inventory.view", "history": "inventory.view", "adjustments": "inventory.view",
     "purchases": "purchase.view", "customers": "customers.view",
     "sales": "sales.view_own", "reports": "reports.sales", "masters": "inventory.view", "racks": "rack.view",
-    "settings": "settings.manage",
+    "settings": "settings.manage", "udhaar": "udhaar.view", "counter": "reports.counter", "manualbills": "sales.create",
 }
 CAPABILITIES = (
     "sales.create", "sales.discount", "sales.void", "sales.refund", "sales.view_history", "inventory.view", "inventory.create",
@@ -41,6 +43,7 @@ CAPABILITIES = (
     "whatsapp.send", "settings.manage",
     "rack.view", "rack.create", "rack.edit", "rack.disable", "rack.assign", "rack.bulk_move", "rack.history.view",
     "rack.report.view", "rack.snapshot.view", "box.manage",
+    "udhaar.view", "udhaar.receive", "udhaar.manage", "reports.counter",
 )
 
 
@@ -361,7 +364,27 @@ def erp_inventory(
         if not it.batches:
             row["pack_mrp"] = str(it.mrp)
         output.append(row)
-    return {"total": total, "offset": offset, "rows": output}
+    out = {"total": total, "offset": offset, "rows": output}
+    if offset <= 0:                         # footer: every product the filters match, not just this page
+        out["totals"] = _stock_totals(db, base, total, has_permission(user, "purchase.view"))
+    return out
+
+
+def _stock_totals(db: Session, base, items: int, with_rate: bool) -> dict:
+    """Total items / quantity / Rate value / MRP value of the filtered products. Each batch is valued
+    with its own quantity, purchase rate and MRP (per stock unit), then summed — never a sum of prices."""
+    ids = select(base.subquery().c.id)
+    batches = list(db.scalars(select(Batch).where(Batch.item_id.in_(ids), Batch.quantity > 0)))
+    rates = inventory_pricing.batch_prices(db, batches) if with_rate else {}
+    qty = rate_value = mrp_value = Decimal("0")
+    for b in batches:
+        upp = max(b.units_per_pack or 1, 1)
+        qty += b.quantity
+        mrp_value += money(Decimal(b.quantity) * Decimal(str(b.mrp or 0)) / upp)
+        if with_rate:
+            rate_value += money(Decimal(b.quantity) * Decimal(str(rates[b.id]["purchase_rate"] or 0)) / upp)
+    return {"items": items, "quantity": int(qty), "rate_value": str(money(rate_value)) if with_rate else None,
+            "mrp_value": str(money(mrp_value))}
 
 
 def _place(here: "loc.Loc | None") -> dict:

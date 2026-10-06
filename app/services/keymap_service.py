@@ -51,6 +51,7 @@ ACTIONS: list[dict] = [
     {"id": "pos.cash", "scope": "pos", "group": "POS", "label": "Pay by cash", "key": "F9", "bar": 7},
     {"id": "pos.card", "scope": "pos", "group": "POS", "label": "Pay by card", "key": "F10", "bar": 9},
     {"id": "pos.split", "scope": "pos", "group": "POS", "label": "Split payment", "key": "Alt+S", "bar": 10},
+    {"id": "pos.udhaar", "scope": "pos", "group": "POS", "label": "Udhaar — customer pays later (customer, due date and reminder required)", "key": "Shift+F9", "bar": 10},
     {"id": "pos.save", "scope": "pos", "group": "POS", "label": "Complete sale (summary, then invoice Y/N)", "key": "F12", "bar": 11},
     {"id": "pos.hold", "scope": "pos", "group": "POS", "label": "Hold bill", "key": "Ctrl+H", "bar": 12},
     {"id": "pos.resume", "scope": "pos", "group": "POS", "label": "Resume held bill", "key": "Ctrl+R", "bar": 13},

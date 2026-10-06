@@ -16,7 +16,7 @@ from app.models import CUSTOMER_TYPE_LABELS, Item, Sale
 from app.services import settings_service
 from app.utils import to_local
 
-PAYMENT_LABELS = {"CASH": "Cash", "UPI": "UPI", "CARD": "Card", "SPLIT": "Split"}
+PAYMENT_LABELS = {"CASH": "Cash", "UPI": "UPI", "CARD": "Card", "SPLIT": "Split", "UDHAAR": "Udhaar"}
 BRAND_LOGO = "/static/brand/svg/symbol-color.svg"
 BRAND_LOGO_MONO = "/static/brand/svg/symbol-dark.svg"
 
@@ -165,9 +165,20 @@ def build_invoice_view(db: Session, sale: Sale) -> dict:
     # back, not owed), so total - paid == due. The v1 "change" value is kept for
     # the legacy renderer only.
     change = _paise(sale.change_amount) if sale.change_amount is not None else 0
-    paid = total
-    due = max(0, total - paid)
     parts = list(getattr(sale, "payments", None) or [])
+    # an Udhaar part is owed, not paid: it is the invoice's balance due, with its due date
+    owed = sum(_paise(p.amount) for p in parts if p.mode == "UDHAAR")
+    paid = total - owed
+    due = max(0, total - paid)
+    due_date = local_date
+    udhaar_note = ""
+    if owed and (sale.invoice_type or "INVENTORY") != "MANUAL":
+        from app.services import udhaar_service
+
+        entry = udhaar_service.entry_for_sale(db, sale.id)
+        if entry is not None:
+            due_date = entry.due_date
+            udhaar_note = f"Udhaar: ₹{owed / 100:.2f} to be paid by {entry.due_date:%d %b %Y}."
     if len(parts) > 1:
         method = " + ".join(PAYMENT_LABELS.get(p.mode, p.mode) for p in parts)
     else:
@@ -195,6 +206,8 @@ def build_invoice_view(db: Session, sale: Sale) -> dict:
         )
 
     notes = []
+    if udhaar_note:
+        notes.append(udhaar_note)
     if sale.notes:
         notes.append(sale.notes)
     if (sale.customer_type or "WALK_IN") == "HOME_DELIVERY":
@@ -221,7 +234,7 @@ def build_invoice_view(db: Session, sale: Sale) -> dict:
         "sample": False,
         "number": sale.invoice_no,
         "date": local_date.strftime("%d/%m/%Y"),
-        "dueDate": local_date.strftime("%d/%m/%Y"),
+        "dueDate": due_date.strftime("%d/%m/%Y"),
         "reference": "",
         "issuedDate": local_date.strftime("%d %b %Y"),
         "issuedTime": local_date.strftime("%H:%M"),
@@ -268,7 +281,8 @@ def build_invoice_view(db: Session, sale: Sale) -> dict:
             "changePaise": change,
         },
         "payments": (
-            [{"method": PAYMENT_LABELS.get(p.mode, p.mode), "amountPaise": _paise(p.amount), "reference": p.reference or ""} for p in parts]
+            [{"method": PAYMENT_LABELS.get(p.mode, p.mode), "amountPaise": _paise(p.amount), "reference": p.reference or ""}
+             for p in parts if p.mode != "UDHAAR"]
             if parts else ([{"method": method, "amountPaise": paid, "reference": ""}] if paid else [])
         ),
         "tenderedPaise": _paise(sale.tendered_amount) if sale.tendered_amount is not None else None,
@@ -284,12 +298,16 @@ def build_invoice_view(db: Session, sale: Sale) -> dict:
 def _stamp(db: Session, sale: Sale) -> str:
     if sale.payment_status == "CANCELLED":
         return "VOID"
+    if (sale.invoice_type or "") == "MANUAL":       # a manual bill has no returns: it is not a sale
+        return ""
     from app.services import refund_service
 
     return "RETURNED" if refund_service.refund_status(db, sale) == "FULL" else ""
 
 
 def _stamp_note(db: Session, sale: Sale, local_date) -> str:
+    if sale.payment_status == "CANCELLED" and (sale.invoice_type or "") == "MANUAL":
+        return "Deleted manual bill · record only"
     if sale.payment_status == "CANCELLED":
         from app.models import AuditLog
 

@@ -205,6 +205,13 @@ def test_pack_of_and_nested_words_are_parsed_without_choosing_invoice_level():
     assert (box.units_per_pack, box.outer_count, box.confident) == (15,20,False)
 
 
+def _all_revisions():
+    from alembic.script import ScriptDirectory
+    from app.services import upgrade_service as up
+
+    return [r.revision for r in ScriptDirectory.from_config(up._alembic_config()).walk_revisions()]
+
+
 def test_latest_release_migrates_without_rewriting_history(tmp_path):
     import shutil
     from pathlib import Path
@@ -216,7 +223,8 @@ def test_latest_release_migrates_without_rewriting_history(tmp_path):
     # Snapshot durability is covered by the existing platform-specific backup tests.
     result = up.upgrade(target, backups=False)
     assert result["status"] == "upgraded"
-    assert up.compare(before,up.fingerprint(target)) == []
+    # only figures a migration declares may change, and those must reconcile (1.10.0 moves manual bills out of sales)
+    assert up.compare(before,up.fingerprint(target),up._exemptions(_all_revisions())) == []
 
 
 def test_same_invoice_number_from_two_suppliers_stays_separate():

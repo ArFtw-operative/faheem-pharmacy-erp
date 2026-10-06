@@ -46,6 +46,11 @@ PERMISSION_CATALOG: dict[str, tuple[str, str]] = {
     "reports.expiry": ("reports", "View expiry reports"),
     "reports.financials": ("reports", "View financial / profit reports"),
     "reports.export": ("reports", "Export reports"),
+    "reports.counter": ("reports", "Counter Report: the day's sales and collections by payment mode"),
+
+    "udhaar.view": ("udhaar", "Udhaar Ledger: what customers owe, ledgers and statements"),
+    "udhaar.receive": ("udhaar", "Receive Udhaar payments and send Udhaar reminders"),
+    "udhaar.manage": ("udhaar", "Set customers' Udhaar limit and days, and opening balances"),
     # Expiry
     "expiry.view": ("expiry", "View expiry alerts"),
     "expiry.snooze": ("expiry", "Snooze an expiry reminder"),
@@ -94,6 +99,7 @@ DEFAULT_ROLES: dict[str, dict] = {
             "reports.sales", "reports.expiry", "reports.export",
             "expiry.view", "expiry.snooze", "expiry.settle",
             "adjustment.create",
+            "udhaar.view", "udhaar.receive", "udhaar.manage", "reports.counter",
             } | RACK_PHARMACIST,
     },
     "Sales Staff": {
@@ -104,6 +110,7 @@ DEFAULT_ROLES: dict[str, dict] = {
             "sales.create", "sales.view_own", "sales.discount", "sales.refund",
             "billing.print", "whatsapp.send",
             "customers.create", "customers.view", "followups.manage", "rack.view",
+            "udhaar.view", "udhaar.receive",
             },
     },
     "Counter Manager": {
@@ -114,6 +121,7 @@ DEFAULT_ROLES: dict[str, dict] = {
             "sales.create", "sales.view_own", "sales.view_history", "sales.discount", "sales.refund",
             "billing.print", "whatsapp.send",
             "customers.create", "customers.view", "followups.manage", "rack.view",
+            "udhaar.view", "udhaar.receive", "reports.counter",
             },
     },
     "Accountant": {
@@ -126,6 +134,7 @@ DEFAULT_ROLES: dict[str, dict] = {
             "sales.view_history", "sales.view_profit", "sales.export",
             "inventory.view", "inventory.export",
             "rack.view", "rack.history.view", "rack.report.view", "rack.snapshot.view",
+            "udhaar.view", "reports.counter",
             },
     },
 }

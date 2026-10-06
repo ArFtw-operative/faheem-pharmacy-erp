@@ -74,9 +74,13 @@ PRICE_COLUMNS = [col('pack_mrp', 'MRP / pack', 'money', False),
                  {**col('purchase_rate', 'Purchase Rate / pack', 'money', False), 'permission': 'purchase.view'},
                  {**col('unit_purchase_rate', 'Purchase Rate / unit', 'money', False), 'permission': 'purchase.view'},
                  {**col('purchase_invoice', 'Purchase Invoice', default=False), 'permission': 'purchase.view'}]
+RATE_VALUE = {**col('rate_value', 'Stock at Rate', 'money', False, True), 'permission': 'purchase.view'}
 for report in CATALOG:
     if report['id'] in ('current-stock', 'batch-stock', 'expiry', 'low-stock'):
         report['columns'] += PRICE_COLUMNS
+    if report['id'] in ('current-stock', 'batch-stock'):
+        report['columns'].append(RATE_VALUE)
+STOCK_TOTAL_REPORTS = ('current-stock', 'batch-stock')
 from app.services import report_extra  # noqa: E402  (inventory movement + customer reports)
 
 CATALOG += report_extra.REPORTS
@@ -386,11 +390,13 @@ def stock_rows(db,rid,p,end,tz):
         if rid=='expiry' and quantity<=0: continue
         reorder=item.reorder_level or default_reorder
         row=dict(item=item.name,pack=item.pack_size or f'{item.units_per_pack} {item.base_unit}',unit=item.base_unit.lower(),quantity=int(quantity),reorder=reorder,category=item.category,manufacturer=item.manufacturer,batch=batch.batch_no,
-                 expiry=batch.expiry_date.isoformat() if batch.expiry_date else '',days=days,status='Expired' if days is not None and days<0 else 'Sellable',supplier=batch.supplier.name if batch.supplier else '',mrp=batch.unit_mrp,value=money(to_decimal(batch.unit_mrp)*quantity))
+                 expiry=batch.expiry_date.isoformat() if batch.expiry_date else '',days=days,status='Expired' if days is not None and days<0 else 'Sellable',supplier=batch.supplier.name if batch.supplier else '',mrp=batch.unit_mrp,value=money(to_decimal(batch.mrp)*quantity/max(batch.units_per_pack or 1,1)),_item_id=item.id)
         row.update(prices[batch.id])
+        # valued batch by batch: this batch's quantity × its own purchase rate (per stock unit)
+        row['rate_value']=money(to_decimal(row['purchase_rate'] or 0)*quantity/max(batch.units_per_pack or 1,1))
         if rid in ('current-stock','low-stock'):
-            acc=grouped.setdefault(item.id,{**row,'quantity':0,'value':Decimal(0)})
-            acc['quantity']+=int(quantity);acc['value']+=row['value']
+            acc=grouped.setdefault(item.id,{**row,'quantity':0,'value':Decimal(0),'rate_value':Decimal(0)})
+            acc['quantity']+=int(quantity);acc['value']+=row['value'];acc['rate_value']+=row['rate_value']
             # MRP can differ by batch; retain the common rate only.
             pricing_groups[item.id].append((row, int(quantity)))
         else: rows.append(row)
@@ -406,7 +412,7 @@ def stock_rows(db,rid,p,end,tz):
         if not p.get('supplier') and not p.get('batch') and not p.get('expiry_window') and p.get('stock_status')!='expired':
             for item in db.scalars(select(Item).where(Item.created_at<end,Item.deleted_at.is_(None),~Item.batches.any())):
                 if not matches(item,p): continue
-                rows.append(dict(item=item.name,pack=item.pack_size,unit=item.base_unit.lower(),quantity=0,reorder=item.reorder_level or default_reorder,category=item.category,manufacturer=item.manufacturer,mrp=None,pack_mrp=item.mrp,purchase_rate=None,unit_purchase_rate=None,purchase_invoice='',value=Decimal(0)))
+                rows.append(dict(item=item.name,pack=item.pack_size,unit=item.base_unit.lower(),quantity=0,reorder=item.reorder_level or default_reorder,category=item.category,manufacturer=item.manufacturer,mrp=None,pack_mrp=item.mrp,purchase_rate=None,unit_purchase_rate=None,purchase_invoice='',value=Decimal(0),rate_value=Decimal(0),_item_id=item.id))
     if rid=='low-stock': rows=[r for r in rows if r['quantity']<=r['reorder']]
     status=p.get('stock_status')
     if status=='positive': rows=[r for r in rows if r['quantity']>0]
@@ -577,6 +583,13 @@ def generate(db,rid,raw,selected=None,user=None):
     footer=[]
     if rid=='sales-summary' and p.get('view','summary')=='summary' and {'value','bills'}<=set(totals):
         footer=[dict(label='Average bill value',value=money(totals['value']/totals['bills']) if totals['bills'] else Decimal(0))]
+    if rid in STOCK_TOTAL_REPORTS:
+        # the whole filtered dataset, whichever columns are shown: values are quantity × rate, never sums of prices
+        footer=[dict(label='Total Items',value=len({r['_item_id'] for r in rows}),kind='number'),
+                dict(label='Total Quantity',value=sum(int(r['quantity']) for r in rows),kind='number')]
+        if user is None or has_permission(user,'purchase.view'):
+            footer.append(dict(label='Total Rate Value',value=money(sum((to_decimal(r.get('rate_value') or 0) for r in rows),Decimal(0))),kind='money'))
+        footer.append(dict(label='Total MRP Value',value=money(sum((to_decimal(r.get('value') or 0) for r in rows),Decimal(0))),kind='money'))
     profile=settings_service.get_profile(db)
     return dict(id=rid,title=report['title'],pharmacy=profile.get('pharmacy_name') or 'FAHEEM PHARMACY',
                 parameters=p,from_date=p['from'],to_date=p['to'],generated_at=datetime.now(tz).strftime('%d-%b-%Y %I:%M %p'),

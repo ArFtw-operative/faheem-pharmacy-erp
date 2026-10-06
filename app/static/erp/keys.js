@@ -36,7 +36,7 @@ const listeners = new Set();
 // short labels for the status bar
 const SHORT = {
   "pos.saleType": "Sale type", "pos.manual": "Manual bill", "pos.search": "Item", "pos.qty": "Qty", "pos.batch": "Batch", "pos.remove": "Remove", "pos.itemDisc": "Item disc",
-  "pos.billDisc": "Bill disc", "pos.cash": "Cash", "pos.upi": "UPI", "pos.card": "Card", "pos.split": "Split",
+  "pos.billDisc": "Bill disc", "pos.cash": "Cash", "pos.upi": "UPI", "pos.card": "Card", "pos.split": "Split", "pos.udhaar": "Udhaar",
   "pos.save": "Save", "pos.hold": "Hold", "pos.resume": "Resume", "pos.customer": "Customer",
   "inv.search": "Search", "inv.new": "New", "inv.adjust": "Adjust", "inv.ledger": "Ledger", "inv.edit": "Edit",
   "inv.export": "Export", "masters.search": "Search", "masters.refresh": "Refresh", "masters.panel": "Switch list", "masters.new": "New category", "masters.merge": "Merge", "ledger.refresh": "Refresh",

@@ -39,7 +39,8 @@ def round_off(total: Decimal, mode: str = "NEAREST_RUPEE") -> tuple[Decimal, Dec
     return money(nearest), money(nearest - total)
 
 
-PAYMENT_MODES = ("CASH", "UPI", "CARD")
+PAYMENT_MODES = ("CASH", "UPI", "CARD", "UDHAAR")   # UDHAAR: the customer pays later (store credit — not a card)
+MODE_NAMES = {"CASH": "Cash", "UPI": "UPI", "CARD": "Card", "UDHAAR": "Udhaar"}
 
 
 DEFAULT_MAX_DISCOUNT_PCT = Decimal("20")
@@ -102,59 +103,6 @@ def _split(amount: Decimal, weights: list[Decimal]) -> list[Decimal]:
         return [Decimal("0.00")] * len(weights)
     parts = [money(amount * w / total) for w in weights[:-1]]
     return parts + [money(amount - sum(parts, Decimal("0")))]
-
-
-def _add_manual_lines(db: Session, sale: Sale, lines: list[dict[str, Any]]) -> tuple[Decimal, Decimal]:
-    """Lines of a manual bill: any item — chosen from inventory (kept as a reference) or typed —
-    with a whole quantity, a unit rate and an optional discount %. A manual bill never checks or
-    changes stock: no batch, no stock movement, cost unknown."""
-    from app.models import Item
-
-    cap = max_discount_pct(db)
-    subtotal = gross_total = Decimal("0")
-    for line_no, line in enumerate(lines, start=1):
-        if line.get("batch_id"):
-            raise SaleError("A manual bill does not take a batch — it never changes stock")
-        item = None
-        if line.get("item_id"):
-            item = db.get(Item, int(line["item_id"]))
-            if item is None:
-                raise SaleError(f"Line {line_no}: that product no longer exists")
-        name = " ".join(str(line.get("name") or (item.name if item else "")).split())[:250]
-        if not name:
-            raise SaleError(f"Line {line_no}: enter the item name")
-        try:
-            qty = int(str(line.get("quantity") or "0").strip())
-        except ValueError:
-            raise SaleError(f"{name}: quantity must be a whole number")
-        if qty <= 0:
-            raise SaleError(f"{name}: quantity must be at least 1")
-        rate = to_decimal(line.get("rate") or 0)
-        if rate <= 0:
-            raise SaleError(f"{name}: enter the rate")
-        from app.services.sheet_import import parse_expiry
-
-        expiry = parse_expiry(line.get("expiry"))
-        if str(line.get("expiry") or "").strip() and expiry is None:
-            raise SaleError(f"{name}: expiry “{line.get('expiry')}” — type it as MM/YY, e.g. 05/28")
-        gross = money(rate * qty)
-        disc = _line_discount(line, gross, name, cap)
-        gross_total += gross
-        sale_item = SaleItem(
-            sale_id=sale.id, item_id=item.id if item else None, batch_id=None, product_name=name,
-            item_code=" ".join(str(line.get("code") if line.get("code") is not None else (item.article_id if item else "") or "").split())[:40],
-            batch_no=" ".join(str(line.get("batch") or "").split())[:60], expiry_date=expiry,
-            quantity=qty, mrp=money(rate), rate=money(rate),
-            pack_mrp=money(rate), units_per_pack=1, pack_size=str(line.get("pack") or (item.pack_size if item else "") or "")[:60], base_unit="UNIT",
-            cost_rate=Decimal("0"), discount=disc, line_total=money(gross - disc), line_no=line_no,
-            financial_status=financials.MISSING, financial_cost_source="MANUAL_BILL",
-            sale_uom="UNIT", sale_uom_factor=1, sale_quantity=Decimal(qty),
-        )
-        db.add(sale_item)
-        subtotal += sale_item.line_total
-    db.flush()
-    db.refresh(sale, ["items"])
-    return money(subtotal), money(gross_total)
 
 
 def _add_lines(db: Session, sale: Sale, lines: list[dict[str, Any]], *, user, ip_address: str,
@@ -377,16 +325,13 @@ def create_sale(
     sale_date=None,
     cash_received: Any = None,
     client_request_id: str | None = None,
-    invoice_type: str = "INVENTORY",
+    udhaar: dict | None = None,
 ) -> Sale:
-    """Record a bill. ``payments`` splits it across methods (cash/UPI/card).
+    """Record a bill. ``payments`` splits it across methods (cash / UPI / card / Udhaar).
 
-    ``invoice_type="MANUAL"``: a manual bill of typed lines (items not kept in
-    inventory). It never touches the stock ledger and its cost is unknown, so
-    reports show no cost or profit for it rather than inventing one."""
-    invoice_type = (invoice_type or "INVENTORY").upper()
-    if invoice_type not in ("INVENTORY", "MANUAL"):
-        raise SaleError("Invoice type must be INVENTORY or MANUAL")
+    An Udhaar part needs a customer and ``udhaar`` = {due_date, reminder_date}: the amount owed
+    is written to the Udhaar ledger in the same transaction. Manual bills are not sales
+    (``manual_bill_service``)."""
     if not lines:
         raise SaleError("A sale must contain at least one line item")
 
@@ -398,11 +343,10 @@ def create_sale(
 
     # the invoice number carries the pharmacy's local date, not the UTC date
     local_now = to_local(sale_date or utcnow(), business_time.timezone_name(db))
-    from app.sequences import next_manual_bill_no
 
     sale = Sale(
-        invoice_no=next_manual_bill_no(db, local_now) if invoice_type == "MANUAL" else next_invoice_no(db, local_now),
-        invoice_type=invoice_type,
+        invoice_no=next_invoice_no(db, local_now),
+        invoice_type="INVENTORY",
         customer_id=customer_id,
         customer_type=customer_service.normalize_customer_type(customer_type),
         invoice_format="STUDIO",
@@ -415,15 +359,13 @@ def create_sale(
     db.add(sale)
     db.flush()
 
-    if invoice_type == "MANUAL":
-        subtotal, gross = _add_manual_lines(db, sale, lines)
-    else:
-        subtotal, gross = _add_lines(db, sale, lines, user=user, ip_address=ip_address)
+    subtotal, gross = _add_lines(db, sale, lines, user=user, ip_address=ip_address)
     _apply_totals_and_payments(
         db, sale, subtotal, gross=gross, discount=discount, discount_pct=discount_pct, voucher=voucher, round_off_mode=round_off_mode,
         payment_mode=payment_mode, payments=payments, cash_received=cash_received,
     )
     db.flush()
+    _sync_udhaar(db, sale, udhaar, user=user)
 
     financials.finalize(sale)
     db.flush()
@@ -441,9 +383,19 @@ def create_sale(
     return sale
 
 
+def _sync_udhaar(db: Session, sale: Sale, terms: dict | None, *, user) -> None:
+    from app.services import udhaar_service
+
+    db.refresh(sale, ["payments"])
+    try:
+        udhaar_service.sync_sale(db, sale, terms, user=user)
+    except udhaar_service.UdhaarError as exc:
+        raise SaleError(str(exc))
+
+
 def payment_label(sale: Sale) -> str:
-    """``Cash`` / ``UPI`` / ``Cash ₹300.00 + UPI ₹200.00``."""
-    names = {"CASH": "Cash", "UPI": "UPI", "CARD": "Card"}
+    """``Cash`` / ``UPI`` / ``Cash ₹300.00 + UPI ₹200.00`` / ``Udhaar``."""
+    names = MODE_NAMES
     parts = list(sale.payments or [])
     if len(parts) <= 1:
         mode = parts[0].mode if parts else (sale.payment_mode or "CASH")
@@ -488,7 +440,9 @@ def editable_problem(db: Session, sale: Sale) -> str:
 
     if refund_service.refunded_total(db, sale) > 0:
         return "Items on this invoice were returned; record another return instead of editing"
-    return ""
+    from app.services import udhaar_service
+
+    return udhaar_service.edit_problem(db, sale)
 
 
 
@@ -654,14 +608,15 @@ def amend_sale(
     cash_received: Any = None,
     reason: str = "",
     ip_address: str = "",
+    udhaar: dict | None = None,
 ) -> Sale:
     """Edit a completed bill in place, keeping its number — linked to the ledger.
 
     Every old line's stock goes back to its exact batch with ``SALE_CANCEL``
     movements, then the new lines are sold with the same rules as a new bill
     (FEFO, discount cap, payments) in the same transaction; the full
-    before / after is audited. Manual-bill lines never touch stock. A bill
-    with returns or a voided bill cannot be edited.
+    before / after is audited; its Udhaar entry follows the new payments. A bill
+    with returns, Udhaar repayments, or a voided bill cannot be edited.
     """
     problem = editable_problem(db, sale)
     if problem:
@@ -683,15 +638,13 @@ def amend_sale(
     sale.customer_type = customer_service.normalize_customer_type(customer_type)
     if notes is not None:
         sale.notes = notes
-    if (sale.invoice_type or "INVENTORY") == "MANUAL":
-        subtotal, gross = _add_manual_lines(db, sale, lines)
-    else:
-        subtotal, gross = _add_lines(db, sale, lines, user=user, ip_address=ip_address, already_billed=billed)
+    subtotal, gross = _add_lines(db, sale, lines, user=user, ip_address=ip_address, already_billed=billed)
     _apply_totals_and_payments(
         db, sale, subtotal, gross=gross, discount=discount, discount_pct=discount_pct, voucher=voucher,
         round_off_mode=round_off_mode, payment_mode=payment_mode, payments=payments, cash_received=cash_received,
     )
     db.flush()
+    _sync_udhaar(db, sale, udhaar, user=user)
     financials.finalize(sale)
     db.flush()
     db.refresh(sale)
@@ -713,6 +666,12 @@ def void_sale(db: Session, sale: Sale, *, user: User | None = None, reason: str 
 
     if refund_service.refunded_total(db, sale) > 0:
         raise SaleError("Items on this invoice were already returned; return the remaining items instead of voiding")
+    from app.services import udhaar_service
+
+    try:
+        udhaar_service.cancel_for_void(db, sale)
+    except udhaar_service.UdhaarError as exc:
+        raise SaleError(str(exc))
     before = audit.snapshot(sale)
     _restore_sale_stock(db, sale, user=user, ip_address=ip_address, reason=f"Void of {sale.invoice_no}: {reason}".rstrip(": "))
     sale.payment_status = "CANCELLED"

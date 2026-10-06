@@ -386,6 +386,10 @@ class Customer(Base):
     pincode: Mapped[str] = mapped_column(String(12), default="")
     notes: Mapped[str] = mapped_column(Text, default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Udhaar terms: the most this customer may owe (None = no limit) and the days given to pay
+    # (None = the store default, setting ``udhaar_days``)
+    udhaar_limit: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    udhaar_days: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     updated_at: Mapped[datetime | None] = mapped_column(DateTime)
@@ -442,7 +446,7 @@ class Sale(Base):
     payment_status: Mapped[str] = mapped_column(String(10), default="PAID")
     customer_type: Mapped[str] = mapped_column(String(20), default="WALK_IN", index=True)
     invoice_format: Mapped[str] = mapped_column(String(20), default="CLASSIC", index=True)
-    # INVENTORY: lines come from stock (ledgered) · MANUAL: typed lines, no stock effect
+    # always INVENTORY: manual bills are their own documents (ManualBill), never sales
     invoice_type: Mapped[str] = mapped_column(String(10), default="INVENTORY", index=True)
     notes: Mapped[str] = mapped_column(Text, default="")
     tendered_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
@@ -461,7 +465,8 @@ class Sale(Base):
 
 
 class SalePayment(Base):
-    """How a bill was paid. One row per method; a split bill has several.
+    """How a bill was paid. One row per method; a split bill has several. ``UDHAAR`` is the part the
+    customer still owes (store credit) — its repayments are in ``udhaar_payments``, never here.
 
     ``Sale.payment_mode`` keeps the single method, or ``SPLIT``, for display
     and filtering; money-by-method reporting always reads these rows.
@@ -874,7 +879,11 @@ class WhatsAppMessage(Base):
     __tablename__ = "whatsapp_messages"
     __table_args__ = (Index("ix_whatsapp_due", "status", "next_attempt_at"),)
     id: Mapped[int] = mapped_column(primary_key=True)
-    sale_id: Mapped[int] = mapped_column(ForeignKey("sales.id"), index=True)       # the invoice
+    sale_id: Mapped[int | None] = mapped_column(ForeignKey("sales.id"), index=True)  # the invoice
+    # INVOICE (the bill's PDF) · UDHAAR_REMINDER (a text reminder of what is owed)
+    kind: Mapped[str] = mapped_column(String(20), default="INVOICE", server_default="INVOICE")
+    udhaar_entry_id: Mapped[int | None] = mapped_column(ForeignKey("udhaar_entries.id"), index=True)
+    manual_bill_id: Mapped[int | None] = mapped_column(ForeignKey("manual_bills.id"), index=True)   # sent before manual bills left sales
     invoice_no: Mapped[str] = mapped_column(String(40), default="")
     customer_phone: Mapped[str] = mapped_column(String(20))                         # 91XXXXXXXXXX
     status: Mapped[str] = mapped_column(String(10), default="QUEUED")               # QUEUED · SENDING · SENT · FAILED
@@ -1177,3 +1186,181 @@ class SyncVersion(Base):
     area: Mapped[str] = mapped_column(String(20), primary_key=True)
     version: Mapped[int] = mapped_column(Integer, default=0)
     changed_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+# --------------------------------------------------------------------------- manual bills
+class ManualBill(Base):
+    """A manual bill: a typed reference document, kept completely apart from sales. It never checks
+    or changes stock, is never a sale, payment, Udhaar or report figure — a record only. Its fields
+    use the sale names so the same invoice layouts print it."""
+
+    __tablename__ = "manual_bills"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    invoice_no: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"))
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    sale_date: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    subtotal: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    discount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    round_off: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    total: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    payment_mode: Mapped[str] = mapped_column(String(10), default="CASH")     # as written on the bill
+    payment_parts: Mapped[list | None] = mapped_column(JSON)                  # [{mode, amount, reference}]
+    tendered_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    change_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    customer_type: Mapped[str] = mapped_column(String(20), default="WALK_IN")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(10), default="ACTIVE", index=True)   # ACTIVE · DELETED
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime)
+    deleted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    delete_reason: Mapped[str] = mapped_column(String(200), default="")
+    legacy_sale_id: Mapped[int | None] = mapped_column(Integer)                # its id while it lived in sales (moved in 1.10.0)
+    client_request_id: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+    customer: Mapped[Customer | None] = relationship()
+    user: Mapped[User | None] = relationship(foreign_keys=[user_id])
+    items: Mapped[list["ManualBillItem"]] = relationship(
+        back_populates="bill", cascade="all, delete-orphan", order_by="ManualBillItem.id"
+    )
+
+    invoice_type = "MANUAL"
+    invoice_format = "STUDIO"
+    voucher = Decimal("0")
+
+    @property
+    def payment_status(self) -> str:
+        return "CANCELLED" if self.status == "DELETED" else "PAID"
+
+    @property
+    def payments(self) -> list:
+        from types import SimpleNamespace
+
+        return [SimpleNamespace(mode=p.get("mode", ""), amount=Decimal(str(p.get("amount") or 0)), reference=p.get("reference", ""))
+                for p in (self.payment_parts or [])]
+
+
+class ManualBillItem(Base):
+    __tablename__ = "manual_bill_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bill_id: Mapped[int] = mapped_column(ForeignKey("manual_bills.id", ondelete="CASCADE"), index=True)
+    line_no: Mapped[int] = mapped_column(Integer, default=0)
+    item_id: Mapped[int | None] = mapped_column(ForeignKey("items.id"))   # a product picked from inventory: reference only
+    product_name: Mapped[str] = mapped_column(String(250))
+    item_code: Mapped[str] = mapped_column(String(40), default="")
+    pack_size: Mapped[str] = mapped_column(String(60), default="")
+    batch_no: Mapped[str] = mapped_column(String(60), default="")
+    expiry_date: Mapped[date | None] = mapped_column(Date)
+    quantity: Mapped[int] = mapped_column(Integer, default=0)
+    rate: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    discount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    line_total: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+
+    bill: Mapped[ManualBill] = relationship(back_populates="items")
+    item: Mapped[Item | None] = relationship()
+
+    batch_id = None
+    units_per_pack = 1
+    base_unit = "UNIT"
+
+    @property
+    def mrp(self) -> Decimal:
+        return self.rate
+
+    @property
+    def pack_mrp(self) -> Decimal:
+        return self.rate
+
+
+# --------------------------------------------------------------------------- Udhaar (customer store credit)
+UDHAAR_STATUS = ("OPEN", "PAID", "CANCELLED")
+
+
+class UdhaarEntry(Base):
+    """What a customer owes on one Udhaar bill — or an opening balance brought from before the ERP.
+    ``amount`` is fixed when written; repayments are ``UdhaarPayment`` rows and ``paid`` is their sum,
+    kept in the same transaction. The sale itself is never changed by a repayment."""
+
+    __tablename__ = "udhaar_entries"
+    __table_args__ = (Index("ix_udhaar_customer_status", "customer_id", "status"), Index("ix_udhaar_due", "status", "due_date"))
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"))
+    sale_id: Mapped[int | None] = mapped_column(ForeignKey("sales.id"), unique=True)
+    kind: Mapped[str] = mapped_column(String(10), default="SALE")          # SALE · OPENING
+    business_date: Mapped[date] = mapped_column(Date, index=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    paid: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    due_date: Mapped[date] = mapped_column(Date)
+    reminder_date: Mapped[date] = mapped_column(Date, index=True)
+    status: Mapped[str] = mapped_column(String(10), default="OPEN")        # OPEN · PAID · CANCELLED
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+    customer: Mapped[Customer] = relationship()
+    sale: Mapped[Sale | None] = relationship()
+    payments: Mapped[list["UdhaarPayment"]] = relationship(back_populates="entry", order_by="UdhaarPayment.id")
+    reminders: Mapped[list["UdhaarReminder"]] = relationship(back_populates="entry", order_by="UdhaarReminder.id")
+
+
+class UdhaarPayment(Base):
+    """Money received against an Udhaar entry (CASH · UPI · CARD), or goods returned against it
+    (RETURN, linked to the sale return). Never edited or deleted."""
+
+    __tablename__ = "udhaar_payments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    entry_id: Mapped[int] = mapped_column(ForeignKey("udhaar_entries.id"), index=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), index=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    mode: Mapped[str] = mapped_column(String(10), default="CASH")
+    reference: Mapped[str] = mapped_column(String(80), default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+    business_date: Mapped[date] = mapped_column(Date, index=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    return_id: Mapped[int | None] = mapped_column(ForeignKey("sale_returns.id"))
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+
+    entry: Mapped[UdhaarEntry] = relationship(back_populates="payments")
+    user: Mapped[User | None] = relationship()
+
+
+class UdhaarReminder(Base):
+    """One reminder about an Udhaar entry: sent on WhatsApp (delivery in ``whatsapp_messages``) or
+    noted as given another way (phone call, in person)."""
+
+    __tablename__ = "udhaar_reminders"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    entry_id: Mapped[int] = mapped_column(ForeignKey("udhaar_entries.id"), index=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), index=True)
+    channel: Mapped[str] = mapped_column(String(12), default="WHATSAPP")   # WHATSAPP · CALL · IN_PERSON
+    whatsapp_message_id: Mapped[int | None] = mapped_column(ForeignKey("whatsapp_messages.id"))
+    message: Mapped[str] = mapped_column(Text, default="")
+    balance: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))   # owed when reminded
+    automatic: Mapped[bool] = mapped_column(Boolean, default=False)
+    sent_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+
+    entry: Mapped[UdhaarEntry] = relationship(back_populates="reminders")
+    whatsapp: Mapped[WhatsAppMessage | None] = relationship()
+    user: Mapped[User | None] = relationship()
+
+
+# --------------------------------------------------------------------------- counter report
+class CounterDayClose(Base):
+    """A business day's Counter Report frozen when the day ends (midnight, store time). Later views
+    show these figures; if a bill of that day is edited afterwards the live figures are shown beside
+    them, never instead of them. ``digest`` is the SHA-256 of ``figures``."""
+
+    __tablename__ = "counter_day_closes"
+
+    business_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    figures: Mapped[dict] = mapped_column(JSON)
+    digest: Mapped[str] = mapped_column(String(64))
+    closed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

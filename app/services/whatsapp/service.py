@@ -274,7 +274,7 @@ def send_invoice(db: Session, sale_id: int, customer_phone: str | None = None, *
         sale.customer.alternate_mobile = saved_phone
         audit.record(db, action=audit.A_UPDATE, entity_type="customer", entity_id=sale.customer.customer_id, user=user,
                      details=f"WhatsApp number saved as alternate mobile (was {before or 'empty'})")
-    earlier = db.scalar(select(WhatsAppMessage.id).where(WhatsAppMessage.sale_id == sale.id).limit(1))
+    earlier = db.scalar(select(WhatsAppMessage.id).where(WhatsAppMessage.sale_id == sale.id, WhatsAppMessage.kind == "INVOICE").limit(1))
     msg = WhatsAppMessage(sale_id=sale.id, invoice_no=sale.invoice_no, customer_phone=phone, status="QUEUED",
                           is_resend=earlier is not None, message_text=render_message(db, sale),
                           pdf_path=str(invoice_pdf(db, sale).relative_to(UPLOAD_DIR)), provider=provider().name,
@@ -301,7 +301,8 @@ def retry(db: Session, message_id: int, *, user: User | None = None) -> WhatsApp
 
 
 def history(db: Session, sale_id: int) -> list[dict]:
-    rows = db.scalars(select(WhatsAppMessage).where(WhatsAppMessage.sale_id == sale_id).order_by(WhatsAppMessage.id.desc())).all()
+    rows = db.scalars(select(WhatsAppMessage).where(WhatsAppMessage.sale_id == sale_id, WhatsAppMessage.kind == "INVOICE")
+                      .order_by(WhatsAppMessage.id.desc())).all()
     return [payload(m) for m in rows]
 
 
@@ -317,6 +318,11 @@ def _deliver(db: Session, msg: WhatsAppMessage, gw: P.Provider) -> None:
     conn = gw.connection()
     if conn.state != P.CONNECTED:
         raise P.TemporaryError(DISCONNECTED_MSG if conn.state in (P.DISCONNECTED, P.QR_REQUIRED, P.STARTING) else conn.detail)
+    if msg.kind in ("UDHAAR_REMINDER", "UDHAAR_STATEMENT"):   # text about what is owed: no PDF
+        if gw.check_number(msg.customer_phone) is False:
+            raise P.PermanentError(f"{_pretty(msg.customer_phone)} is not on WhatsApp — remind the customer another way")
+        msg.provider_message_id = gw.send_text(msg.customer_phone, msg.message_text)[:120]
+        return
     path = (UPLOAD_DIR / msg.pdf_path).resolve()
     if UPLOAD_DIR.resolve() not in path.parents or not path.is_file():
         raise P.PermanentError("The stored invoice PDF is missing")
@@ -440,6 +446,11 @@ def keep_connected(db: Session) -> None:
         with _cache_lock:
             _cache.update(at=time.monotonic(), conn=c)
         log.info("WhatsApp reconnect after restart: %s", c.state)
+
+
+def wake() -> None:
+    """Something was queued: the worker delivers it now rather than at its next poll."""
+    _wake.set()
 
 
 def wait_for_work(timeout: float) -> None:

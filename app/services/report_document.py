@@ -26,6 +26,10 @@ def csv_bytes(report):
     writer.writerow([c['label'] for c in cols])
     for row in rows:
         writer.writerow([v if c['kind'] in ('money','number') else safe_text(v) for c,v in zip(cols,row)])
+    if report.get('footer'):
+        writer.writerow([])
+        for f in report['footer']:
+            writer.writerow([f['label'],f['value']])
     return out.getvalue().encode('utf-8-sig')
 
 
@@ -49,7 +53,10 @@ def excel_bytes(report):
     if report['totals']:
         for cell in ws[ws.max_row]: cell.font=Font(bold=True);cell.border=Border(top=Side(style='thin',color='1B2327'))
     for i,c in enumerate(cols,1): ws.column_dimensions[get_column_letter(i)].width=28 if c['kind']=='text' else 18
-    for f in report['footer']: ws.append([f['label'],float(f['value'])])
+    for f in report['footer']:
+        ws.append([f['label'],float(f['value'])])
+        ws.cell(ws.max_row,2).number_format='#,##0' if f.get('kind')=='number' else '[$₹-4009]#,##,##0.00'
+        ws.cell(ws.max_row,1).font=Font(bold=True);ws.cell(ws.max_row,2).font=Font(bold=True)
     if report['note']: ws.append([report['note']])
     ws.sheet_properties.pageSetUpPr.fitToPage=True;ws.page_setup.orientation='landscape';ws.page_setup.paperSize=ws.PAPERSIZE_A4;ws.page_setup.fitToWidth=1;ws.page_setup.fitToHeight=0
     ws.print_title_rows='1:4';out=BytesIO();wb.save(out);return out.getvalue()
@@ -140,7 +147,8 @@ def text_document(report, width_min=78):
     if total:
         out+=[line(total),rule]
     for f in report.get('footer') or []:
-        out.append(f"{f['label']}: {_cell({'kind':'money','key':''},f['value'])}")
+        value=_cell({'kind':f.get('kind','money'),'key':''},f['value'])
+        out.append(f"{f['label']}: {'Rs. ' + value if f.get('kind','money')=='money' else value}")
     if report.get('note'):
         import textwrap
         out+=['']+textwrap.wrap(report['note'],table_width)
@@ -187,7 +195,8 @@ def sale_text(db, sale, width=80):
     profile = settings_service.get_profile(db)
     name = (profile.get("pharmacy_name") if isinstance(profile, dict) else "") or "FAHEEM PHARMACY"
     when = sale.sale_date.replace(tzinfo=timezone.utc).astimezone(tz)
-    title = "SALES INVOICE" + (" (MANUAL BILL)" if (sale.invoice_type or "") == "MANUAL" else "") + (" — VOIDED" if sale.payment_status == "CANCELLED" else "")
+    manual = (sale.invoice_type or "") == "MANUAL"
+    title = ("MANUAL BILL" if manual else "SALES INVOICE") + ((" — DELETED" if manual else " — VOIDED") if sale.payment_status == "CANCELLED" else "")
     cust = sale.customer
     left = lambda a, b: a + b.rjust(width - len(a))
     cols = [("SNo", 4, "l"), ("Item", 24, "l"), ("Batch", 11, "l"), ("Qty", 8, "r"), ("MRP", 9, "r"), ("Disc.", 8, "r"), ("Amount", 10, "r")]
@@ -215,4 +224,10 @@ def sale_text(db, sale, width=80):
     out.append(rule)
     out.append(f"Paid by: {sales_service.payment_label(sale)}"
                + (f"   Received: {sale.tendered_amount:.2f}   Change: {sale.change_amount or 0:.2f}" if sale.tendered_amount is not None else ""))
+    if not manual and any(p.mode == "UDHAAR" for p in sale.payments):
+        from app.services import udhaar_service
+
+        entry = udhaar_service.entry_for_sale(db, sale.id)
+        if entry is not None:
+            out.append(f"Udhaar: {entry.amount:.2f} owed · due {entry.due_date:%d-%b-%Y} · balance {entry.amount - entry.paid:.2f}")
     return "\n".join(out) + "\n"

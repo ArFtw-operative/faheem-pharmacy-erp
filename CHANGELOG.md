@@ -3,6 +3,38 @@
 Release notes for Faheem Pharmacy. Versions follow semantic versioning; every release
 lists its database migrations. Upgrades keep all business history (see docs/UPGRADES.md).
 
+## Unreleased (next: 1.10.0)
+
+- **POS item search:** Enter adds the row picked with ↑↓ (it re-ran the search, went back to the first row and
+  reopened a line already on the bill — "item not added / replaced last item"). Choosing an item already on the
+  bill now says so. The sale summary takes the keyboard at once (an Enter right after F12 is never lost).
+- **Udhaar (customer pays later — never a card payment):** a payment mode at the POS (Shift+F9, and inside Split).
+  It needs a customer with a mobile, a due date and a reminder date (proposed from the customer's / store's days,
+  changeable); a customer's Udhaar limit is enforced. Each Udhaar bill writes the Udhaar ledger in the same
+  transaction (`udhaar_entries`); money received later is `udhaar_payments` (part payments: ₹2,000 − ₹500 leaves
+  ₹1,500), the bill is never changed. Statuses Upcoming · Due Today · Overdue · Partially Paid · Paid.
+  **Udhaar Ledger** screen: Customer · Mobile · Invoice · Sale date · Original · Paid · Balance · Due date · Days
+  overdue · Reminder, with Receive payment, View ledger, Send reminder (WhatsApp, or a call noted), Print / share
+  statement, opening balances and limits. Reminders are kept in `udhaar_reminders`; automatic WhatsApp reminders
+  on the reminder date can be switched on (Udhaar settings). Returns on an unpaid Udhaar bill reduce what is owed
+  (cash is never paid out for goods not paid for); an Udhaar bill with repayments cannot be edited or voided.
+  Invoices show the Udhaar balance due and its due date.
+- **Counter Report:** each business day (ends 11:59 PM store time) by payment mode — Cash, UPI / Online, Card,
+  Udhaar: bills, sales, Udhaar collected, refunds, received; gross (MRP), discounts, returns, net, cash in hand,
+  Udhaar given / collected / outstanding, voided bills; click any figure for the bills behind it. A finished day
+  is frozen at midnight (`counter_day_closes`, SHA-256 digest); later edits to that day show as differences.
+- **Sale completed banner:** "SALE COMPLETED — CASH — ₹850 PAID"; Udhaar stands out in amber:
+  "SALE COMPLETED — UDHAAR — ₹850 OUTSTANDING — DUE 12 OCT 2026".
+- **Manual bills are their own documents** (`manual_bills`, own screen): never sales, never in Sales History,
+  reports, counter, cash, Udhaar, customer balances or stock. Existing manual bills are moved out of the sales
+  tables by the migration (copied and reconciled first: sales before = sales after + manual bills).
+- **Totals footer** on Inventory and on the Current Stock / Batch-wise Stock reports (and their Excel / CSV / PDF):
+  Total Items · Total Quantity · Total Rate Value · Total MRP Value — each batch valued with its own quantity, rate
+  and MRP, for exactly the filtered rows.
+- The pharmacy logo shows when every tab is closed.
+- Migration a8c0e2f4b6d8: Udhaar tables and customer limit / days, manual-bill tables (+ move), counter day closes,
+  WhatsApp message kind; `RECONCILE_MOVED` lets a migration move documents only if the figures reconcile exactly.
+
 ## 1.9.2 (2026-10-04)
 
 - **Two counters at once (shop PC + a browser on another PC, same or different user):** every change bumps a

@@ -305,6 +305,7 @@ HISTORY_TABLES = (
     "purchases", "purchase_items", "purchase_returns", "suppliers", "supplier_product_maps",
     "items", "batches", "inventory_movements", "stock_adjustments",
     "customers", "customer_followups", "users", "categories", "audit_logs",
+    "manual_bills", "manual_bill_items", "udhaar_entries", "udhaar_payments", "udhaar_reminders", "counter_day_closes",
 )
 HISTORY_SUMS = (
     ("sales", "total"), ("sales", "subtotal"), ("sales", "discount"), ("sales", "round_off"),
@@ -316,6 +317,9 @@ HISTORY_SUMS = (
     ("batches", "quantity"), ("batches", "mrp"), ("batches", "purchase_rate"),
     ("inventory_movements", "quantity"), ("inventory_movements", "cost_amount"),
     ("stock_adjustments", "quantity"),
+    ("manual_bills", "total"), ("manual_bills", "subtotal"), ("manual_bills", "discount"), ("manual_bills", "round_off"),
+    ("manual_bill_items", "quantity"), ("manual_bill_items", "line_total"), ("manual_bill_items", "discount"),
+    ("udhaar_entries", "amount"), ("udhaar_entries", "paid"), ("udhaar_payments", "amount"),
 )
 HISTORY_GROUPS = (("sales", "payment_status"), ("purchases", "status"), ("sale_returns", "status"))
 

@@ -198,14 +198,16 @@ export function create(ctx,params,root) {
       <div class="report-table-scroll" tabindex="0" aria-label="Generated ${esc(doc.title)}"><table class="report-table"><thead><tr>${cols.map(c=>`<th class="${c.kind}" scope="col">${esc(c.label)}</th>`).join('')}</tr></thead><tbody>
       ${doc.rows.map((row,i)=>`<tr data-row="${i}" ${row._drill?'class="drillable" title="Double-click or select and press Enter for details"':''}>${cols.map(c=>`<td class="${c.kind}">${esc(fmt(c,row[c.key]))}</td>`).join('')}</tr>`).join('')||`<tr><td colspan="${cols.length}" class="report-empty">No records match the selected parameters.</td></tr>`}
       </tbody>${totals?`<tfoot><tr>${cols.map((c,i)=>`<td class="${c.kind}">${i===firstText?'TOTAL':c.key in doc.totals?esc(fmt(c,doc.totals[c.key])):''}</td>`).join('')}</tr></tfoot>`:''}</table></div>
-      ${doc.footer.map(f=>`<div class="report-document-footer"><b>${esc(f.label)}</b><strong>₹${money(f.value)}</strong></div>`).join('')}
+      ${totalsBar(doc)}
       ${doc.note?`<p class="report-note">${esc(doc.note)}</p>`:''}</article>`;
   }
   // Document view: the ERP text document the server rendered (same as print / PDF / text export)
+  // totals of the whole filtered dataset (e.g. stock: items, quantity, Rate value, MRP value), pinned under the report
+  const totalsBar=(doc)=>doc.footer.length?`<div class="report-totals-bar">${doc.footer.map(f=>`<div class="report-document-footer"><b>${esc(f.label)}</b><strong>${f.kind==='number'?Number(f.value).toLocaleString('en-IN'):'₹'+money(f.value)}</strong></div>`).join('')}</div>`:'';
   let textView=store.get('report-view','document')==='document';
   function toggleView(){textView=!textView;store.set('report-view',textView?'document':'grid');if(document)renderDocument();ctx.status(textView?'Document view (as printed)':'Grid view','ok');}
   function renderDocument() {
-    const body=textView&&document.text?`<pre class="report-text" tabindex="0" aria-label="${esc(document.title)} document">${esc(document.text)}</pre>`:documentHTML(document);
+    const body=textView&&document.text?`<pre class="report-text" tabindex="0" aria-label="${esc(document.title)} document">${esc(document.text)}</pre>${totalsBar(document)}`:documentHTML(document);
     $('.report-result',root).innerHTML=`<div class="report-toolbar"><strong>${esc(document.title)}</strong><span class="muted">${document.id==='supplier-purchases'&&document.parameters.period==='all'?'All invoice history':dateLabel(document.from_date)+' – '+dateLabel(document.to_date)}</span><span class="spacer"></span>
       <button type="button" class="btn" data-view title="Switch grid / document (${esc(keys.keyFor('reports.view'))})">${textView?'Grid view':'Document view'} <kbd>${esc(keys.keyFor('reports.view'))}</kbd></button>
       <button type="button" class="btn" data-columns>Columns ⚙</button><button type="button" class="btn" data-filter>${document.id==='supplier-purchases'?'Suppliers / invoices':'Filter'}</button><button type="button" class="btn" data-print>Print</button>

@@ -87,7 +87,7 @@ def test_full_business_flow_reconciles(client, db):
     assert {m["reference"] for m in hist["movements"]} >= {ref, "PR-000001", sale["invoice_no"]}
 
     reg = client.get("/api/erp/sales").json()
-    assert reg["total"] == 2 and {s["type"] for s in reg["sales"]} == {"INVENTORY", "MANUAL"}
+    assert reg["total"] == 1 and {s["type"] for s in reg["sales"]} == {"INVENTORY"}   # the manual bill is not a sale
 
     batches = client.get(f"/api/erp/inventory/{dolo.id}").json()["batches"]
     assert {b["supplier"] for b in batches} == {"Micro Distributors"} and {b["purchase_ref"] for b in batches} == {ref}
@@ -99,5 +99,5 @@ def test_full_business_flow_reconciles(client, db):
                                                       "columns": ["item", "quantity", "value", "cost", "profit"]}).json()
     rows = {r["item"]: r for r in report["rows"]}
     assert rows["DOLO 650MG TAB"]["cost"] is not None                # cost comes from the posted purchase
-    assert rows["Crepe bandage"]["cost"] is None                     # manual bill: cost unknown, never zero
-    assert report["totals"]["cost"] is None and "—" in report["text"]
+    assert "Crepe bandage" not in rows                               # a manual bill is not a sale: in no sales report
+    assert report["totals"]["cost"] is not None

@@ -18,7 +18,9 @@ def _everything(db):
     refund_service.create_return(db, sale, lines=[{"sale_item_id": sale.items[0].id, "quantity": 1}], reason_code="DAMAGED")
     adj = adjustment_service.create(db, item=item, direction="OUT", category="LOOSE", quantity=1, reason="broken", batch=batch)
     adjustment_service.reverse(db, adj, reason="mistake")
-    sales_service.create_sale(db, invoice_type="MANUAL", lines=[{"item_id": item.id, "name": "DOLO", "quantity": 1, "rate": "30"}])
+    from app.services import manual_bill_service
+
+    manual_bill_service.create(db, lines=[{"item_id": item.id, "name": "DOLO", "quantity": 1, "rate": "30"}])
     parking_service.park_sale(db, payload={"cart": [{"item_id": item.id, "quantity": 1}]}, customer_id=cust.id)
     followup_service.create(db, customer_id=cust.id, due_date=business_time.current_business_date(db).isoformat(), source_sale_id=sale.id)
     from app.models import User

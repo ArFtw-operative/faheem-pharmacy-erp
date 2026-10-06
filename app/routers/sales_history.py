@@ -63,8 +63,6 @@ def sales_register(q: str = "", start: str = "", end: str = "", payment: str = "
         like = f"%{text}%"
         conds.append(or_(*base, exists().where(SaleItem.sale_id == Sale.id,
                                                 or_(SaleItem.product_name.ilike(like), SaleItem.batch_no.ilike(like)))))
-    if type.upper() in ("INVENTORY", "MANUAL"):
-        conds.append(Sale.invoice_type == type.upper())
     total = db.scalar(select(func.count(Sale.id)).where(*conds)) or 0
     agg = db.execute(select(func.coalesce(func.sum(Sale.total), 0), func.count(Sale.id))
                      .where(*conds, Sale.payment_status != "CANCELLED")).one()
@@ -76,6 +74,17 @@ def sales_register(q: str = "", start: str = "", end: str = "", payment: str = "
     returned = {sid for (sid,) in db.execute(select(SaleReturn.sale_id).where(
         SaleReturn.sale_id.in_([s.id for s in rows])))} if rows else set()
     return {"total": total, "value": str(money(agg[0])), "bills": agg[1], "sales": [_row(s, returned) for s in rows]}
+
+
+def _udhaar(db: Session, s: Sale) -> dict | None:
+    from app.services import udhaar_service
+
+    e = udhaar_service.entry_for_sale(db, s.id)
+    if e is None:
+        return None
+    today = business_time.current_business_date(db)
+    return {"entry_id": e.id, "amount": str(e.amount), "paid": str(e.paid), "balance": str(money(e.amount - e.paid)) if e.status == "OPEN" else "0.00",
+            "due_date": e.due_date.isoformat(), "reminder_date": e.reminder_date.isoformat(), "status": udhaar_service.status(e, today)}
 
 
 @router.get("/api/erp/sales/{sale_id}")
@@ -99,6 +108,7 @@ def sale_detail(sale_id: int, db: Session = Depends(get_db), user: User = Depend
         } for i in sorted(s.items, key=lambda i: (i.line_no or 0, i.id))],
         "payments": [{"mode": p.mode, "amount": str(p.amount), "reference": p.reference} for p in s.payments],
         "returns": returns, "refunded": str(refund_service.refunded_total(db, s)),
+        "udhaar": _udhaar(db, s),
         "refund_status": refund_service.refund_status(db, s),
         "locked": sales_service.editable_problem(db, s),
     }
