@@ -11,7 +11,8 @@ existing fixture: it stands for databases already in the field.
 The data is synthetic (no real customer is ever put in a fixture) but covers
 every kind of history: products and batches, opening stock, a posted supplier
 purchase, loose and strip sales, discounts, split payments, a customer return,
-a voided bill, a manual bill, a stock adjustment, customers and a follow-up.
+a voided bill, a manual bill, a stock adjustment, customers and a follow-up,
+and (1.10.0+) an Udhaar bill with a part repayment.
 """
 from __future__ import annotations
 
@@ -25,14 +26,15 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def build(out: Path, revision: str) -> None:
-    from datetime import date
+    from datetime import date, timedelta
 
     from alembic import command
 
     from app.database import SessionLocal
     from app.models import Purchase, PurchaseItem, Supplier
     from app.seed import seed_defaults
-    from app.services import (adjustment_service, customer_service, followup_service, inventory_service as inv,
+    from app.services import (adjustment_service, business_time, customer_service, followup_service, inventory_service as inv,
+                              manual_bill_service, udhaar_service,
                               refund_service, sales_service, upgrade_service)
 
     command.upgrade(upgrade_service._alembic_config(f"sqlite:///{out}"), revision)
@@ -65,8 +67,14 @@ def build(out: Path, revision: str) -> None:
         sales_service.create_sale(db, lines=[{"item_id": belt.id, "quantity": 1}], customer_id=other.id, payment_mode="SPLIT",
                                   payments=[{"mode": "CASH", "amount": 10}, {"mode": "UPI", "amount": 1000}])
         v = sales_service.create_sale(db, lines=[{"item_id": syp.id, "quantity": 1}])
-        sales_service.create_sale(db, lines=[{"name": "Crepe bandage", "quantity": 1, "rate": "85"}], invoice_type="MANUAL")
+        manual_bill_service.create(db, lines=[{"name": "Crepe bandage", "quantity": 1, "rate": "85"}])   # 1.10.0+: own table
         db.commit()
+        due = business_time.current_business_date(db)
+        sales_service.create_sale(db, lines=[{"item_id": dolo.id, "quantity": 30}], customer_id=other.id, payment_mode="UDHAAR",
+                                  udhaar={"due_date": (due + timedelta(days=10)).isoformat(),
+                                          "reminder_date": (due + timedelta(days=9)).isoformat()})
+        db.commit()
+        udhaar_service.receive_payment(db, other, amount=20, mode="CASH")                  # a part repayment
         sales_service.void_sale(db, v, reason="Wrong bill")
         refund_service.create_return(db, a, lines=[{"sale_item_id": a.items[0].id, "quantity": 5}], refund_method="CASH")
         adjustment_service.create(db, item=dolo, direction="OUT", category="DAMAGE", quantity=3, reason="Strip damaged", batch=d1)

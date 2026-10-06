@@ -3,7 +3,7 @@
 Release notes for Faheem Pharmacy. Versions follow semantic versioning; every release
 lists its database migrations. Upgrades keep all business history (see docs/UPGRADES.md).
 
-## Unreleased (next: 1.10.0)
+## 1.10.0 (2026-10-06)
 
 - **POS item search:** Enter adds the row picked with ↑↓ (it re-ran the search, went back to the first row and
   reopened a line already on the bill — "item not added / replaced last item"). Choosing an item already on the
